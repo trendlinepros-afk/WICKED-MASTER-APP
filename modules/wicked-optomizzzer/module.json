@@ -1,0 +1,12 @@
+{
+  "id": "wicked-optomizzzer",
+  "name": "Wicked Optomizzzer",
+  "icon": "Gauge",
+  "version": "0.1.1",
+  "description": "Windows optimizer — cleaner, services, startup, drivers, updates (launches the native app)",
+  "status": "external",
+  "external": {
+    "program": "WickedOptimizer.exe (C# WPF, .NET 8)",
+    "elevated": true
+  }
+}
