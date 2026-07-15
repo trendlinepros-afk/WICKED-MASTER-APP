@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 
 /**
@@ -12,7 +12,9 @@ const api = {
     const wrapped = (_e: IpcRendererEvent, ...args: unknown[]): void => listener(...args)
     ipcRenderer.on(channel, wrapped)
     return () => ipcRenderer.removeListener(channel, wrapped)
-  }
+  },
+  /** Absolute path of a dropped/picked File (Electron removed File.path). */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
 
 contextBridge.exposeInMainWorld('wicked', api)

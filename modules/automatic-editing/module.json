@@ -1,0 +1,8 @@
+{
+  "id": "automatic-editing",
+  "name": "Automatic Editing",
+  "icon": "Clapperboard",
+  "version": "0.1.0",
+  "description": "AI auto-edit pipeline: transcribe, cut silence/retakes, transitions, graphics, mix, render + shorts",
+  "status": "stable"
+}
