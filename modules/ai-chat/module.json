@@ -1,0 +1,8 @@
+{
+  "id": "ai-chat",
+  "name": "Wicked AI Chat",
+  "icon": "MessagesSquare",
+  "version": "1.0.42",
+  "description": "Multi-model AI chat with an Obsidian memory vault, agent brains, MCP tools, voice, local image gen and project boards",
+  "status": "stable"
+}

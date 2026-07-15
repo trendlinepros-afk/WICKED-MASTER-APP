@@ -1,0 +1,100 @@
+/* Wicked AI Chat — module-scoped styles.
+   Port note: the standalone app's theme tokens (--c-*) are gone; all Tailwind
+   palette classes were remapped to the shell tokens (bg/surface/raised/edge/
+   ink/muted/accent/warn/ok), which flip automatically with the shell's
+   light/dark class. Only the non-token CSS (markdown rendering, the brain
+   pulse animation) is carried over, scoped under .ai-chat-root. */
+
+/* Markdown rendering inside message bubbles */
+.ai-chat-root .markdown-body {
+  line-height: 1.6;
+  word-break: break-word;
+}
+.ai-chat-root .markdown-body p {
+  margin: 0.5em 0;
+}
+.ai-chat-root .markdown-body p:first-child {
+  margin-top: 0;
+}
+.ai-chat-root .markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.ai-chat-root .markdown-body h1,
+.ai-chat-root .markdown-body h2,
+.ai-chat-root .markdown-body h3 {
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+}
+.ai-chat-root .markdown-body h1 {
+  font-size: 1.4em;
+}
+.ai-chat-root .markdown-body h2 {
+  font-size: 1.2em;
+}
+.ai-chat-root .markdown-body h3 {
+  font-size: 1.05em;
+}
+.ai-chat-root .markdown-body ul,
+.ai-chat-root .markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.ai-chat-root .markdown-body li {
+  margin: 0.2em 0;
+}
+.ai-chat-root .markdown-body code {
+  background: rgb(0 0 0 / 0.06);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.88em;
+}
+.dark .ai-chat-root .markdown-body code {
+  background: rgb(0 0 0 / 0.33);
+}
+.ai-chat-root .markdown-body pre {
+  margin: 0.6em 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ai-chat-root .markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+.ai-chat-root .markdown-body a {
+  color: rgb(var(--wk-accent));
+  text-decoration: underline;
+}
+.ai-chat-root .markdown-body blockquote {
+  border-left: 3px solid rgb(var(--wk-edge));
+  padding-left: 0.8em;
+  margin: 0.5em 0;
+  color: rgb(var(--wk-muted));
+}
+.ai-chat-root .markdown-body table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+.ai-chat-root .markdown-body th,
+.ai-chat-root .markdown-body td {
+  border: 1px solid rgb(var(--wk-edge));
+  padding: 0.3em 0.6em;
+}
+
+.ai-chat-root textarea {
+  font-family: inherit;
+}
+
+/* The Brain toggle's amber pulse (was a tailwind.config keyframe upstream). */
+@keyframes ai-chat-brain-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+  }
+}
+.ai-chat-root .animate-brain-pulse {
+  animation: ai-chat-brain-pulse 2s ease-in-out infinite;
+}
