@@ -1,0 +1,8 @@
+{
+  "id": "gamedev-board",
+  "name": "GameDev Project Board",
+  "icon": "Gamepad2",
+  "version": "1.0.0",
+  "description": "Idea cards with screenshots and checklists, plus a work-session timer and time log",
+  "status": "stable"
+}
