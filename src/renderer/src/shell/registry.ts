@@ -38,3 +38,7 @@ export const modules: RegisteredModule[] = Object.entries(components)
 export function moduleById(id: string): RegisteredModule | undefined {
   return modules.find((m) => m.manifest.id === id)
 }
+
+console.log(
+  `[wicked] renderer modules (${modules.length}): ${modules.map((m) => m.manifest.id).join(', ')}`
+)

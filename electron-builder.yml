@@ -13,6 +13,9 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
 asarUnpack:
   - resources/**
+  # spawned as real processes by the automatic-editing module — cannot live inside the asar
+  - node_modules/ffmpeg-static/**
+  - node_modules/ffprobe-static/**
 win:
   executableName: WICKED
   target:
