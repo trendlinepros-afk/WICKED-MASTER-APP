@@ -1,0 +1,8 @@
+{
+  "id": "coding-app",
+  "name": "Desktop Coding App",
+  "icon": "Code2",
+  "version": "0.1.17",
+  "description": "Ollama-first AI coding assistant with cloud fallback, Monaco editor, live preview and Gemini screenshot analysis",
+  "status": "stable"
+}

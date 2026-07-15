@@ -1,0 +1,19 @@
+/* Chat bubble markdown / code presentation (scoped to this module).
+   Uses the shell's --wk-* theme variables so it tracks both themes. */
+.ca-prose pre {
+  background: rgb(var(--wk-raised));
+  border: 1px solid rgb(var(--wk-edge));
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.ca-prose code {
+  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+}
+.ca-prose :not(pre) > code {
+  background: rgb(var(--wk-raised));
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
