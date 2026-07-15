@@ -1,0 +1,18 @@
+# deps / build output
+node_modules/
+out/
+dist/
+release/
+*.local
+
+# staging area for original app sources (each has its own git history)
+_sources/
+
+# logs & OS noise
+*.log
+Thumbs.db
+.DS_Store
+
+# local env / secrets
+.env
+.env.*

@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── WICKED theme tokens (RGB triplets so Tailwind alpha works) ─────────── */
+:root {
+  --wk-bg: 245 246 248;
+  --wk-surface: 255 255 255;
+  --wk-raised: 238 240 244;
+  --wk-edge: 216 220 228;
+  --wk-ink: 24 28 36;
+  --wk-muted: 105 112 128;
+  --wk-accent: 124 58 237; /* violet-600 */
+  --wk-accent-ink: 255 255 255;
+  --wk-danger: 220 38 38;
+  --wk-ok: 22 163 74;
+  --wk-warn: 202 138 4;
+}
+
+.dark {
+  --wk-bg: 17 19 24;
+  --wk-surface: 24 27 34;
+  --wk-raised: 32 36 45;
+  --wk-edge: 47 52 63;
+  --wk-ink: 229 231 235;
+  --wk-muted: 148 155 170;
+  --wk-accent: 139 92 246; /* violet-500 */
+  --wk-accent-ink: 255 255 255;
+  --wk-danger: 248 113 113;
+  --wk-ok: 74 222 128;
+  --wk-warn: 250 204 21;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-ink antialiased;
+  font-family:
+    'Segoe UI Variable Text',
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+  overflow: hidden;
+}
+
+/* slim scrollbars everywhere */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--wk-edge)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--wk-edge));
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

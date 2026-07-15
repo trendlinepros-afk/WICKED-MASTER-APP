@@ -1,0 +1,38 @@
+appId: com.wickedrc.wicked
+productName: WICKED
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!_sources/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+asarUnpack:
+  - resources/**
+win:
+  executableName: WICKED
+  target:
+    - nsis
+nsis:
+  artifactName: WICKED-Setup-${version}.${ext}
+  shortcutName: WICKED
+  uninstallDisplayName: WICKED
+  oneClick: true
+  perMachine: false
+npmRebuild: true
+# ──────────────────────────────────────────────────────────────
+# Update feed. Self-hosted for now (repo not on GitHub yet).
+# When WICKED is pushed to GitHub, replace the `publish` block with:
+#   publish:
+#     - provider: github
+#       owner: trendlinepros-afk
+#       repo: wicked
+# (that is the whole switch — nothing else changes)
+# ──────────────────────────────────────────────────────────────
+publish:
+  - provider: generic
+    url: http://192.168.1.5/wicked-updates/
