@@ -1,0 +1,8 @@
+{
+  "id": "event-viewer",
+  "name": "Event Viewer Analyzer",
+  "icon": "ScrollText",
+  "version": "1.0.0",
+  "description": "Collects recent Windows Event Log entries and writes an AI health report (DeepSeek)",
+  "status": "stable"
+}
