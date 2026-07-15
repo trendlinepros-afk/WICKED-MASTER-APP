@@ -1,0 +1,8 @@
+{
+  "id": "secret-key-generator",
+  "name": "Secret Key Generator",
+  "icon": "KeyRound",
+  "version": "1.0.0",
+  "description": "Generate cryptographically secure keys — hex, base64, alphanumeric, UUID v4",
+  "status": "stable"
+}
