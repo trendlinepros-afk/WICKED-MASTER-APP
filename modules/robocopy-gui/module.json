@@ -1,0 +1,8 @@
+{
+  "id": "robocopy-gui",
+  "name": "ROBOCOPY GUI",
+  "icon": "Copy",
+  "version": "1.0.0",
+  "description": "Build, run and monitor robocopy jobs — plain-English flags, live output, saved job profiles",
+  "status": "stable"
+}
