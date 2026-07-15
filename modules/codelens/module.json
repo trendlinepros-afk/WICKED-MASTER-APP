@@ -1,0 +1,8 @@
+{
+  "id": "codelens",
+  "name": "CodeLens",
+  "icon": "Microscope",
+  "version": "0.1.0",
+  "description": "Visual code intelligence — scan any project folder, map its dependency graph, and get plain-English AI explanations plus a local vuln/secret scan",
+  "status": "stable"
+}

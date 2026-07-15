@@ -1,0 +1,40 @@
+/* CodeLens module styles — React Flow polish on WICKED theme tokens.
+   Scoped under .codelens-root so nothing leaks into the shell or other modules. */
+
+.codelens-root .react-flow__attribution {
+  background: transparent;
+  color: rgb(var(--wk-muted));
+}
+.codelens-root .react-flow__node {
+  cursor: pointer;
+}
+.codelens-root .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.codelens-root .react-flow__minimap {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgb(var(--wk-edge));
+}
+.codelens-root .react-flow__controls {
+  box-shadow: none;
+  border: 1px solid rgb(var(--wk-edge));
+  border-radius: 8px;
+  overflow: hidden;
+}
+.codelens-root .react-flow__controls button {
+  background: rgb(var(--wk-surface));
+  border-bottom: 1px solid rgb(var(--wk-edge));
+  fill: rgb(var(--wk-muted));
+  color: rgb(var(--wk-muted));
+}
+.codelens-root .react-flow__controls button:hover {
+  background: rgb(var(--wk-raised));
+}
+
+/* markdown body inside the prose class gets most styling from the typography plugin */
+.codelens-root .prose pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
