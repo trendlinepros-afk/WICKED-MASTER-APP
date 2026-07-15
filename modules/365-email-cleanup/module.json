@@ -1,0 +1,12 @@
+{
+  "id": "365-email-cleanup",
+  "name": "365 Email Cleanup",
+  "icon": "MailCheck",
+  "version": "1.3.0",
+  "description": "Inbox Cleanup for classic Outlook — bulk cleanup, AI reply drafts (launches the native app)",
+  "status": "external",
+  "external": {
+    "program": "InboxCleanup.exe (C# WPF, .NET 8, Outlook COM)",
+    "elevated": false
+  }
+}
