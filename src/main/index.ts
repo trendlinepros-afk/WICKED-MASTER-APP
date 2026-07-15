@@ -1,3 +1,4 @@
+import './paths' // must be first — pins userData before any store/module loads
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { realpathSync } from 'fs'
 import { join } from 'path'
