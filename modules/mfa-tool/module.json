@@ -1,0 +1,8 @@
+{
+  "id": "mfa-tool",
+  "name": "MFA Tool",
+  "icon": "ShieldCheck",
+  "version": "0.9.0",
+  "description": "TOTP authenticator with an encrypted vault — import Google Authenticator exports",
+  "status": "beta"
+}
