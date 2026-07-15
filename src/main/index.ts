@@ -3,6 +3,7 @@ import { realpathSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { SHELL_IPC, type ShellSettings } from '@shared/types'
+import { registerApiKeyIpc } from './api-keys'
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
@@ -74,6 +75,8 @@ app.whenReady().then(() => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url)
   })
   ipcMain.handle(SHELL_IPC.appVersion, () => app.getVersion())
+
+  registerApiKeyIpc(() => mainWindow)
 
   // module IPC (auto-registered from modules/*/ipc.ts)
   const registered = registerModuleIpc(() => mainWindow)

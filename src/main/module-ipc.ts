@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { getApiKey } from './api-keys'
 import { moduleStoreGet, moduleStoreSet } from './settings'
 
 /**
@@ -14,6 +15,12 @@ export interface ModuleIpcContext {
   /** simple persistence shared across modules (electron-store), key = `<module-id>.<key>` */
   storeGet: <T>(key: string, fallback: T) => T
   storeSet: (key: string, value: unknown) => void
+  /**
+   * Central API key vault (Settings → API Keys). Returns the decrypted key or
+   * null if unset. Modules must use this instead of storing provider keys
+   * themselves, and must never forward the value to the renderer.
+   */
+  getApiKey: (provider: string) => string | null
 }
 
 type RegisterFn = (ctx: ModuleIpcContext) => void
@@ -31,7 +38,8 @@ export function registerModuleIpc(getMainWindow: () => BrowserWindow | null): st
     dialog,
     getMainWindow,
     storeGet: moduleStoreGet,
-    storeSet: moduleStoreSet
+    storeSet: moduleStoreSet,
+    getApiKey
   }
   const registered: string[] = []
   for (const [path, mod] of Object.entries(ipcModules)) {

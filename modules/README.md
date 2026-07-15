@@ -83,6 +83,22 @@ Rules:
   `Start-Process -Verb RunAs`) so the UAC prompt happens only when the user invokes
   that action.
 
+## API keys (central vault)
+
+Provider API keys (Anthropic, OpenAI, Gemini, DeepSeek, OpusClip, S3) are managed
+**once** in the shell: Settings → API Keys. Rules for modules:
+
+- **Never store provider keys yourself** — no module-level key settings, no keys in
+  electron-store/JSON/db.
+- Main process: read with `ctx.getApiKey('openai')` (returns decrypted string or
+  `null`). Read at call time — don't cache long-term, the user can change keys.
+- **Never send a key value to the renderer.** For UI states ("Gemini key missing"),
+  the renderer may query `SHELL_IPC.apiKeysStatus` (booleans per provider) and
+  subscribe to `SHELL_IPC.apiKeysChanged`.
+- If a key is missing, show a short notice pointing at Settings → API Keys.
+- Local services that need no key (Ollama, ComfyUI) are configured inside the
+  module.
+
 ## store.ts (optional)
 
 Module state lives in its own Zustand store (Zustand 5). Persist through your ipc.ts

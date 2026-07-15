@@ -1,9 +1,90 @@
 import { useEffect, useState } from 'react'
-import { Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
-import { SHELL_IPC, type ShellSettings, type UpdateEvent } from '@shared/types'
+import { KeyRound, Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
+import {
+  API_PROVIDERS,
+  SHELL_IPC,
+  type ApiProviderId,
+  type ShellSettings,
+  type UpdateEvent
+} from '@shared/types'
 import { modules } from './registry'
 import { useSettings } from '@/stores/settings'
 import ModuleIcon from './ModuleIcon'
+
+function ApiKeyRow({
+  id,
+  name,
+  placeholder,
+  isSet,
+  onChanged
+}: {
+  id: ApiProviderId
+  name: string
+  placeholder: string
+  isSet: boolean
+  onChanged: () => void
+}): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+
+  const save = async (): Promise<void> => {
+    if (!value.trim()) return
+    setError('')
+    const res = (await window.wicked.invoke(SHELL_IPC.apiKeySet, id, value)) as {
+      ok: boolean
+      error?: string
+    }
+    if (res.ok) {
+      setValue('')
+      onChanged()
+    } else {
+      setError(res.error ?? 'Failed to save key')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1 border-t border-edge p-4 first:border-t-0">
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-2 text-sm font-medium">
+          <span className={`h-2 w-2 rounded-full ${isSet ? 'bg-ok' : 'bg-muted/40'}`} />
+          {name}
+        </span>
+        {isSet && (
+          <button
+            onClick={async () => {
+              await window.wicked.invoke(SHELL_IPC.apiKeyClear, id)
+              onChanged()
+            }}
+            className="text-xs font-medium text-muted hover:text-danger"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="password"
+          value={value}
+          placeholder={isSet ? '•••••••• (saved — enter to replace)' : placeholder || 'API key'}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+          }}
+          autoComplete="off"
+          className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-1.5 font-mono text-xs outline-none focus:border-accent"
+        />
+        <button
+          onClick={save}
+          disabled={!value.trim()}
+          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+        >
+          Save
+        </button>
+      </div>
+      {error && <p className="text-xs text-danger">{error}</p>}
+    </div>
+  )
+}
 
 const THEMES: { value: ShellSettings['theme']; label: string; icon: typeof Sun }[] = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -15,6 +96,17 @@ export default function SettingsScreen(): React.JSX.Element {
   const { settings, update } = useSettings()
   const [version, setVersion] = useState('')
   const [updateState, setUpdateState] = useState('')
+  const [keyStatus, setKeyStatus] = useState<Record<ApiProviderId, boolean> | null>(null)
+
+  const refreshKeys = (): void => {
+    window.wicked
+      .invoke(SHELL_IPC.apiKeysStatus)
+      .then((s) => setKeyStatus(s as Record<ApiProviderId, boolean>))
+  }
+
+  useEffect(() => {
+    refreshKeys()
+  }, [])
 
   useEffect(() => {
     window.wicked.invoke(SHELL_IPC.appVersion).then((v) => setVersion(v as string))
@@ -108,6 +200,31 @@ export default function SettingsScreen(): React.JSX.Element {
               Check now
             </button>
           </div>
+        </div>
+      </section>
+
+      {/* API Keys */}
+      <section className="mt-8">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+          <KeyRound size={14} />
+          API Keys
+        </h2>
+        <p className="mt-1 max-w-xl text-xs text-muted">
+          Set once, used by every module (CodeLens, AI Chat, Coding App, Automatic Editing,
+          Event Viewer Analyzer…). Keys are encrypted with Windows credential protection and
+          never shown again after saving.
+        </p>
+        <div className="mt-3 max-w-xl overflow-hidden rounded-xl border border-edge bg-surface">
+          {API_PROVIDERS.map((p) => (
+            <ApiKeyRow
+              key={p.id}
+              id={p.id}
+              name={p.name}
+              placeholder={p.placeholder}
+              isSet={keyStatus?.[p.id] ?? false}
+              onChanged={refreshKeys}
+            />
+          ))}
         </div>
       </section>
 
