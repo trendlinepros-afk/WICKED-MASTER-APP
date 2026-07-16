@@ -25,6 +25,27 @@ try {
 }
 
 let mainWindow: BrowserWindow | null = null
+/** module id -> its standalone window (one per module) */
+const moduleWindows = new Map<string, BrowserWindow>()
+
+const sharedWebPreferences = {
+  preload: join(__dirname, '../preload/index.js'),
+  sandbox: false,
+  contextIsolation: true,
+  nodeIntegration: false,
+  // coding-app module hosts its live preview in a <webview>
+  webviewTag: true
+}
+
+/** Load the renderer into `win`, optionally at a specific hash route. */
+function loadRenderer(win: BrowserWindow, hash?: string): void {
+  const suffix = hash ? `#${hash}` : ''
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${suffix}`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), hash ? { hash } : undefined)
+  }
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -36,14 +57,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#111318',
     title: 'WICKED',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      // coding-app module hosts its live preview in a <webview>
-      webviewTag: true
-    }
+    webPreferences: sharedWebPreferences
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
@@ -53,11 +67,36 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  loadRenderer(mainWindow)
+}
+
+/** Open (or focus) a standalone window rendering just one module at /w/:id. */
+function openModuleWindow(id: string): void {
+  const existing = moduleWindows.get(id)
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.focus()
+    return
   }
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 820,
+    minWidth: 720,
+    minHeight: 480,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#111318',
+    title: 'WICKED',
+    webPreferences: sharedWebPreferences
+  })
+  win.on('ready-to-show', () => win.show())
+  win.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+  win.on('closed', () => moduleWindows.delete(id))
+  moduleWindows.set(id, win)
+  loadRenderer(win, `/w/${id}`)
 }
 
 app.whenReady().then(() => {
@@ -78,6 +117,7 @@ app.whenReady().then(() => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url)
   })
   ipcMain.handle(SHELL_IPC.appVersion, () => app.getVersion())
+  ipcMain.handle(SHELL_IPC.openModuleWindow, (_e, id: string) => openModuleWindow(String(id)))
 
   registerApiKeyIpc(() => mainWindow)
 

@@ -31,6 +31,10 @@ export interface ShellSettings {
   mcpEnabled: boolean
   /** activity bar shows text labels next to icons when expanded */
   navExpanded: boolean
+  /** user's custom module order (module ids); ids not listed sort after, by name */
+  moduleOrder: string[]
+  /** per-module display overrides set by the user (pencil-edit on home cards) */
+  moduleOverrides: Record<string, { name?: string; description?: string }>
 }
 
 export const DEFAULT_SETTINGS: ShellSettings = {
@@ -38,7 +42,9 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   disabledModules: [],
   update: { autoCheck: true, intervalHours: 4 },
   mcpEnabled: false,
-  navExpanded: true
+  navExpanded: true,
+  moduleOrder: [],
+  moduleOverrides: {}
 }
 
 /**
@@ -79,7 +85,9 @@ export const SHELL_IPC = {
   /** () => McpStatus */
   mcpStatus: 'shell:mcp-status',
   /** (enabled: boolean) => McpStatus */
-  mcpSetEnabled: 'shell:mcp-set-enabled'
+  mcpSetEnabled: 'shell:mcp-set-enabled',
+  /** (moduleId: string) => void — open a module in its own BrowserWindow */
+  openModuleWindow: 'shell:open-module-window'
 } as const
 
 /** Mirror of the main-process McpStatus (see src/main/mcp/server.ts). */

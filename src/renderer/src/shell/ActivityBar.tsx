@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   DownloadCloud,
@@ -7,10 +8,11 @@ import {
   PanelLeftOpen,
   Settings
 } from 'lucide-react'
-import { modules } from './registry'
 import { useSettings } from '@/stores/settings'
+import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
 import ModuleIcon from './ModuleIcon'
+import { effectiveName, orderedModules, reorderIds } from './moduleView'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
 function rowClass(isActive: boolean, expanded: boolean): string {
@@ -24,11 +26,25 @@ function rowClass(isActive: boolean, expanded: boolean): string {
 export default function ActivityBar(): React.JSX.Element {
   const disabled = useSettings((s) => s.settings.disabledModules)
   const expanded = useSettings((s) => s.settings.navExpanded)
+  const order = useSettings((s) => s.settings.moduleOrder)
+  const overrides = useSettings((s) => s.settings.moduleOverrides)
   const update = useSettings((s) => s.update)
   const checkForUpdates = useUpdates((s) => s.check)
   const updatePhase = useUpdates((s) => s.phase)
   const checking = updatePhase === 'checking' || updatePhase === 'available'
-  const visible = modules.filter((m) => !disabled.includes(m.manifest.id))
+  const { openMenu, dragId, setDragId } = useShellUi()
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+
+  const all = orderedModules(order, overrides)
+  const visible = all.filter((m) => !disabled.includes(m.manifest.id))
+
+  const commitReorder = (targetId: string): void => {
+    if (dragId && dragId !== targetId) {
+      update({ moduleOrder: reorderIds(all.map((m) => m.manifest.id), dragId, targetId) })
+    }
+    setDragId(null)
+    setDropTarget(null)
+  }
 
   return (
     <nav
@@ -61,27 +77,58 @@ export default function ActivityBar(): React.JSX.Element {
 
       <div className="my-1 h-px shrink-0 bg-edge" />
 
-      {/* Modules */}
+      {/* Modules — drag to reorder, right-click for options */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden">
-        {visible.map(({ manifest }) => (
-          <NavLink
-            key={manifest.id}
-            to={`/m/${manifest.id}`}
-            title={expanded ? undefined : `${manifest.name}${manifest.status === 'beta' ? ' (Beta)' : ''}`}
-            className={({ isActive }) => rowClass(isActive, expanded)}
-          >
-            <ModuleIcon name={manifest.icon} size={20} strokeWidth={1.8} className="shrink-0" />
-            {expanded && <span className="min-w-0 flex-1 truncate text-sm">{manifest.name}</span>}
-            {manifest.status === 'beta' &&
-              (expanded ? (
-                <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
-                  Beta
-                </span>
-              ) : (
-                <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warn" />
-              ))}
-          </NavLink>
-        ))}
+        {visible.map((m) => {
+          const { manifest } = m
+          const id = manifest.id
+          const name = effectiveName(m, overrides)
+          return (
+            <NavLink
+              key={id}
+              to={`/m/${id}`}
+              draggable
+              onDragStart={(e) => {
+                setDragId(id)
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                if (dragId && dragId !== id) setDropTarget(id)
+              }}
+              onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
+              onDrop={(e) => {
+                e.preventDefault()
+                commitReorder(id)
+              }}
+              onDragEnd={() => {
+                setDragId(null)
+                setDropTarget(null)
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                openMenu(id, e.clientX, e.clientY)
+              }}
+              title={expanded ? undefined : `${name}${manifest.status === 'beta' ? ' (Beta)' : ''}`}
+              className={({ isActive }) =>
+                `${rowClass(isActive, expanded)} ${dropTarget === id ? 'ring-1 ring-accent' : ''} ${
+                  dragId === id ? 'opacity-40' : ''
+                }`
+              }
+            >
+              <ModuleIcon name={manifest.icon} size={20} strokeWidth={1.8} className="shrink-0" />
+              {expanded && <span className="min-w-0 flex-1 truncate text-sm">{name}</span>}
+              {manifest.status === 'beta' &&
+                (expanded ? (
+                  <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
+                    Beta
+                  </span>
+                ) : (
+                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warn" />
+                ))}
+            </NavLink>
+          )
+        })}
       </div>
 
       <div className="my-1 h-px shrink-0 bg-edge" />

@@ -27,6 +27,9 @@ nsis:
   uninstallDisplayName: WICKED
   oneClick: true
   perMachine: false
+  # never delete user data (API keys, settings, module file paths live in userData)
+  # on uninstall; updates never touch userData either
+  deleteAppDataOnUninstall: false
 npmRebuild: true
 # ──────────────────────────────────────────────────────────────
 # Update feed = GitHub Releases. The "Check for Updates" button and the
