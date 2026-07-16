@@ -147,6 +147,30 @@ Rules (all mandatory):
 The `McpModuleContext` (`@shared/mcp`) provides: `invoke(channel, …args)`,
 `hasApiKey(provider)`, `confirm(confirm, summary)`, `credential(name, provided)`.
 
+## Data paths (optional) — surface a module's file locations
+
+Settings → Modules lets the user expand each app to see where it keeps its files
+and data (e.g. AI Chat's Brain vault, a project folder, a database). A module opts
+in by registering an IPC handler that returns its paths:
+
+```ts
+import type { ModuleDataPath } from '@shared/types'
+
+ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => [
+  { label: 'Brain vault', path: getVaultPath() || null, note: 'Obsidian-compatible notes' },
+  { label: 'Database', path: dbPath },
+  { label: 'Projects folder', path: getProjectsDir() || null }
+])
+```
+
+- `path: null` renders as **"Not Configured Yet"** — use it for anything the user
+  hasn't set/created.
+- Read the paths live (from the module's config/store) so they reflect the current
+  state.
+- Return `[]` (or don't register the channel) if the app has no meaningful file
+  paths; the row then shows "This app has no configurable file paths."
+- Never return secrets — paths only.
+
 ## API keys (central vault)
 
 Provider API keys (Anthropic, OpenAI, Gemini, DeepSeek, OpusClip, S3) are managed

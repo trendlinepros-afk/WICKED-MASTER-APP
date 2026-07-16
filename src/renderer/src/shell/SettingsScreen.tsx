@@ -1,16 +1,153 @@
 import { useEffect, useState } from 'react'
-import { Bot, Copy, KeyRound, Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FolderOpen,
+  KeyRound,
+  Loader2,
+  Monitor,
+  Moon,
+  RefreshCw,
+  Sun
+} from 'lucide-react'
 import {
   API_PROVIDERS,
   SHELL_IPC,
   type ApiProviderId,
   type McpStatus,
+  type ModuleDataPath,
   type ShellSettings,
   type UpdateEvent
 } from '@shared/types'
-import { modules } from './registry'
+import { modules, type RegisteredModule } from './registry'
+import { effectiveDescription, effectiveName } from './moduleView'
 import { useSettings } from '@/stores/settings'
 import ModuleIcon from './ModuleIcon'
+
+function ModuleRow({
+  mod,
+  overrides,
+  enabled,
+  first,
+  onToggle
+}: {
+  mod: RegisteredModule
+  overrides: ShellSettings['moduleOverrides']
+  enabled: boolean
+  first: boolean
+  onToggle: () => void
+}): React.JSX.Element {
+  const { manifest } = mod
+  const [open, setOpen] = useState(false)
+  const [paths, setPaths] = useState<ModuleDataPath[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const toggleOpen = async (): Promise<void> => {
+    const next = !open
+    setOpen(next)
+    if (next && paths === null) {
+      setLoading(true)
+      const p = (await window.wicked.invoke(
+        SHELL_IPC.moduleDataPaths,
+        manifest.id
+      )) as ModuleDataPath[]
+      setPaths(p)
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className={first ? '' : 'border-t border-edge'}>
+      <div className="flex items-center gap-2 p-4">
+        <button
+          onClick={toggleOpen}
+          title={open ? 'Hide file paths' : 'Show file paths'}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+        >
+          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+        <button
+          onClick={toggleOpen}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-accent">
+            <ModuleIcon name={manifest.icon} size={16} strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-medium">
+              {effectiveName(mod, overrides)}
+              {manifest.status === 'beta' && (
+                <span className="ml-2 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-warn">
+                  Beta
+                </span>
+              )}
+            </span>
+            <span className="block truncate text-xs text-muted">
+              {effectiveDescription(mod, overrides)}
+            </span>
+          </span>
+        </button>
+        <input
+          type="checkbox"
+          title={enabled ? 'Hide from nav' : 'Show in nav'}
+          checked={enabled}
+          onChange={onToggle}
+          className="h-4 w-4 shrink-0 accent-[rgb(var(--wk-accent))]"
+        />
+      </div>
+
+      {open && (
+        <div className="border-t border-edge bg-raised/30 px-4 py-3 pl-12">
+          {loading ? (
+            <div className="flex items-center gap-2 text-xs text-muted">
+              <Loader2 size={13} className="animate-spin" /> Reading file paths…
+            </div>
+          ) : !paths || paths.length === 0 ? (
+            <div className="text-xs text-muted">This app has no configurable file paths.</div>
+          ) : (
+            <div className="space-y-2.5">
+              {paths.map((dp, i) => (
+                <div key={i}>
+                  <div className="flex items-center gap-2 text-xs font-medium text-ink">
+                    <FolderOpen size={12} className="shrink-0 text-muted" />
+                    {dp.label}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 pl-[18px]">
+                    {dp.path ? (
+                      <>
+                        <code className="min-w-0 flex-1 break-all rounded bg-surface px-2 py-1 font-mono text-[11px] text-ink">
+                          {dp.path}
+                        </code>
+                        <button
+                          title="Copy path"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(dp.path as string)
+                            setCopied(dp.label)
+                            setTimeout(() => setCopied(null), 1200)
+                          }}
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-surface hover:text-ink"
+                        >
+                          <Copy size={12} />
+                        </button>
+                        {copied === dp.label && <span className="text-[11px] text-ok">Copied</span>}
+                      </>
+                    ) : (
+                      <span className="text-[11px] italic text-muted">Not Configured Yet</span>
+                    )}
+                  </div>
+                  {dp.note && <div className="mt-0.5 pl-[18px] text-[11px] text-muted">{dp.note}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ApiKeyRow({
   id,
@@ -287,42 +424,23 @@ export default function SettingsScreen(): React.JSX.Element {
       {/* Modules */}
       <section className="mt-8 pb-10">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Modules</h2>
+        <p className="mt-1 max-w-xl text-xs text-muted">
+          Toggle a module’s visibility in the nav, or expand it to see where that app keeps its
+          files and data.
+        </p>
         <div className="mt-3 max-w-xl overflow-hidden rounded-xl border border-edge bg-surface">
           {modules.length === 0 && (
             <div className="p-4 text-sm text-muted">No modules installed.</div>
           )}
-          {modules.map(({ manifest }, i) => (
-            <label
-              key={manifest.id}
-              className={`flex items-center justify-between gap-4 p-4 ${
-                i > 0 ? 'border-t border-edge' : ''
-              }`}
-            >
-              <span className="flex min-w-0 items-center gap-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-accent">
-                  <ModuleIcon name={manifest.icon} size={16} strokeWidth={1.8} />
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium">
-                    {manifest.name}
-                    {manifest.status === 'beta' && (
-                      <span className="ml-2 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-warn">
-                        Beta
-                      </span>
-                    )}
-                  </span>
-                  <span className="block truncate text-xs text-muted">
-                    {manifest.description}
-                  </span>
-                </span>
-              </span>
-              <input
-                type="checkbox"
-                checked={!settings.disabledModules.includes(manifest.id)}
-                onChange={() => toggleModule(manifest.id)}
-                className="h-4 w-4 shrink-0 accent-[rgb(var(--wk-accent))]"
-              />
-            </label>
+          {modules.map((mod, i) => (
+            <ModuleRow
+              key={mod.manifest.id}
+              mod={mod}
+              overrides={settings.moduleOverrides}
+              enabled={!settings.disabledModules.includes(mod.manifest.id)}
+              first={i === 0}
+              onToggle={() => toggleModule(mod.manifest.id)}
+            />
           ))}
         </div>
       </section>

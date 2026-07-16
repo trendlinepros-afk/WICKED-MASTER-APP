@@ -87,8 +87,24 @@ export const SHELL_IPC = {
   /** (enabled: boolean) => McpStatus */
   mcpSetEnabled: 'shell:mcp-set-enabled',
   /** (moduleId: string) => void — open a module in its own BrowserWindow */
-  openModuleWindow: 'shell:open-module-window'
+  openModuleWindow: 'shell:open-module-window',
+  /** (moduleId: string) => ModuleDataPath[] — a module's file/data locations */
+  moduleDataPaths: 'shell:module-data-paths'
 } as const
+
+/**
+ * One file/data location a module exposes for the Settings → Modules dropdown.
+ * A module opts in by registering an IPC handler `<module-id>:data-paths` that
+ * returns ModuleDataPath[]. `path: null` renders as "Not Configured Yet".
+ */
+export interface ModuleDataPath {
+  /** what this path is, e.g. "Brain vault", "Projects folder", "Database" */
+  label: string
+  /** absolute path, or null if the user hasn't configured/created it yet */
+  path: string | null
+  /** optional one-line hint shown under the path */
+  note?: string
+}
 
 /** Mirror of the main-process McpStatus (see src/main/mcp/server.ts). */
 export interface McpToolInfo {

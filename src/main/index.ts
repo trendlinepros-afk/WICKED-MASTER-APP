@@ -5,7 +5,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { SHELL_IPC, type ShellSettings } from '@shared/types'
 import { registerApiKeyIpc } from './api-keys'
-import { setMainWindowGetter } from './mcp/channel-registry'
+import { hasChannel, invokeChannel, setMainWindowGetter } from './mcp/channel-registry'
 import { getMcpStatus, setMcpEnabled, stopMcpServer } from './mcp/server'
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
@@ -118,6 +118,18 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(SHELL_IPC.appVersion, () => app.getVersion())
   ipcMain.handle(SHELL_IPC.openModuleWindow, (_e, id: string) => openModuleWindow(String(id)))
+
+  // A module's file/data locations for the Settings dropdown. A module opts in by
+  // registering `<module-id>:data-paths`; otherwise there's nothing to show.
+  ipcMain.handle(SHELL_IPC.moduleDataPaths, async (_e, id: string) => {
+    const ch = `${String(id)}:data-paths`
+    if (!hasChannel(ch)) return []
+    try {
+      return await invokeChannel(ch)
+    } catch {
+      return []
+    }
+  })
 
   registerApiKeyIpc(() => mainWindow)
 
