@@ -1,21 +1,20 @@
 name: Release
 
-# Push to main -> build the Windows installer -> publish a GitHub Release so the
-# app's "Check for Updates" finds it. Bump `version` in package.json for each
-# shippable change (electron-updater only reports an update when the released
-# version is HIGHER than the installed one).
+# Push to main -> build the unsigned Windows installer -> publish a GitHub Release
+# (installer + latest.yml + blockmap) so the app's "Check for Updates" finds it.
+# Bump `version` in package.json for each shippable change (electron-updater only
+# reports an update when the released version is HIGHER than the installed one).
 
 on:
   push:
     branches: [main]
     paths-ignore:
       - '**/*.md'
-      - '.github/**'
       - 'docs/**'
   workflow_dispatch: {}
 
 permissions:
-  contents: write # required to create the Release
+  contents: write # required to create the Release / tag
 
 jobs:
   release:
@@ -30,11 +29,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish
+      - name: Build installer (unsigned)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # CI has no code-signing certificate — build unsigned.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npm run build
-          npx electron-builder --win nsis --publish always
+          npx electron-builder --win nsis --publish never
+
+      - name: Read version
+        id: v
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          name: WICKED v${{ steps.v.outputs.version }}
+          fail_on_unmatched_files: true
+          files: |
+            release/WICKED-Setup-*.exe
+            release/latest.yml
+            release/*.blockmap
