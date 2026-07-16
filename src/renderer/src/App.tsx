@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import ActivityBar from './shell/ActivityBar'
+import AddNewApp from './shell/AddNewApp'
 import Home from './shell/Home'
 import ModuleBoundary from './shell/ModuleBoundary'
 import SettingsScreen from './shell/SettingsScreen'
@@ -49,6 +50,7 @@ export default function App(): React.JSX.Element {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/m/:id" element={<ModuleHost />} />
+            <Route path="/add-app" element={<AddNewApp />} />
             <Route path="/settings" element={<SettingsScreen />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

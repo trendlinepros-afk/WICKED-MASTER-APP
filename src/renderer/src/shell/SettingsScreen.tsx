@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
+import { Bot, Copy, KeyRound, Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
 import {
   API_PROVIDERS,
   SHELL_IPC,
   type ApiProviderId,
+  type McpStatus,
   type ShellSettings,
   type UpdateEvent
 } from '@shared/types'
@@ -97,6 +98,8 @@ export default function SettingsScreen(): React.JSX.Element {
   const [version, setVersion] = useState('')
   const [updateState, setUpdateState] = useState('')
   const [keyStatus, setKeyStatus] = useState<Record<ApiProviderId, boolean> | null>(null)
+  const [mcp, setMcp] = useState<McpStatus | null>(null)
+  const [mcpCopied, setMcpCopied] = useState(false)
 
   const refreshKeys = (): void => {
     window.wicked
@@ -106,7 +109,12 @@ export default function SettingsScreen(): React.JSX.Element {
 
   useEffect(() => {
     refreshKeys()
+    window.wicked.invoke(SHELL_IPC.mcpStatus).then((s) => setMcp(s as McpStatus))
   }, [])
+
+  const toggleMcp = async (enabled: boolean): Promise<void> => {
+    setMcp((await window.wicked.invoke(SHELL_IPC.mcpSetEnabled, enabled)) as McpStatus)
+  }
 
   useEffect(() => {
     window.wicked.invoke(SHELL_IPC.appVersion).then((v) => setVersion(v as string))
@@ -200,6 +208,54 @@ export default function SettingsScreen(): React.JSX.Element {
               Check now
             </button>
           </div>
+        </div>
+      </section>
+
+      {/* AI Tools (MCP) */}
+      <section className="mt-8">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+          <Bot size={14} />
+          AI Tools (MCP)
+        </h2>
+        <p className="mt-1 max-w-xl text-xs text-muted">
+          Runs a local Model Context Protocol server so an AI agent (Claude Desktop, Claude
+          Code, or any MCP client) can call every module’s actions. Localhost only. Destructive
+          actions require confirmation and credentials are never auto-used.
+        </p>
+        <div className="mt-3 max-w-xl rounded-xl border border-edge bg-surface p-4">
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm font-medium">Enable local MCP server</span>
+            <input
+              type="checkbox"
+              checked={mcp?.enabled ?? false}
+              onChange={(e) => toggleMcp(e.target.checked)}
+              className="h-4 w-4 accent-[rgb(var(--wk-accent))]"
+            />
+          </label>
+          {mcp?.running && (
+            <>
+              <div className="mt-3 flex items-center justify-between gap-3 border-t border-edge pt-3">
+                <span className="text-xs text-muted">Endpoint</span>
+                <div className="flex items-center gap-2">
+                  <code className="rounded bg-raised px-2 py-1 text-xs text-ink">{mcp.url}</code>
+                  <button
+                    title="Copy endpoint"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(mcp.url)
+                      setMcpCopied(true)
+                      setTimeout(() => setMcpCopied(false), 1500)
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                  >
+                    <Copy size={13} />
+                  </button>
+                </div>
+              </div>
+              <div className="mt-1 text-xs text-ok">
+                {mcpCopied ? 'Copied' : `Running · ${mcp.toolCount} tools exposed`}
+              </div>
+            </>
+          )}
         </div>
       </section>
 

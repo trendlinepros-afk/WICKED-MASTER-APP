@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Settings } from 'lucide-react'
+import { PackagePlus, Settings } from 'lucide-react'
 import { modules } from './registry'
 import { useSettings } from '@/stores/settings'
 import ModuleIcon from './ModuleIcon'
@@ -35,6 +35,18 @@ export default function ActivityBar(): React.JSX.Element {
           </NavLink>
         ))}
       </div>
+
+      <NavLink
+        to="/add-app"
+        title="Add New App"
+        className={({ isActive }) =>
+          `flex h-11 w-11 items-center justify-center rounded-lg transition-colors ${
+            isActive ? 'bg-raised text-accent' : 'text-muted hover:bg-raised/70 hover:text-ink'
+          }`
+        }
+      >
+        <PackagePlus size={21} strokeWidth={1.8} />
+      </NavLink>
 
       <NavLink
         to="/settings"
