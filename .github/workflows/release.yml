@@ -1,0 +1,40 @@
+name: Release
+
+# Push to main -> build the Windows installer -> publish a GitHub Release so the
+# app's "Check for Updates" finds it. Bump `version` in package.json for each
+# shippable change (electron-updater only reports an update when the released
+# version is HIGHER than the installed one).
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/**'
+      - 'docs/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # required to create the Release
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # CI has no code-signing certificate — build unsigned.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run build
+          npx electron-builder --win nsis --publish always
