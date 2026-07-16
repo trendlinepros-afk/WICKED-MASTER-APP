@@ -18,6 +18,7 @@ asarUnpack:
   - node_modules/ffprobe-static/**
 win:
   executableName: WICKED
+  icon: build/icon.png
   target:
     - nsis
 nsis:
@@ -26,8 +27,6 @@ nsis:
   uninstallDisplayName: WICKED
   oneClick: true
   perMachine: false
-# distinct from the old standalone chat app's default 'wicked-updater' cache dir
-updaterCacheDirName: wicked-suite-updater
 npmRebuild: true
 # ──────────────────────────────────────────────────────────────
 # Update feed. Self-hosted for now (repo not on GitHub yet).
