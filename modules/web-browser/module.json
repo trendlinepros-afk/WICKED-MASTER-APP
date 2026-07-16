@@ -1,0 +1,8 @@
+{
+  "id": "web-browser",
+  "name": "Web Browser",
+  "icon": "Globe",
+  "version": "1.0.0",
+  "description": "Tabbed browser with bookmarks, plus full Chrome (your extensions, incl. Claude) automated over MCP",
+  "status": "beta"
+}
