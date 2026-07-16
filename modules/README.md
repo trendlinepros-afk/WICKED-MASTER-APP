@@ -11,11 +11,17 @@ rebuild.
 /modules/<module-id>/
   module.json     # manifest (required)
   index.tsx       # default export = React component, mounted at /m/<module-id> (required)
-  ipc.ts          # optional — main-process handlers, auto-registered at startup
+  mcp.ts          # REQUIRED — exports this module's MCP tool definitions for AI agents
+  ipc.ts          # main-process handlers, auto-registered at startup (required if the module has any)
   store.ts        # optional — module's own Zustand store slice
   README.md       # what this module does + quirks carried over from the standalone app
   <anything else> # components/, lib/, assets/ — module-private code
 ```
+
+`mcp.ts` is **mandatory** for every module going forward (see the MCP section
+below). A renderer-only module with no main-process actions may export an empty
+tool array, but the file must exist so its capabilities are consciously decided,
+not forgotten.
 
 ## module.json
 
@@ -83,6 +89,64 @@ Rules:
   `Start-Process -Verb RunAs`) so the UAC prompt happens only when the user invokes
   that action.
 
+## mcp.ts (required) — expose the module to AI agents
+
+Every module ships an `mcp.ts` so its actions are callable by an MCP client
+(Claude Desktop, Claude Code, or any MCP client) through the shell's built-in MCP
+server (localhost only, toggled in Settings → AI Tools (MCP)). The shell scans
+`modules/*/mcp.ts` at startup and registers whatever tools each exports — adding
+`mcp.ts` is the **only** step needed to expose a module's tools.
+
+`mcp.ts` default-exports `register(ctx): McpToolDef[]`:
+
+```ts
+import { z } from 'zod'
+import type { McpModuleContext, McpToolDef } from '@shared/mcp'
+
+export default function register(ctx: McpModuleContext): McpToolDef[] {
+  return [
+    {
+      name: 'robocopy-gui__start-copy',              // MUST be <module-id>__<action>
+      description: 'Run a robocopy job. Destructive: can overwrite/delete files.',
+      destructive: true,                             // routes through the confirm gate
+      inputSchema: {                                 // zod raw shape (shape only)
+        source: z.string(),
+        destination: z.string(),
+        confirm: z.boolean().optional()
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(args.confirm as boolean | undefined,
+          `Copy ${args.source} -> ${args.destination}. May overwrite/delete files.`)
+        if (gate) return gate
+        return ctx.invoke('robocopy-gui:start-copy', /* same args the UI sends */)
+      }
+    }
+  ]
+}
+```
+
+Rules (all mandatory):
+
+- **Tool names are `<module-id>__<action>`** (double underscore). The server rejects
+  any tool not prefixed with the module id, so names can't collide across modules.
+- **Reuse, don't duplicate.** A tool handler calls `ctx.invoke('<module-id>:<action>', …)`
+  — the *same* IPC channel the UI button calls — so there is one implementation and
+  one validation path. `inputSchema` is only the shape the agent sees; the real
+  business validation stays in the delegated handler.
+- **Destructive/irreversible tools** (file delete/overwrite, system/config change,
+  credential change, anything not trivially undone) MUST set `destructive: true` and
+  gate on `ctx.confirm(args.confirm, "<exactly what will happen>")`. The first call
+  returns a confirmation describing the effect; the agent re-calls with
+  `confirm: true` to execute. Use this shared gate — never invent your own.
+- **Credential-needing tools** MUST NOT auto-use stored vault secrets on the MCP
+  path. Gate on `ctx.credential('<Credential name>', args.<value>)`; when the caller
+  hasn't supplied it, this returns a message *naming* (never echoing) the specific
+  credential. Never log or return credential values.
+- Renderer-only modules with no actions may `return []`, but the file must exist.
+
+The `McpModuleContext` (`@shared/mcp`) provides: `invoke(channel, …args)`,
+`hasApiKey(provider)`, `confirm(confirm, summary)`, `credential(name, provided)`.
+
 ## API keys (central vault)
 
 Provider API keys (Anthropic, OpenAI, Gemini, DeepSeek, OpusClip, S3) are managed
@@ -122,7 +186,9 @@ write into another module's keys. Prefix shared-store keys with `<module-id>.`.
 2. Renderer code → `index.tsx` (+ components). Replace the app's own window/menu/theme
    handling with shell equivalents.
 3. Main-process code → `ipc.ts`, all channels renamed to `<id>:*`.
-4. Settings/persistence → `storeGet`/`storeSet` or userData files under a
+4. **`mcp.ts` (required)** → expose the module's actions as `<id>__<action>` tools that
+   delegate to those channels; mark destructive tools and gate credentials.
+5. Settings/persistence → `storeGet`/`storeSet` or userData files under a
    module-named subfolder.
-5. Update dependencies in root package.json; `npm run typecheck && npm run dev`.
-6. Write the module `README.md` (quirks, carried-over behavior, elevation notes).
+6. Update dependencies in root package.json; `npm run typecheck && npm run dev`.
+7. Write the module `README.md` (quirks, carried-over behavior, elevation notes).
