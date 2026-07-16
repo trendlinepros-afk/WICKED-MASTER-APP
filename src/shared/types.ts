@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   disabledModules: [],
   update: { autoCheck: true, intervalHours: 4 },
   mcpEnabled: false,
-  navExpanded: false
+  navExpanded: true
 }
 
 /**
