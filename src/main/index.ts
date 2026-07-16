@@ -5,6 +5,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { SHELL_IPC, type ShellSettings } from '@shared/types'
 import { registerApiKeyIpc } from './api-keys'
+import { setMainWindowGetter } from './mcp/channel-registry'
+import { getMcpStatus, setMcpEnabled, stopMcpServer } from './mcp/server'
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
@@ -79,9 +81,22 @@ app.whenReady().then(() => {
 
   registerApiKeyIpc(() => mainWindow)
 
-  // module IPC (auto-registered from modules/*/ipc.ts)
+  // MCP: the channel registry needs the main window for synthetic-event senders
+  setMainWindowGetter(() => mainWindow)
+  ipcMain.handle(SHELL_IPC.mcpStatus, () => getMcpStatus())
+  ipcMain.handle(SHELL_IPC.mcpSetEnabled, async (_e, value: boolean) => {
+    const status = await setMcpEnabled(value)
+    setSettings({ mcpEnabled: status.enabled })
+    return status
+  })
+
+  // module IPC (auto-registered from modules/*/ipc.ts) — must run before the MCP
+  // server builds its tool list, so the channel registry is populated.
   const registered = registerModuleIpc(() => mainWindow)
   console.log(`[wicked] registered module ipc: ${registered.length}`)
+
+  // start the MCP server if the user left it enabled last session
+  if (getSettings().mcpEnabled) setMcpEnabled(true)
 
   initUpdater(() => mainWindow)
 
@@ -94,4 +109,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  stopMcpServer()
 })

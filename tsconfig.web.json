@@ -27,5 +27,10 @@
     "modules/**/*",
     "modules/*/module.json"
   ],
-  "exclude": ["modules/*/ipc.ts", "modules/*/ipc/**/*"]
+  "exclude": [
+    "modules/*/ipc.ts",
+    "modules/*/ipc/**/*",
+    "modules/*/mcp.ts",
+    "modules/*/mcp/**/*"
+  ]
 }

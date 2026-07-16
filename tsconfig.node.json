@@ -23,6 +23,8 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "modules/*/ipc.ts",
-    "modules/*/ipc/**/*"
+    "modules/*/ipc/**/*",
+    "modules/*/mcp.ts",
+    "modules/*/mcp/**/*"
   ]
 }

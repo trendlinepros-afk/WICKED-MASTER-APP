@@ -27,12 +27,15 @@ export interface ShellSettings {
     /** hours between background checks */
     intervalHours: number
   }
+  /** local MCP server exposing every module's tools to AI agents (localhost only) */
+  mcpEnabled: boolean
 }
 
 export const DEFAULT_SETTINGS: ShellSettings = {
   theme: 'system',
   disabledModules: [],
-  update: { autoCheck: true, intervalHours: 4 }
+  update: { autoCheck: true, intervalHours: 4 },
+  mcpEnabled: false
 }
 
 /**
@@ -69,8 +72,29 @@ export const SHELL_IPC = {
   /** (id) => void */
   apiKeyClear: 'shell:apikeys-clear',
   /** main → renderer broadcast after any change; payload = status record */
-  apiKeysChanged: 'shell:apikeys-changed'
+  apiKeysChanged: 'shell:apikeys-changed',
+  /** () => McpStatus */
+  mcpStatus: 'shell:mcp-status',
+  /** (enabled: boolean) => McpStatus */
+  mcpSetEnabled: 'shell:mcp-set-enabled'
 } as const
+
+/** Mirror of the main-process McpStatus (see src/main/mcp/server.ts). */
+export interface McpToolInfo {
+  module: string
+  name: string
+  description: string
+  destructive: boolean
+}
+
+export interface McpStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  url: string
+  toolCount: number
+  tools: McpToolInfo[]
+}
 
 export type UpdateEvent =
   | { kind: 'checking' }

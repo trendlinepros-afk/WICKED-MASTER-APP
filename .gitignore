@@ -16,3 +16,6 @@ Thumbs.db
 # local env / secrets
 .env
 .env.*
+
+# scratch
+_mcp-test.mjs

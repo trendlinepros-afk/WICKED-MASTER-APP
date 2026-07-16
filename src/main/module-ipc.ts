@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { getApiKey } from './api-keys'
+import { recordingIpcMain } from './mcp/channel-registry'
 import { moduleStoreGet, moduleStoreSet } from './settings'
 
 /**
@@ -32,7 +33,9 @@ const ipcModules = import.meta.glob<{ default: RegisterFn }>('@modules/*/ipc.ts'
 
 export function registerModuleIpc(getMainWindow: () => BrowserWindow | null): string[] {
   const ctx: ModuleIpcContext = {
-    ipcMain,
+    // recording proxy: captures each module's channel->handler so MCP tools can
+    // call the same function the UI calls (see mcp/channel-registry.ts)
+    ipcMain: recordingIpcMain(),
     app,
     shell,
     dialog,
