@@ -43,4 +43,4 @@ npmRebuild: true
 publish:
   - provider: github
     owner: trendlinepros-afk
-    repo: wicked-suite
+    repo: WICKED-MASTER-APP
