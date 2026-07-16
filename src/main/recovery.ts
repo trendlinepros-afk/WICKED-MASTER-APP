@@ -1,5 +1,5 @@
 import { app, dialog, ipcMain, type BrowserWindow } from 'electron'
-import { cpSync, existsSync, readdirSync, statSync } from 'fs'
+import { cpSync, existsSync, readdirSync, realpathSync, statSync } from 'fs'
 import { join } from 'path'
 import {
   SHELL_IPC,
@@ -27,9 +27,23 @@ import {
 const ARTIFACTS = ['wicked-settings.json', 'wicked-modules.json', 'modules'] as const
 const SETTINGS_MARKER = 'wicked-settings.json'
 
-/** Candidate names for a previous-version data dir, most likely first. */
-function legacyDirNames(): string[] {
-  return ['WICKED', 'wicked-suite', 'wicked']
+/**
+ * Canonical, comparable form of a path. Windows filesystems are case-insensitive
+ * (so `...\wicked-suite` and `...\WICKED-Suite` are the SAME folder), and a path
+ * may differ only by case or short-name; realpath + lowercase collapses those so
+ * we never mistake the current data folder for an old one and try to copy it
+ * onto itself.
+ */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path).toLowerCase()
+  } catch {
+    return path.toLowerCase()
+  }
+}
+
+function samePath(a: string, b: string): boolean {
+  return canonical(a) === canonical(b)
 }
 
 function inspectCandidate(path: string): RecoveryCandidate | null {
@@ -52,18 +66,32 @@ function inspectCandidate(path: string): RecoveryCandidate | null {
 function scan(extraPath?: string): RecoveryScan {
   const currentPath = app.getPath('userData')
   const appData = app.getPath('appData')
-  const seen = new Set<string>([currentPath])
   const candidates: RecoveryCandidate[] = []
+  // Exclude the current data folder up front, by canonical path — so a different
+  // casing of the same folder can never be offered as a restore source.
+  const seen = new Set<string>([canonical(currentPath)])
 
   const consider = (path: string): void => {
-    if (!path || seen.has(path)) return
-    seen.add(path)
+    if (!path) return
+    const canon = canonical(path)
+    if (seen.has(canon)) return
+    seen.add(canon)
     const c = inspectCandidate(path)
     if (c) candidates.push(c)
   }
 
+  // A user-picked folder is considered as-is.
   if (extraPath) consider(extraPath)
-  for (const name of legacyDirNames()) consider(join(appData, name))
+
+  // Find a previous version's data by its marker file, under ANY folder name in
+  // %APPDATA% — earlier builds may have used a different name, so don't guess.
+  try {
+    for (const entry of readdirSync(appData, { withFileTypes: true })) {
+      if (entry.isDirectory()) consider(join(appData, entry.name))
+    }
+  } catch {
+    /* appData unreadable — just return whatever we have */
+  }
 
   return {
     currentPath,
@@ -112,7 +140,10 @@ export function registerRecoveryIpc(getWin: () => BrowserWindow | null): void {
 
       if (!sourcePath || !isDirSafe(sourcePath))
         return { ok: false, error: 'That folder no longer exists.' }
-      if (sourcePath === currentPath)
+      // Compare by real path: on Windows `wicked-suite` and `WICKED-Suite` are
+      // the same folder, and copying it onto itself throws "src and dest cannot
+      // be the same".
+      if (samePath(sourcePath, currentPath))
         return { ok: false, error: 'That is the current data folder — nothing to restore.' }
       if (!existsSync(join(sourcePath, SETTINGS_MARKER)))
         return { ok: false, error: 'That folder has no WICKED settings to restore.' }

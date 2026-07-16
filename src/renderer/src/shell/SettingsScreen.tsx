@@ -291,12 +291,14 @@ function RecoverySection(): React.JSX.Element {
           </div>
         ) : candidates.length === 0 ? (
           <div className="text-sm text-muted">
-            No previous-version data found automatically.
+            No data from a previous version was found on this PC — your current data is the only
+            WICKED data folder, and it stays put across updates. If you have an old copy elsewhere
+            (another drive or a backup),{' '}
             <button
               onClick={() => void runScan(true)}
-              className="ml-2 font-medium text-accent hover:underline"
+              className="font-medium text-accent hover:underline"
             >
-              Choose a folder…
+              choose a folder…
             </button>
           </div>
         ) : (
