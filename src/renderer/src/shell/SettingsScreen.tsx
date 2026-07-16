@@ -4,12 +4,14 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  DatabaseBackup,
   FolderOpen,
   KeyRound,
   Loader2,
   Monitor,
   Moon,
   RefreshCw,
+  RotateCcw,
   Sun
 } from 'lucide-react'
 import {
@@ -18,6 +20,8 @@ import {
   type ApiProviderId,
   type McpStatus,
   type ModuleDataPath,
+  type RecoveryResult,
+  type RecoveryScan,
   type ShellSettings,
   type UpdateEvent
 } from '@shared/types'
@@ -230,6 +234,123 @@ const THEMES: { value: ShellSettings['theme']; label: string; icon: typeof Sun }
   { value: 'system', label: 'System', icon: Monitor }
 ]
 
+/**
+ * Restore user data left behind by a previous app version. Earlier builds kept
+ * userData under a different folder name; updating across the rename orphaned
+ * settings + module data. This finds that data and restores it (backing up the
+ * current data first), then the app relaunches.
+ */
+function RecoverySection(): React.JSX.Element {
+  const [scan, setScan] = useState<RecoveryScan | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const runScan = async (pick: boolean): Promise<void> => {
+    setLoading(true)
+    setMessage(null)
+    const res = (await window.wicked.invoke(
+      pick ? SHELL_IPC.recoveryPick : SHELL_IPC.recoveryScan
+    )) as RecoveryScan
+    setScan(res)
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    void runScan(false)
+  }, [])
+
+  const restore = async (path: string): Promise<void> => {
+    setBusy(true)
+    setMessage(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.recoveryRestore, path)) as RecoveryResult
+    // On success the main process relaunches the app, so we rarely get here.
+    if (res.canceled) setMessage(null)
+    else if (!res.ok) setMessage(res.error ?? 'Restore failed.')
+    setBusy(false)
+  }
+
+  const candidates = scan?.candidates ?? []
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <DatabaseBackup size={14} />
+        Data &amp; Recovery
+      </h2>
+      <p className="mt-1 max-w-xl text-xs text-muted">
+        WICKED keeps your settings, nav order and each app’s data in a fixed folder that stays
+        put across updates. If an older version left data behind under a different folder name,
+        you can restore it here — your current data is backed up first, then WICKED restarts.
+      </p>
+
+      <div className="mt-3 max-w-xl rounded-xl border border-edge bg-surface p-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Loader2 size={15} className="animate-spin" /> Looking for previous data…
+          </div>
+        ) : candidates.length === 0 ? (
+          <div className="text-sm text-muted">
+            No previous-version data found automatically.
+            <button
+              onClick={() => void runScan(true)}
+              className="ml-2 font-medium text-accent hover:underline"
+            >
+              Choose a folder…
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {candidates.map((c) => (
+              <div
+                key={c.path}
+                className="flex flex-col gap-2 rounded-lg border border-edge bg-raised/40 p-3"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-xs text-ink" title={c.path}>
+                    {c.path}
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted">
+                    Settings ✓
+                    {c.moduleCount > 0
+                      ? ` · ${c.moduleCount} app${c.moduleCount === 1 ? '' : 's'} with saved data`
+                      : ' · no module data'}
+                    {c.moduleIds.length > 0 && (
+                      <span className="text-muted/70"> ({c.moduleIds.join(', ')})</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => void restore(c.path)}
+                  disabled={busy}
+                  className="flex w-fit items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink disabled:opacity-40"
+                >
+                  {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                  Restore &amp; restart
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() => void runScan(true)}
+              className="text-xs font-medium text-muted hover:text-ink hover:underline"
+            >
+              Restore from another folder…
+            </button>
+          </div>
+        )}
+
+        {scan && scan.currentHasSettings && candidates.length > 0 && (
+          <p className="mt-3 border-t border-edge pt-3 text-xs text-warn">
+            Restoring replaces your current settings and app data. A timestamped backup is saved
+            inside the current data folder first, so it can be undone.
+          </p>
+        )}
+        {message && <p className="mt-3 text-xs text-danger">{message}</p>}
+      </div>
+    </section>
+  )
+}
+
 export default function SettingsScreen(): React.JSX.Element {
   const { settings, update } = useSettings()
   const [version, setVersion] = useState('')
@@ -347,6 +468,9 @@ export default function SettingsScreen(): React.JSX.Element {
           </div>
         </div>
       </section>
+
+      {/* Data & Recovery */}
+      <RecoverySection />
 
       {/* AI Tools (MCP) */}
       <section className="mt-8">

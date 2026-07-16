@@ -10,6 +10,7 @@ import { getMcpStatus, setMcpEnabled, stopMcpServer } from './mcp/server'
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
+import { registerRecoveryIpc } from './recovery'
 
 // Chromium's GPU child process cannot launch when Electron runs from a network
 // share (dev happens on the NAS; mapped drives resolve to UNC). Run the GPU
@@ -132,6 +133,7 @@ app.whenReady().then(() => {
   })
 
   registerApiKeyIpc(() => mainWindow)
+  registerRecoveryIpc(() => mainWindow)
 
   // MCP: the channel registry needs the main window for synthetic-event senders
   setMainWindowGetter(() => mainWindow)

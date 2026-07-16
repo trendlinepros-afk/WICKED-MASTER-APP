@@ -89,8 +89,45 @@ export const SHELL_IPC = {
   /** (moduleId: string) => void — open a module in its own BrowserWindow */
   openModuleWindow: 'shell:open-module-window',
   /** (moduleId: string) => ModuleDataPath[] — a module's file/data locations */
-  moduleDataPaths: 'shell:module-data-paths'
+  moduleDataPaths: 'shell:module-data-paths',
+  /** () => RecoveryScan — look for user data left by a previous app version */
+  recoveryScan: 'shell:recovery-scan',
+  /** (sourcePath?: string) => RecoveryScan — scan a user-picked folder */
+  recoveryPick: 'shell:recovery-pick',
+  /** (sourcePath: string) => RecoveryResult — restore old data, then relaunch */
+  recoveryRestore: 'shell:recovery-restore'
 } as const
+
+/** A folder that may hold user data from a previous WICKED version. */
+export interface RecoveryCandidate {
+  /** absolute path of the previous-version data folder */
+  path: string
+  /** it carries the WICKED shell's settings file (safe to restore from) */
+  hasSettings: boolean
+  /** number of per-module data folders found inside `modules/` */
+  moduleCount: number
+  /** module ids found (for display) */
+  moduleIds: string[]
+}
+
+export interface RecoveryScan {
+  /** the current (pinned) userData folder we would restore INTO */
+  currentPath: string
+  /** whether the current folder already has settings (restore overwrites it) */
+  currentHasSettings: boolean
+  /** previous-version data folders found (best first); empty if none */
+  candidates: RecoveryCandidate[]
+}
+
+export interface RecoveryResult {
+  ok: boolean
+  canceled?: boolean
+  error?: string
+  /** where the current data was backed up before overwriting */
+  backupPath?: string
+  /** the artifacts that were restored */
+  restored?: string[]
+}
 
 /**
  * One file/data location a module exposes for the Settings → Modules dropdown.
