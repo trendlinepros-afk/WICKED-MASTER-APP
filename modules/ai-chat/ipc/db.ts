@@ -11,6 +11,7 @@ import type {
   Provider,
   Settings,
 } from '../types';
+import { importInto, type ImportResult } from './importStandalone';
 
 // Port notes (WICKED suite):
 //  - The database lives under <userData>/modules/ai-chat/ (userData is the
@@ -716,6 +717,24 @@ export function backupTo(file: string): Promise<unknown> {
 
 export function getVaultPath(): string {
   return getSettings().vaultPath;
+}
+
+// ---------- Import from the old standalone Wicked app ----------
+
+/**
+ * Import chats, folders, messages, brains, templates and safe settings from a
+ * previous standalone Wicked database into this live module DB. Additive and
+ * idempotent (see importStandalone.ts). After a successful import the caller
+ * should reload the renderer stores so the new data appears. Legacy API-key
+ * settings rows are scrubbed here too, as a backstop.
+ */
+export function importFromStandalone(sourceDbPath: string): ImportResult {
+  const result = importInto(db, sourceDbPath);
+  if (result.ok) {
+    const del = db.prepare('DELETE FROM settings WHERE key = ?');
+    for (const key of LEGACY_KEY_ROWS) del.run(key);
+  }
+  return result;
 }
 
 // ---------- Agent personas (vault-backed "brains") ----------

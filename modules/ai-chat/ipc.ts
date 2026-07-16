@@ -7,6 +7,7 @@ import type { ModuleDataPath } from '@shared/types';
 import { RPC_CHANNELS as C, STREAM_TOKEN_EVENT } from './shared/rpc';
 import type { ChatStreamRequest, Provider, Settings } from './types';
 import * as db from './ipc/db';
+import * as importStandalone from './ipc/importStandalone';
 import * as vault from './ipc/vault';
 import * as brainFolder from './ipc/brainFolder';
 import * as projectBoard from './ipc/projectBoard';
@@ -57,6 +58,20 @@ export default function register(ctx: ModuleIpcContext): void {
     const win = getMainWindow();
     return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
   };
+
+  // ----- Import from the old standalone Wicked app -----
+  // Registered as plain module channels (not part of the typed WickedAPI/LAN
+  // portal surface): desktop-only, and reachable by the shell MCP via the
+  // channel registry. `ai-chat:import-scan` is read-only; `ai-chat:import-run`
+  // additively imports the chosen database into this module's DB.
+  ipcMain.handle('ai-chat:import-scan', () =>
+    importStandalone.scanForStandalone(db.dbFilePath())
+  );
+  ipcMain.handle('ai-chat:import-run', (_e: IpcMainInvokeEvent, sourcePath: unknown) => {
+    if (typeof sourcePath !== 'string' || !sourcePath)
+      return { ok: false, error: 'A database path is required.' };
+    return db.importFromStandalone(sourcePath);
+  });
 
   // ----- Chats -----
   handle(C.getChats, () => db.getChats());

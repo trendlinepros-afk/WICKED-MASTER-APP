@@ -278,6 +278,37 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           .describe('Provider to enumerate models for.')
       },
       handler: (args) => ctx.invoke(`${ID}:models-listChat`, args.provider)
+    },
+
+    // ---------- Import from the old standalone Wicked app ----------
+    {
+      name: `${ID}__scan-standalone-import`,
+      description:
+        'Look for the OLD standalone Wicked app\'s database on this PC and report what could be imported (per candidate: db path, and counts of chats, messages, brains, folders, templates). Read-only — changes nothing. Use this before import-standalone to get the source path.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:import-scan`)
+    },
+    {
+      name: `${ID}__import-standalone`,
+      description:
+        'Import chats, folders, brains, prompt templates and the memory vault path from the OLD standalone Wicked app database at `sourcePath` into this module. Additive and idempotent (never deletes/overwrites; re-running skips already-imported rows), but it does modify the chat database, so it requires confirmation. Get `sourcePath` from scan-standalone-import.',
+      destructive: true,
+      inputSchema: {
+        sourcePath: z
+          .string()
+          .describe('Absolute path to the standalone Wicked database (from scan-standalone-import).'),
+        confirm: z.boolean().optional().describe('Set true to actually import (see confirmation).')
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(
+          args.confirm as boolean | undefined,
+          `Import chats, folders, brains and templates from the standalone Wicked database at "${String(
+            args.sourcePath
+          )}" into AI Chat. This adds to your current data (nothing is deleted); already-imported items are skipped.`
+        )
+        if (gate) return gate
+        return ctx.invoke(`${ID}:import-run`, args.sourcePath)
+      }
     }
   ]
 }

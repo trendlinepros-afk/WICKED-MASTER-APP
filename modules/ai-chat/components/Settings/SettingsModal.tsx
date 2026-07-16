@@ -3,6 +3,9 @@ import type { DataLocations, PortalStatus, Provider, Settings } from '../../type
 import { useSettingsStore } from '../../store/settingsStore';
 import { useKeysStore } from '../../store/keysStore';
 import { useUIStore } from '../../store/uiStore';
+import { useChatStore } from '../../store/chatStore';
+import { useFolderStore } from '../../store/folderStore';
+import { useAgentStore } from '../../store/agentStore';
 import { useOnboardingStore } from '../../store/onboardingStore';
 import { MODEL_CONFIG, PROVIDERS, defaultVersionFor } from '../ModelSelector/modelConfig';
 import { McpServerSettings } from './McpServerSettings';
@@ -95,6 +98,9 @@ export function SettingsModal() {
               , create a vault, then point WICKED at that folder.
             </p>
           </Section>
+
+          {/* Import from the old standalone Wicked app */}
+          <StandaloneImport />
 
           {/* Defaults */}
           <Section title="Defaults">
@@ -498,6 +504,130 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="mb-2 text-sm font-semibold text-ink">{title}</h3>
       <div className="space-y-2">{children}</div>
     </div>
+  );
+}
+
+/**
+ * One-time import of the OLD standalone Wicked app's data (chats, folders,
+ * brains, templates, memory vault path) into this module. The suite's AI Chat
+ * is a fresh port that didn't auto-adopt the standalone data; this brings it
+ * across. Additive + idempotent — safe to run more than once.
+ */
+interface StandaloneCandidate {
+  path: string;
+  dir: string;
+  chats: number;
+  messages: number;
+  personas: number;
+  folders: number;
+  templates: number;
+  sizeBytes: number;
+}
+interface StandaloneScan {
+  found: boolean;
+  candidates: StandaloneCandidate[];
+}
+interface ImportResult {
+  ok: boolean;
+  error?: string;
+  counts?: {
+    folders: number;
+    chats: number;
+    messages: number;
+    chatLinks: number;
+    personas: number;
+    templates: number;
+    settings: number;
+  };
+  vaultPathImported?: string | null;
+}
+
+function StandaloneImport() {
+  const toast = useUIStore((s) => s.toast);
+  const [scan, setScan] = useState<StandaloneScan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = (await window.wicked.invoke('ai-chat:import-scan')) as StandaloneScan;
+        if (alive) setScan(res);
+      } catch {
+        if (alive) setScan({ found: false, candidates: [] });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Only surface this section when there's actually something to import.
+  if (!scan || !scan.found || scan.candidates.length === 0) return null;
+  const best = scan.candidates[0];
+
+  const runImport = async () => {
+    setBusy(true);
+    try {
+      const res = (await window.wicked.invoke('ai-chat:import-run', best.path)) as ImportResult;
+      if (!res.ok) {
+        toast(`Import failed: ${res.error ?? 'unknown error'}`, 'error');
+        return;
+      }
+      const c = res.counts;
+      // Refresh everything the import touched so it appears immediately.
+      await Promise.all([
+        useChatStore.getState().loadChats(),
+        useFolderStore.getState().load(),
+        useAgentStore.getState().load(),
+        useSettingsStore.getState().load(),
+      ]);
+      const summary = c
+        ? `${c.chats} chats, ${c.messages} messages, ${c.personas} brains`
+        : 'data';
+      setDone(summary);
+      toast(`Imported ${summary} from the standalone app`, 'success');
+    } catch (err) {
+      toast(`Import failed: ${(err as Error).message}`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Import from the standalone Wicked app">
+      <div className="rounded-lg border border-warn/40 bg-warn/5 p-3">
+        <p className="text-sm text-ink">
+          Found data from your older standalone Wicked app:{' '}
+          <strong>{best.chats.toLocaleString()} chats</strong>,{' '}
+          <strong>{best.messages.toLocaleString()} messages</strong>
+          {best.personas > 0 && (
+            <>
+              , <strong>{best.personas} brains</strong>
+            </>
+          )}
+          {best.folders > 0 && <> and {best.folders} folders</>}.
+        </p>
+        <p className="mt-1 break-all text-xs text-muted">{best.path}</p>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={runImport}
+            disabled={busy || done !== null}
+            className="rounded-lg bg-accent px-3 py-2 text-sm text-white hover:bg-accent/90 disabled:opacity-50"
+          >
+            {busy ? 'Importing…' : done ? 'Imported ✓' : 'Import my old data'}
+          </button>
+          {done && <span className="text-xs text-ok">Imported {done}.</span>}
+        </div>
+        <p className="mt-2 text-xs text-muted">
+          Brings your chats, folders, brains, prompt templates and memory vault path across. It{' '}
+          <strong>adds</strong> to your current data (nothing is deleted or overwritten), and is
+          safe to run more than once — already-imported items are skipped. Your API keys are not
+          imported; they live in WICKED Settings → API Keys.
+        </p>
+      </div>
+    </Section>
   );
 }
 

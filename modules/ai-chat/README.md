@@ -37,13 +37,31 @@ project boards, PDF/Markdown export and a LAN web portal.
 - The chat database now lives at
   `%APPDATA%\WICKED-Suite\modules\ai-chat\wicked.db` (plus WAL files).
   Project Boards default to `%APPDATA%\WICKED-Suite\modules\ai-chat\ProjectBoards`.
-- The standalone app's data (`%APPDATA%\Wicked\wicked.db`, its ProjectBoards
-  folder) is **not auto-imported**. To reuse old data: close WICKED, copy the
-  old `wicked.db` over the new one (old key rows are scrubbed on first start),
-  and point the vault / Project Board / data-root paths in the module's
-  Settings at your existing folders. The configurable **data root**
-  ("consolidate to one folder", rolling 6-hourly DB backups, 14 kept) works
-  exactly as before.
+- The standalone app's data (`%APPDATA%\wicked\` and its database) is **not
+  auto-imported** — the suite's AI Chat starts fresh. Bring it across with the
+  built-in importer (below) rather than by copying files.
+
+### Importing the old standalone app (`ipc/importStandalone.ts`)
+- **AI Chat → Settings → "Import from the standalone Wicked app"** appears
+  automatically when a previous standalone database is found. It scans the
+  likely app-data folders (`%APPDATA%\wicked`, `Wicked`, `WICKED`,
+  `desktop-ai-chat-app`, …) for any SQLite file that has `chats` + `messages`
+  tables and offers the richest one.
+- It imports **chats, folders, messages, agent personas ("brains"), prompt
+  templates, chat links and safe settings (incl. the memory `vaultPath`, so
+  memory reconnects)**. It is **additive and idempotent**: `INSERT OR IGNORE`
+  on primary keys, wrapped in a transaction with foreign keys briefly disabled,
+  so nothing is deleted/overwritten and re-running only fills gaps.
+- **Schema-tolerant**: the source is introspected at runtime
+  (`sqlite_master` / `PRAGMA table_info`) and only columns present in both
+  schemas are copied; our NOT-NULL columns get sane defaults, and message
+  bodies that aren't already content-parts JSON are wrapped so they render.
+- **Never imported**: provider API keys (they live in the shell vault — legacy
+  key rows are skipped and scrubbed) and the install-specific web-portal token.
+- Also exposed over MCP: `ai-chat__scan-standalone-import` (read-only) and
+  `ai-chat__import-standalone` (confirm-gated).
+- The configurable **data root** ("consolidate to one folder", rolling 6-hourly
+  DB backups, 14 kept) works exactly as before.
 
 ### Web portal — OFF by default
 - The LAN portal (HTTP + self-signed HTTPS twin on port+1 for phone
