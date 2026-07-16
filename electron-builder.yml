@@ -29,14 +29,15 @@ nsis:
   perMachine: false
 npmRebuild: true
 # ──────────────────────────────────────────────────────────────
-# Update feed. Self-hosted for now (repo not on GitHub yet).
-# When WICKED is pushed to GitHub, replace the `publish` block with:
-#   publish:
-#     - provider: github
-#       owner: trendlinepros-afk
-#       repo: wicked
-# (that is the whole switch — nothing else changes)
+# Update feed = GitHub Releases. The "Check for Updates" button and the
+# auto-updater read from github.com/<owner>/<repo>/releases.
+# NOTE: change `repo` here if you name the GitHub repo something other than
+# "wicked-suite". The repo (or at least its Releases/assets) must be reachable
+# without a token — i.e. a PUBLIC repo — for the keyless updater to work.
+# Until the repo exists and has a published Release, "Check for Updates" simply
+# reports "no updates found yet" (handled gracefully).
 # ──────────────────────────────────────────────────────────────
 publish:
-  - provider: generic
-    url: http://192.168.1.5/wicked-updates/
+  - provider: github
+    owner: trendlinepros-afk
+    repo: wicked-suite

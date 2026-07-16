@@ -1,7 +1,15 @@
 import { NavLink } from 'react-router-dom'
-import { PackagePlus, PanelLeftClose, PanelLeftOpen, Settings } from 'lucide-react'
+import {
+  DownloadCloud,
+  Loader2,
+  PackagePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings
+} from 'lucide-react'
 import { modules } from './registry'
 import { useSettings } from '@/stores/settings'
+import { useUpdates } from '@/stores/updates'
 import ModuleIcon from './ModuleIcon'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
@@ -17,6 +25,9 @@ export default function ActivityBar(): React.JSX.Element {
   const disabled = useSettings((s) => s.settings.disabledModules)
   const expanded = useSettings((s) => s.settings.navExpanded)
   const update = useSettings((s) => s.update)
+  const checkForUpdates = useUpdates((s) => s.check)
+  const updatePhase = useUpdates((s) => s.phase)
+  const checking = updatePhase === 'checking' || updatePhase === 'available'
   const visible = modules.filter((m) => !disabled.includes(m.manifest.id))
 
   return (
@@ -74,6 +85,25 @@ export default function ActivityBar(): React.JSX.Element {
       </div>
 
       <div className="my-1 h-px shrink-0 bg-edge" />
+
+      {/* Check for Updates */}
+      <button
+        onClick={() => checkForUpdates()}
+        disabled={checking}
+        title={expanded ? undefined : 'Check for Updates'}
+        className={`${rowClass(false, expanded)} shrink-0 disabled:opacity-60`}
+      >
+        {checking ? (
+          <Loader2 size={20} strokeWidth={1.8} className="shrink-0 animate-spin" />
+        ) : (
+          <DownloadCloud size={20} strokeWidth={1.8} className="shrink-0" />
+        )}
+        {expanded && (
+          <span className="truncate text-sm">
+            {checking ? 'Checking…' : 'Check for Updates'}
+          </span>
+        )}
+      </button>
 
       {/* Add New App */}
       <NavLink

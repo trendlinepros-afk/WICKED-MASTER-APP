@@ -7,8 +7,10 @@ import Home from './shell/Home'
 import ModuleBoundary from './shell/ModuleBoundary'
 import SettingsScreen from './shell/SettingsScreen'
 import UpdateDialog from './shell/UpdateDialog'
+import UpdateToast from './shell/UpdateToast'
 import { moduleById } from './shell/registry'
 import { useSettings } from './stores/settings'
+import { useUpdates } from './stores/updates'
 
 function Spinner(): React.JSX.Element {
   return (
@@ -35,10 +37,15 @@ function ModuleHost(): React.JSX.Element {
 export default function App(): React.JSX.Element {
   const load = useSettings((s) => s.load)
   const loaded = useSettings((s) => s.loaded)
+  const initUpdates = useUpdates((s) => s.init)
 
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    return initUpdates()
+  }, [initUpdates])
 
   if (!loaded) return <Spinner />
 
@@ -57,6 +64,7 @@ export default function App(): React.JSX.Element {
         </main>
       </div>
       <UpdateDialog />
+      <UpdateToast />
     </HashRouter>
   )
 }
