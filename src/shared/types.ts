@@ -29,13 +29,16 @@ export interface ShellSettings {
   }
   /** local MCP server exposing every module's tools to AI agents (localhost only) */
   mcpEnabled: boolean
+  /** activity bar shows text labels next to icons when expanded */
+  navExpanded: boolean
 }
 
 export const DEFAULT_SETTINGS: ShellSettings = {
   theme: 'system',
   disabledModules: [],
   update: { autoCheck: true, intervalHours: 4 },
-  mcpEnabled: false
+  mcpEnabled: false,
+  navExpanded: false
 }
 
 /**
