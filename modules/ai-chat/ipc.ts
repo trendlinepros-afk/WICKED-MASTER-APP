@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent, OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { ModuleIpcContext } from '../../src/main/module-ipc';
+import type { ModuleDataPath } from '@shared/types';
 import { RPC_CHANNELS as C, STREAM_TOKEN_EVENT } from './shared/rpc';
 import type { ChatStreamRequest, Provider, Settings } from './types';
 import * as db from './ipc/db';
@@ -170,6 +171,49 @@ export default function register(ctx: ModuleIpcContext): void {
   // ----- Data root & backups -----
   handle(C.dataGetLocations, () => dataRoot.getLocations());
   handle(C.dataConsolidate, (_e, root: string) => dataRoot.consolidate(root));
+
+  // ----- Data paths (Settings → Modules) -----
+  // Read live from the module's own settings/db so the list reflects current
+  // state. Registered directly on ipcMain (not `handle`) so it is NOT mirrored
+  // onto the LAN web portal — it is a shell-shell channel. Paths only, no
+  // secrets (the portal token / API keys are never surfaced here).
+  ipcMain.handle('ai-chat:data-paths', (): ModuleDataPath[] => {
+    const s = db.getSettings();
+    const dbFile = db.dbFilePath();
+    const boardFolder = projectBoard.getDataFolder();
+    return [
+      {
+        label: 'Brain vault',
+        path: s.vaultPath || null,
+        note: 'Obsidian-compatible memory vault (WickedBrain)',
+      },
+      {
+        label: 'Database',
+        path: fs.existsSync(dbFile) ? dbFile : null,
+        note: 'Chats, folders, personas, settings (SQLite)',
+      },
+      {
+        label: 'Project Boards',
+        path: boardFolder || null,
+        note: 'Configured folder, or the default under the module data folder',
+      },
+      {
+        label: 'Data root',
+        path: s.dataRootPath || null,
+        note: 'Consolidated root (e.g. a network share) with rolling DB backups',
+      },
+      {
+        label: 'ComfyUI folder',
+        path: s.comfyLaunchPath || null,
+        note: 'Local image generation launcher',
+      },
+      {
+        label: 'FluxGym folder',
+        path: s.fluxGymPath || null,
+        note: 'LoRA training for Persons',
+      },
+    ];
+  });
 
   // ----- Local image generation (ComfyUI) -----
   handle(C.comfyGetStatus, () => comfy.getStatus());

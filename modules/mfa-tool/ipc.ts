@@ -25,6 +25,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
+import type { ModuleDataPath } from '@shared/types'
 
 const ID = 'mfa-tool'
 
@@ -183,6 +184,19 @@ export default function register(ctx: ModuleIpcContext): void {
       path,
       legacyPath
     }
+  })
+
+  // Data paths — surfaced in Settings → Modules. Only the vault FILE path is
+  // exposed (null until the vault is created); never the passphrase or secrets.
+  ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {
+    const path = vaultPath()
+    return [
+      {
+        label: 'Encrypted vault',
+        path: existsSync(path) ? path : null,
+        note: 'AES-256-GCM encrypted TOTP accounts'
+      }
+    ]
   })
 
   ctx.ipcMain.handle(`${ID}:create`, (_e, passphrase: unknown) => {

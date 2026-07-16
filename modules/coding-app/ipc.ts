@@ -1,6 +1,7 @@
-import { writeFileSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
+import type { ModuleDataPath } from '@shared/types'
 import { IPC } from './shared/ipc'
 import type { AppConfig, ProviderId } from './shared/config'
 import type { ChatRequest, Conversation, GeminiAnalysisData } from './shared/types'
@@ -46,6 +47,29 @@ export default function register(ctx: ModuleIpcContext): void {
   )
   ipcMain.handle(IPC.configPath, () => configStore.path())
   ipcMain.handle(IPC.configRestoreBackup, () => configStore.restoreBackup())
+
+  // ---- Data paths (Settings → Modules) ----
+  ipcMain.handle('coding-app:data-paths', (): ModuleDataPath[] => {
+    const cfg = configStore.load()
+    const currentProject = fileManager.getActiveRoot() ?? cfg.recentProjects[0] ?? null
+    const configPath = configStore.path()
+    const logsPath = logger.path()
+    return [
+      {
+        label: 'Current project',
+        path: currentProject,
+        note: 'The open (or most recently opened) project folder'
+      },
+      {
+        label: 'Config file',
+        path: existsSync(configPath) ? configPath : null
+      },
+      {
+        label: 'Logs',
+        path: existsSync(logsPath) ? logsPath : null
+      }
+    ]
+  })
 
   // ---- Models ----
   ipcMain.handle(IPC.modelsList, () => listModels())

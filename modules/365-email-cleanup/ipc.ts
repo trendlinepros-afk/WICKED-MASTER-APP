@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'child_process'
+import { existsSync } from 'fs'
+import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
+import type { ModuleDataPath } from '@shared/types'
 
 /* ------------------------------------------------------------------------ *
  *  365 EMAIL CLEANUP — in-app module (no external process).
@@ -459,6 +462,22 @@ export default function register(ctx: ModuleIpcContext): void {
     const trimmed = h.length > MAX_UNDO_BATCHES ? h.slice(h.length - MAX_UNDO_BATCHES) : h
     ctx.storeSet(UNDO_KEY, trimmed)
   }
+
+  /* ---- data paths (Settings → Modules) ---- */
+
+  // Learned routes and undo history live in the shell's shared electron-store
+  // (new Store({ name: 'wicked-modules' }) → <userData>/wicked-modules.json),
+  // not in a module-owned file. Surface that store file so the user can find it.
+  ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {
+    const storeFile = join(ctx.app.getPath('userData'), 'wicked-modules.json')
+    return [
+      {
+        label: 'Learned rules',
+        path: existsSync(storeFile) ? storeFile : null,
+        note: 'Sender→folder routes and undo history, kept in the shared app settings store'
+      }
+    ]
+  })
 
   /* ---- routes persistence ---- */
 

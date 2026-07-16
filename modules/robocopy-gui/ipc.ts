@@ -3,6 +3,7 @@ import { existsSync, statSync } from 'fs'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { basename, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
+import type { ModuleDataPath } from '@shared/types'
 import type {
   JobProfileJson,
   LoadProfileResult,
@@ -325,6 +326,18 @@ export default function register(ctx: ModuleIpcContext): void {
     await mkdir(profilesDir(), { recursive: true })
     await ctx.shell.openPath(profilesDir())
   })
+
+  /* ------------------------------------------------------------------ *
+   *  Data paths — surfaced in Settings → Modules. Profiles live under
+   *  <userData>/modules/robocopy-gui/profiles (created on first save).
+   * ------------------------------------------------------------------ */
+  ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => [
+    {
+      label: 'Saved profiles',
+      path: existsSync(profilesDir()) ? profilesDir() : null,
+      note: 'Robocopy job files (*.rcjob.json)'
+    }
+  ])
 
   /* ------------------------------------------------------------------ *
    *  Last session — best-effort, like TrySave/TryLoadLastSession.

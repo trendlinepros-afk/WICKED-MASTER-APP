@@ -24,6 +24,7 @@ import { Readable } from 'stream'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import { CH } from './shared/channels'
 import { EXPORT_PRESETS, type AppSettings, type EDL, type GraphicEvent, type StageId, type TimeRegion } from './shared/types'
+import type { ModuleDataPath } from '@shared/types'
 import { setApiKeyGetter } from './ipc/keys'
 import { setWindowGetter, sendToRenderer } from './ipc/push'
 import * as projects from './ipc/project'
@@ -149,6 +150,24 @@ export default function register(ctx: ModuleIpcContext): void {
 
   // Kill queued/running child processes (ffmpeg, HyperFrames) on quit.
   app.on('before-quit', () => renderQueue.cancelAll())
+
+  // -- Data paths (Settings → Modules) -------------------------------------
+  ipcMain.handle('automatic-editing:data-paths', (): ModuleDataPath[] => {
+    const master = masterDir() // configured projects folder, or the default under userData
+    const dbFile = path.join(moduleDataDir(), 'projects.db')
+    return [
+      {
+        label: 'Projects folder',
+        path: master,
+        note: 'Holds Projects/ and Assets/ subfolders'
+      },
+      {
+        label: 'Project database',
+        path: fs.existsSync(dbFile) ? dbFile : null,
+        note: 'SQLite project index'
+      }
+    ]
+  })
 
   // -- Projects ------------------------------------------------------------
   ipcMain.handle(CH.pickSourceFile, async () => {
