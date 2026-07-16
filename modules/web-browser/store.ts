@@ -35,14 +35,20 @@ export function hostOf(url: string): string {
   }
 }
 
-/** Address-bar input → URL: keep schemes, https:// bare domains, search the rest. */
+/**
+ * Address-bar input → URL: keep schemes, https:// bare domains, search the rest.
+ * Search defaults to DuckDuckGo: Google aggressively blocks embedded (non-Chrome)
+ * browsers with an endless reCAPTCHA "unusual traffic" wall, so it's a poor
+ * default here. For Google specifically, use Full Chrome. Users can still type
+ * google.com directly.
+ */
 export function normalizeInput(raw: string): string | null {
   const s = raw.trim()
   if (!s) return null
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s
   if (/^localhost(:\d+)?([/?#]|$)/i.test(s) || (!s.includes(' ') && /^\S+\.\S{2,}/.test(s)))
     return 'https://' + s
-  return 'https://www.google.com/search?q=' + encodeURIComponent(s)
+  return 'https://duckduckgo.com/?q=' + encodeURIComponent(s)
 }
 
 function makeTab(url: string | null): BrowserTab {

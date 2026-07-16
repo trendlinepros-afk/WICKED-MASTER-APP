@@ -15,11 +15,12 @@ import {
 import { hostOf, normalizeInput, useWebBrowser, type Bookmark, type BrowserTab } from './store'
 
 const ID = 'web-browser'
-/** must match the partition ipc.ts scopes its popup handler to */
+/** must match the partition ipc.ts scopes its session/popup handling to */
 const PARTITION = 'persist:web-browser'
-// Google sign-in (and others) refuse "embedded framework" user agents; present
-// the plain Chrome UA this shell really is underneath.
-const USER_AGENT = navigator.userAgent.replace(/\s(wicked\S*|electron)\/\S+/gi, '')
+// The user agent + Sec-CH-UA client hints for this partition are set once in
+// main (ipc.ts) so the UA and the client hints always agree — spoofing only the
+// UA attribute here would leave the "Electron" client-hint brand in place and
+// trip Google's bot wall (endless reCAPTCHA). Do not set `useragent` on the tag.
 
 /** The <webview> methods this module uses (React's types only cover the tag). */
 interface WebviewElement extends HTMLElement {
@@ -169,7 +170,6 @@ export default function WebBrowser(): React.JSX.Element {
               ref={attachRef(tab.id)}
               src={tab.src}
               partition={PARTITION}
-              useragent={USER_AGENT}
               // popups are denied in main and re-routed to a new in-app tab
               allowpopups={true}
               className="absolute inset-0 h-full w-full"

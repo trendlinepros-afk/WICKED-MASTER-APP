@@ -167,12 +167,54 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true }
   })
 
+  const browserSession = session.fromPartition(PARTITION)
+
+  /* --------- present the embedded browser as consistent, clean Chrome ------ *
+   * Spoofing only the User-Agent string (e.g. via the <webview useragent>
+   * attribute) is worse than useless: Chromium still emits Sec-CH-UA client-
+   * hint headers whose brand list says "Electron", so the UA claims plain
+   * Chrome while the hints say Electron. That mismatch makes Google (and other
+   * bot filters) flag the browser and trap it in an endless reCAPTCHA loop.
+   * Fix: set the UA AND rewrite the Sec-CH-UA headers to match, so the two
+   * always agree and read as a normal Chrome-on-Windows client.
+   * ------------------------------------------------------------------------ */
+  const CHROME_VERSION = process.versions.chrome // Chromium bundled with this Electron
+  const CHROME_MAJOR = CHROME_VERSION.split('.')[0]
+  const CHROME_UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION} Safari/537.36`
+  const SEC_CH_UA = `"Chromium";v="${CHROME_MAJOR}", "Google Chrome";v="${CHROME_MAJOR}", "Not?A_Brand";v="24"`
+  const SEC_CH_UA_FULL = `"Chromium";v="${CHROME_VERSION}", "Google Chrome";v="${CHROME_VERSION}", "Not?A_Brand";v="24.0.0.0"`
+  try {
+    browserSession.setUserAgent(CHROME_UA)
+    browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      const headers = details.requestHeaders
+      headers['User-Agent'] = CHROME_UA
+      for (const key of Object.keys(headers)) {
+        switch (key.toLowerCase()) {
+          case 'sec-ch-ua':
+            headers[key] = SEC_CH_UA
+            break
+          case 'sec-ch-ua-full-version-list':
+            headers[key] = SEC_CH_UA_FULL
+            break
+          case 'sec-ch-ua-mobile':
+            headers[key] = '?0'
+            break
+          case 'sec-ch-ua-platform':
+            headers[key] = '"Windows"'
+            break
+        }
+      }
+      callback({ requestHeaders: headers })
+    })
+  } catch (err) {
+    console.error(`[${ID}] could not configure browser session user agent`, err)
+  }
+
   /* ---------------- popups from the embedded browser → new tab ----------- */
 
   // <webview> guests can't open windows themselves; route window.open /
   // target=_blank from OUR partition into a new in-app tab. Other modules'
   // webviews (different session) are untouched.
-  const browserSession = session.fromPartition(PARTITION)
   ctx.app.on('web-contents-created', (_ev, wc) => {
     try {
       if (wc.getType() !== 'webview' || wc.session !== browserSession) return

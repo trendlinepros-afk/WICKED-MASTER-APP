@@ -47,9 +47,19 @@ Security notes:
 
 ## Quirks
 
-- The embedded browser presents a **plain Chrome user agent** (Electron/app
-  tokens stripped) so sites like Google sign-in don't reject it as an "embedded
-  framework". Some sites may still refuse embedded logins — use Full Chrome.
+- **Search defaults to DuckDuckGo, not Google.** Google actively blocks embedded
+  (non-Chrome) browsers behind an "unusual traffic" reCAPTCHA wall that can loop
+  forever. DuckDuckGo doesn't, so it's the sane default. You can still type
+  `google.com` directly, and for a Google experience that always works, use Full
+  Chrome. (The address bar treats bare domains as URLs and everything else as a
+  DuckDuckGo search.)
+- **UA + Client Hints are set together, in main.** The embedded browser presents
+  a clean Chrome-on-Windows identity via `session.setUserAgent` **and** a matching
+  rewrite of the `Sec-CH-UA*` request headers (`modules/web-browser/ipc.ts`).
+  Spoofing only the UA string (e.g. the `<webview useragent>` attribute) leaves
+  Chromium's client-hint brand list saying "Electron" — that UA/hint mismatch is
+  exactly what trips Google's bot wall — so the tag deliberately sets no
+  `useragent`. Some sites may still refuse embedded logins; use Full Chrome.
 - If DevTools is manually opened on a Full Chrome tab, that tab's automation
   socket is busy; tools return a clear error asking to close DevTools.
 - If a Chrome window using the WICKED profile is somehow running *without* the
