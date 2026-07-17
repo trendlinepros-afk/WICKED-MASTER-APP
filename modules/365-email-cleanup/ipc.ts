@@ -266,11 +266,13 @@ $list = New-Object System.Collections.ArrayList
 $skipped = 0
 $seen = 0
 Progress('Reading inbox (' + $total + ' items)...')
-# Iterate with the collection ENUMERATOR (foreach), not by numeric index:
-# index-based iteration over Outlook.Items after a Sort — releasing each item
-# as you go — is a well-known source of silently skipped items. foreach uses
-# IEnumVARIANT and is stable.
-foreach ($it in $items) {
+# Walk the sorted collection with GetFirst/GetNext — Outlook's documented,
+# stable iteration for Items. The current item is only released AFTER the next
+# one has been fetched; releasing mid-enumeration (or indexing numerically
+# after a Sort) is what silently drops items.
+$it = $null
+try { $it = $items.GetFirst() } catch { $it = $null }
+while ($null -ne $it) {
     $seen++
     try {
         $cls = 0
@@ -290,12 +292,20 @@ foreach ($it in $items) {
                 hasListUnsubscribe = (HasUnsub $it)
             })
         }
-    } catch { $skipped++ } finally { Release $it }
-    if ($max -gt 0 -and $list.Count -ge $max) { break }
+    } catch { $skipped++ }
+    if ($max -gt 0 -and $list.Count -ge $max) { Release $it; $it = $null; break }
     if ($seen % 50 -eq 0) { Progress('Scanned ' + $seen + ' of ' + $total + '...') }
+    $next = $null
+    try { $next = $items.GetNext() } catch { $next = $null }
+    Release $it
+    $it = $next
 }
 Release $items; Release $inbox
-Emit(@{ ok = $true; headers = ,@($list); scanned = $list.Count; skipped = $skipped; inboxCount = $total })
+# NOTE: plain @($list), NOT ,@($list) — the unary comma nests the array inside
+# another array in the JSON ("headers":[[...]]), which made the renderer count
+# ONE header (the inner array) and then die parsing it: the infamous
+# "Scanned 1 message(s)" + permanently blank Cleanup tab.
+Emit(@{ ok = $true; headers = @($list); scanned = $list.Count; skipped = $skipped; inboxCount = $total })
 `,
 
   'get-body': String.raw`
@@ -371,7 +381,7 @@ foreach ($m in $moves) {
     }
     Release $target
 }
-Emit(@{ ok = $true; moved = $moved; records = ,@($records) })
+Emit(@{ ok = $true; moved = $moved; records = @($records) })
 `,
 
   undo: String.raw`
@@ -395,7 +405,7 @@ foreach ($r in $recs) {
     } catch { [void]$retry.Add($r) }
     finally { Release $orig; Release $item }
 }
-Emit(@{ ok = $true; restored = $restored; retry = ,@($retry) })
+Emit(@{ ok = $true; restored = $restored; retry = @($retry) })
 `
 }
 

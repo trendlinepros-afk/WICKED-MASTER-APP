@@ -389,7 +389,27 @@ export const useCleanup = create<State>((set, get) => {
           set({ status: res.cancelled ? 'Cancelled.' : 'Scan failed.' })
           return
         }
-        const headers = (Array.isArray(res.headers) ? res.headers : []) as EmailHeader[]
+        // Sanitize every header before it touches the plan builder: flatten any
+        // accidental array nesting from the transport layer, coerce each field,
+        // and drop rows without an entryId. Malformed data must never be able
+        // to crash the plan build (a thrown error here used to leave the tab
+        // permanently blank with a misleading "Scanned 1 message(s)" status).
+        const flat = (Array.isArray(res.headers) ? res.headers : []).flat(3)
+        const headers: EmailHeader[] = []
+        for (const raw of flat) {
+          if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue
+          const r = raw as Record<string, unknown>
+          const entryId = typeof r.entryId === 'string' ? r.entryId : ''
+          if (!entryId) continue
+          headers.push({
+            entryId,
+            subject: typeof r.subject === 'string' ? r.subject : '',
+            senderName: typeof r.senderName === 'string' ? r.senderName : '',
+            senderEmail: typeof r.senderEmail === 'string' ? r.senderEmail : '',
+            receivedTime: typeof r.receivedTime === 'string' ? r.receivedTime : null,
+            hasListUnsubscribe: r.hasListUnsubscribe === true
+          })
+        }
         const skipped = typeof res.skipped === 'number' ? res.skipped : 0
         set({
           headers,
@@ -399,7 +419,19 @@ export const useCleanup = create<State>((set, get) => {
           draftSelection: {},
           status: `Scanned ${fmtCount(headers.length)} message(s).`
         })
-        rebuildPlan()
+        try {
+          rebuildPlan()
+        } catch (err) {
+          // Never leave a silent blank tab: surface the failure loudly.
+          set({
+            plan: [],
+            error:
+              'Scan succeeded but building the filing plan failed: ' +
+              (err instanceof Error ? err.message : String(err)),
+            status: 'Plan build failed.'
+          })
+          return
+        }
         const plan = get().plan
         const unknown = plan.filter((s) => !s.isKnown).length
         const skipNote = skipped > 0 ? ` (${fmtCount(skipped)} non-mail item(s) skipped)` : ''

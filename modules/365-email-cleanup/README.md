@@ -22,21 +22,34 @@ windows were deliberately omitted).
   building) is ported to TypeScript in `store.ts` (from `RulesEngine`,
   `RouteStore`, `RouteEngine`). Headers in → plan out; it moves nothing.
 
-## Outlook COM iteration (why the scan reads every message)
+## The "Scanned 1 message(s)" / blank-tab bug (root cause, fixed)
 
-The inbox scan iterates `Inbox.Items` with the collection **enumerator**
-(`foreach ($it in $items)`), not by numeric index (`$items.Item($i)`).
-Index-based iteration over an Outlook `Items` collection — especially after a
-`Sort()` and while releasing each item — is a well-known source of *silently
-skipped items* (a scan that reports only a handful of messages from a full
-inbox). The enumerator (IEnumVARIANT) is stable. The scan also **counts and
-reports non-mail / unreadable items** (`skipped`) instead of dropping them
-silently, and accessing each item's `.Class` is guarded so one bad item can't
-knock the rest out. Folder listing (`ListSubfolders`) is **recursive** — nested
-inbox subfolders are returned as `Parent\Child` paths — and `EnsureFolder`
+Two layered defects, both fixed:
+
+1. **JSON shape (the actual cause).** The scan's result was emitted as
+   `headers = ,@($list)`. PowerShell's **unary comma wraps the array in another
+   array**, so the JSON was `"headers": [[…156 items…]]`. The renderer counted
+   ONE header (the inner array), reported "Scanned 1 message(s)", then threw
+   while reading sender fields off an array — leaving the Cleanup tab
+   permanently on its empty state with no error. The same comma bug was in the
+   `cleanup` (`records`) and `undo` (`retry`) results, which silently broke
+   undo bookkeeping. All are now plain `@($list)`. (`return ,@($arr)` inside a
+   *function* is a different, correct idiom — the pipeline unrolls one level on
+   function return — which is why folder lists worked while scan didn't.)
+2. **Defence in depth.** The renderer now flattens + field-coerces every header
+   before the plan build (malformed transport data can never throw), and a plan
+   build failure surfaces as a visible error instead of a silent blank tab.
+   The scan also reports `skipped` (non-mail/unreadable items) instead of
+   dropping them silently.
+
+The scan walks the sorted `Inbox.Items` with **`GetFirst()`/`GetNext()`** —
+Outlook's documented stable iteration — releasing each COM item only after the
+next is fetched (releasing mid-enumeration, or numeric indexing after `Sort()`,
+is what drops items). Folder listing (`ListSubfolders`) is **recursive** —
+nested inbox subfolders come back as `Parent\Child` paths — and `EnsureFolder`
 resolves/creates those nested paths, so filing to nested folders works. The
-Cleanup tab has a **Sync folders** button (the original's "Sync Folder Structure
-From Outlook") to re-read the tree on demand.
+Cleanup tab has a **Sync folders** button (the original's "Sync Folder
+Structure From Outlook") to re-read the tree on demand.
 
 ## Features (ported from the original)
 
