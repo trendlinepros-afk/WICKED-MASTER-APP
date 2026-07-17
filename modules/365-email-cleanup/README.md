@@ -22,6 +22,22 @@ windows were deliberately omitted).
   building) is ported to TypeScript in `store.ts` (from `RulesEngine`,
   `RouteStore`, `RouteEngine`). Headers in → plan out; it moves nothing.
 
+## Outlook COM iteration (why the scan reads every message)
+
+The inbox scan iterates `Inbox.Items` with the collection **enumerator**
+(`foreach ($it in $items)`), not by numeric index (`$items.Item($i)`).
+Index-based iteration over an Outlook `Items` collection — especially after a
+`Sort()` and while releasing each item — is a well-known source of *silently
+skipped items* (a scan that reports only a handful of messages from a full
+inbox). The enumerator (IEnumVARIANT) is stable. The scan also **counts and
+reports non-mail / unreadable items** (`skipped`) instead of dropping them
+silently, and accessing each item's `.Class` is guarded so one bad item can't
+knock the rest out. Folder listing (`ListSubfolders`) is **recursive** — nested
+inbox subfolders are returned as `Parent\Child` paths — and `EnsureFolder`
+resolves/creates those nested paths, so filing to nested folders works. The
+Cleanup tab has a **Sync folders** button (the original's "Sync Folder Structure
+From Outlook") to re-read the tree on demand.
+
 ## Features (ported from the original)
 
 - **Scan inbox** (most recent 500) → group by sender, classify against saved rules,

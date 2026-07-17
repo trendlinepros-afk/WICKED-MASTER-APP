@@ -155,32 +155,57 @@ function HasUnsub($item) {
     if (-not $h) { return $false }
     return ($h -match 'List-Unsubscribe') -or ($h -match 'Precedence:\s*bulk')
 }
+# Recursively collect inbox subfolders as backslash-joined relative paths
+# ("Clients", "Clients\Acme") so nested folders show up too — the original
+# only ever filed under the inbox, so top-level names are unchanged.
+function WalkFolders($folder, $prefix, $depth, $names) {
+    if ($depth -gt 6) { return }
+    $subs = $folder.Folders
+    $c = 0
+    try { $c = [int]$subs.Count } catch { $c = 0 }
+    for ($i = 1; $i -le $c; $i++) {
+        $f = $null
+        try {
+            $f = $subs.Item($i)
+            $nm = [string]$f.Name
+            $p = if ($prefix) { $prefix + '\' + $nm } else { $nm }
+            [void]$names.Add($p)
+            WalkFolders $f $p ($depth + 1) $names
+        } catch { } finally { Release $f }
+    }
+    Release $subs
+}
 function ListSubfolders($ns) {
     $inbox = $ns.GetDefaultFolder($olFolderInbox)
-    $fs = $inbox.Folders
     $names = New-Object System.Collections.ArrayList
-    $c = [int]$fs.Count
-    for ($i = 1; $i -le $c; $i++) {
-        $f = $fs.Item($i)
-        try { [void]$names.Add([string]$f.Name) } catch { } finally { Release $f }
-    }
-    Release $fs; Release $inbox
+    WalkFolders $inbox '' 0 $names
+    Release $inbox
     $arr = @($names) | Sort-Object
     return ,@($arr)
 }
+# Resolve (creating as needed) a folder given a backslash path relative to the
+# inbox, e.g. "Clients" or "Clients\Acme". A bare name resolves under the inbox,
+# exactly as before.
 function EnsureFolder($ns, $name) {
     $inbox = $ns.GetDefaultFolder($olFolderInbox)
-    $fs = $inbox.Folders
-    $c = [int]$fs.Count
-    $target = $null
-    for ($i = 1; $i -le $c; $i++) {
-        $f = $fs.Item($i)
-        if (([string]$f.Name) -ieq $name) { $target = $f; break }
-        Release $f
+    $parts = @(([string]$name).Split([char]0x5C) | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+    if ($parts.Count -eq 0) { return $inbox }
+    $current = $inbox
+    foreach ($part in $parts) {
+        $fs = $current.Folders
+        $c = 0
+        try { $c = [int]$fs.Count } catch { $c = 0 }
+        $found = $null
+        for ($i = 1; $i -le $c; $i++) {
+            $f = $fs.Item($i)
+            if (([string]$f.Name) -ieq $part) { $found = $f; break }
+            Release $f
+        }
+        if ($null -eq $found) { $found = $fs.Add($part) }
+        Release $fs
+        $current = $found
     }
-    if ($null -eq $target) { $target = $fs.Add($name) }
-    Release $fs; Release $inbox
-    return $target
+    return $current
 }
 function FindByMsgId($ns, $folderEntry, $folderStore, $msgId) {
     if (-not $folderEntry -or -not $msgId) { return $null }
@@ -235,30 +260,42 @@ try { $max = [int]$payload.max } catch { $max = 0 }
 $inbox = $ns.GetDefaultFolder($olFolderInbox)
 $items = $inbox.Items
 try { $items.Sort('[ReceivedTime]', $true) } catch { }
-$count = [int]$items.Count
+$total = 0
+try { $total = [int]$items.Count } catch { $total = 0 }
 $list = New-Object System.Collections.ArrayList
-Progress('Reading inbox (' + $count + ' items)...')
-for ($i = 1; $i -le $count; $i++) {
-    $it = $null
+$skipped = 0
+$seen = 0
+Progress('Reading inbox (' + $total + ' items)...')
+# Iterate with the collection ENUMERATOR (foreach), not by numeric index:
+# index-based iteration over Outlook.Items after a Sort — releasing each item
+# as you go — is a well-known source of silently skipped items. foreach uses
+# IEnumVARIANT and is stable.
+foreach ($it in $items) {
+    $seen++
     try {
-        $it = $items.Item($i)
-        if ([int]$it.Class -ne $olMail) { continue }
-        $rt = $null
-        try { $rt = $it.ReceivedTime.ToUniversalTime().ToString('o') } catch { $rt = $null }
-        [void]$list.Add([pscustomobject]@{
-            entryId = SafeStr { $it.EntryID }
-            subject = SafeStr { $it.Subject }
-            senderName = SafeStr { $it.SenderName }
-            senderEmail = (ResolveSmtp $it)
-            receivedTime = $rt
-            hasListUnsubscribe = (HasUnsub $it)
-        })
-        if ($max -gt 0 -and $list.Count -ge $max) { break }
-    } catch { } finally { Release $it }
-    if ($i % 50 -eq 0) { Progress('Scanned ' + $i + ' of ' + $count + '...') }
+        $cls = 0
+        try { $cls = [int]$it.Class } catch { $cls = 0 }
+        # olMail = 43. Guarded so an item whose .Class throws is counted, not
+        # silently dropped.
+        if ($cls -ne $olMail) { $skipped++ }
+        else {
+            $rt = $null
+            try { $rt = $it.ReceivedTime.ToUniversalTime().ToString('o') } catch { $rt = $null }
+            [void]$list.Add([pscustomobject]@{
+                entryId = SafeStr { $it.EntryID }
+                subject = SafeStr { $it.Subject }
+                senderName = SafeStr { $it.SenderName }
+                senderEmail = (ResolveSmtp $it)
+                receivedTime = $rt
+                hasListUnsubscribe = (HasUnsub $it)
+            })
+        }
+    } catch { $skipped++ } finally { Release $it }
+    if ($max -gt 0 -and $list.Count -ge $max) { break }
+    if ($seen % 50 -eq 0) { Progress('Scanned ' + $seen + ' of ' + $total + '...') }
 }
 Release $items; Release $inbox
-Emit(@{ ok = $true; headers = ,@($list); scanned = $list.Count; inboxCount = $count })
+Emit(@{ ok = $true; headers = ,@($list); scanned = $list.Count; skipped = $skipped; inboxCount = $total })
 `,
 
   'get-body': String.raw`

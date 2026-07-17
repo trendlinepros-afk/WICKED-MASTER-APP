@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   AlertTriangle,
   FolderPlus,
+  FolderSync,
   Loader2,
   MailCheck,
   Plug,
@@ -135,16 +136,16 @@ function CleanupTab(): React.JSX.Element {
         </div>
       </div>
 
-      {/* new folder */}
-      <div className="flex items-center gap-2">
+      {/* new folder + folder sync */}
+      <div className="flex flex-wrap items-center gap-2">
         <input
           value={s.newFolderName}
           onChange={(e) => s.setNewFolderName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') void s.createFolder()
           }}
-          placeholder="New folder name…"
-          className="w-56 rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent"
+          placeholder="New folder name (use \ for nested)…"
+          className="w-64 rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent"
         />
         <button
           onClick={() => void s.createFolder()}
@@ -153,6 +154,15 @@ function CleanupTab(): React.JSX.Element {
         >
           <FolderPlus size={14} /> Create folder
         </button>
+        <button
+          onClick={() => void s.syncFolders()}
+          disabled={s.busy}
+          className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-1.5 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+          title="Re-read the inbox folder tree from Outlook"
+        >
+          <FolderSync size={14} /> Sync folders
+        </button>
+        <span className="text-xs text-muted">{fmtCount(s.folders.length)} folder(s)</span>
       </div>
 
       {/* lists */}

@@ -279,6 +279,7 @@ interface State {
 
   connect: () => Promise<void>
   scan: () => Promise<void>
+  syncFolders: () => Promise<void>
   createFolder: () => Promise<void>
   setNewFolderName: (v: string) => void
 
@@ -389,6 +390,7 @@ export const useCleanup = create<State>((set, get) => {
           return
         }
         const headers = (Array.isArray(res.headers) ? res.headers : []) as EmailHeader[]
+        const skipped = typeof res.skipped === 'number' ? res.skipped : 0
         set({
           headers,
           assignments: {},
@@ -400,13 +402,36 @@ export const useCleanup = create<State>((set, get) => {
         rebuildPlan()
         const plan = get().plan
         const unknown = plan.filter((s) => !s.isKnown).length
-        set({ status: `Scanned ${fmtCount(headers.length)} message(s). ${fmtCount(unknown)} new sender(s) to sort.` })
+        const skipNote = skipped > 0 ? ` (${fmtCount(skipped)} non-mail item(s) skipped)` : ''
+        const emptyNote =
+          headers.length === 0
+            ? ' Nothing matched — if your inbox has messages, they may be non-mail items or classic Outlook returned an empty set.'
+            : ''
+        set({
+          status: `Scanned ${fmtCount(headers.length)} message(s)${skipNote}. ${fmtCount(unknown)} new sender(s) to sort.${emptyNote}`
+        })
       } finally {
         set({ busy: false })
       }
     },
 
     setNewFolderName: (v) => set({ newFolderName: v }),
+
+    syncFolders: async () => {
+      if (get().busy || get().conn !== 'connected') return
+      set({ busy: true, status: 'Syncing folder list from Outlook…', error: '' })
+      try {
+        const res = await invoke('list-folders')
+        if (res.ok !== true) {
+          set({ error: res.error ?? 'Could not sync folders.', status: 'Folder sync failed.' })
+          return
+        }
+        const folders = Array.isArray(res.folders) ? (res.folders as string[]) : []
+        set({ folders, status: `Synced ${fmtCount(folders.length)} folder(s) from Outlook.` })
+      } finally {
+        set({ busy: false })
+      }
+    },
 
     createFolder: async () => {
       const name = get().newFolderName.trim()
