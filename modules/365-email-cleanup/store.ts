@@ -224,6 +224,15 @@ export interface HistoryBatch {
   items: HistoryItem[]
 }
 
+/** A standalone Inbox Cleanup rules file found on disk, with what it holds. */
+export interface LegacyRulesCandidate {
+  file: string
+  emails: number
+  domains: number
+  subjects: number
+  total: number
+}
+
 interface Ok {
   ok: true
   [k: string]: unknown
@@ -307,6 +316,14 @@ interface State {
   removeRoute: (entry: string, kind: 'email' | 'domain') => Promise<void>
   addSubjectRule: () => Promise<void>
   removeSubjectRule: (pattern: string) => Promise<void>
+
+  // import rules from the standalone Inbox Cleanup app
+  legacyRules: LegacyRulesCandidate | null
+  legacyChecked: boolean
+  legacyImported: string | null
+  scanLegacyRules: () => Promise<void>
+  pickLegacyRules: () => Promise<void>
+  importLegacyRules: () => Promise<void>
 
   cancel: () => Promise<void>
   setHasAiKey: (v: boolean) => void
@@ -758,6 +775,56 @@ export const useCleanup = create<State>((set, get) => {
       const res = await invoke<Ok & { routes: Routes }>('routes-save', routes)
       set({ routes: res.routes ?? routes })
       rebuildPlan()
+    },
+
+    /* -------- import rules from the standalone Inbox Cleanup app -------- */
+
+    legacyRules: null,
+    legacyChecked: false,
+    legacyImported: null,
+
+    scanLegacyRules: async () => {
+      if (get().legacyChecked) return
+      set({ legacyChecked: true })
+      const res = await invoke('import-rules-scan')
+      if (res.ok !== true) return
+      const candidates = Array.isArray(res.candidates)
+        ? (res.candidates as LegacyRulesCandidate[])
+        : []
+      if (candidates.length > 0) set({ legacyRules: candidates[0] })
+    },
+
+    pickLegacyRules: async () => {
+      const res = await invoke('import-rules-pick')
+      if (res.ok !== true) {
+        if (!res.cancelled) set({ error: res.error ?? 'That file could not be read.' })
+        return
+      }
+      set({ legacyRules: (res.candidate as LegacyRulesCandidate) ?? null, legacyImported: null })
+    },
+
+    importLegacyRules: async () => {
+      const cand = get().legacyRules
+      if (!cand || get().busy) return
+      set({ busy: true, status: 'Importing rules from the standalone app…', error: '' })
+      try {
+        const res = await invoke('import-rules', { file: cand.file })
+        if (res.ok !== true) {
+          set({ error: res.error ?? 'Rules import failed.', status: 'Rules import failed.' })
+          return
+        }
+        const added = Number(res.added) || 0
+        const skipped = Number(res.skippedExisting) || 0
+        const routes = (res.routes as Routes) ?? get().routes
+        const summary =
+          `Imported ${fmtCount(added)} rule(s)` +
+          (skipped > 0 ? ` (${fmtCount(skipped)} already existed)` : '') +
+          ' from the standalone app.'
+        set({ routes, legacyImported: summary, status: summary })
+        rebuildPlan()
+      } finally {
+        set({ busy: false })
+      }
     },
 
     cancel: async () => {

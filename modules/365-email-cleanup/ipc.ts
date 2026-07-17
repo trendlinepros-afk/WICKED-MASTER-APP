@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync } from 'fs'
-import { join } from 'path'
+import { existsSync, readFileSync, statSync } from 'fs'
+import { homedir } from 'os'
+import { join, resolve } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 
@@ -106,6 +107,211 @@ function normalizeRecord(raw: unknown): MoveRecord | null {
     subject: str(r.subject),
     targetFolderName: str(r.targetFolderName)
   }
+}
+
+/* ---------------- legacy rules import (standalone Inbox Cleanup) --------- */
+
+/**
+ * The old standalone "Inbox Cleanup" app kept its learned rules in
+ * %LOCALAPPDATA%\InboxCleanup (a JSON file named `routes`, plus backups).
+ * Those rules never transferred to this module, which stores routes in the
+ * shell's shared store. This block finds and parses the old files so the user
+ * can import them with one click — no manual file copying, since the module's
+ * format/location differs from the old app's.
+ *
+ * The parser is deliberately SCHEMA-TOLERANT: the exact C# serialization shape
+ * isn't guaranteed, so it accepts container keys in any casing
+ * (Emails/emails, Domains, Subjects…), rule lists as maps or as
+ * {entry,target}-style object arrays, a {routes:{…}} wrapper, or a bare
+ * entry→folder map (classified by whether the key looks like an address or
+ * domain). Unrecognized content imports zero rules rather than erroring.
+ */
+
+const LEGACY_RULE_FILENAMES = [
+  'routes',
+  'routes.json',
+  'routes.recovered-full',
+  'routes.json.bak',
+  'routes.json.shrunk-backup'
+]
+const LEGACY_MAX_FILE_BYTES = 4 * 1024 * 1024
+
+interface LegacyRules {
+  emails: Record<string, string>
+  domains: Record<string, string>
+  subjects: Record<string, string>
+  total: number
+}
+
+function legacyRulesDirs(): string[] {
+  const dirs: string[] = []
+  if (process.env.LOCALAPPDATA) dirs.push(join(process.env.LOCALAPPDATA, 'InboxCleanup'))
+  dirs.push(join(homedir(), 'AppData', 'Local', 'InboxCleanup'))
+  if (process.env.APPDATA) dirs.push(join(process.env.APPDATA, 'InboxCleanup'))
+  return [...new Set(dirs.map((d) => resolve(d)))]
+}
+
+/** "" / "inbox" / "keep in inbox" variants all mean keep-in-inbox (our ""). */
+function normLegacyTarget(v: unknown): string | null {
+  if (v === null) return ''
+  if (typeof v !== 'string') return null
+  const t = v.trim()
+  const low = t.toLowerCase()
+  if (!t || low === 'inbox' || low === '(inbox)' || low === 'keep in inbox' || low === '(keep in inbox)')
+    return ''
+  return t
+}
+
+/** Extract [entry, target] pairs from a rules container (map or object list). */
+function legacyPairs(v: unknown): [string, string][] {
+  const out: [string, string][] = []
+  if (Array.isArray(v)) {
+    const ENTRY_KEYS = ['entry', 'key', 'email', 'address', 'sender', 'domain', 'pattern', 'subject', 'match', 'from']
+    const TARGET_KEYS = ['target', 'folder', 'foldername', 'destination', 'dest', 'value', 'to']
+    for (const item of v) {
+      if (typeof item !== 'object' || item === null) continue
+      const r = item as Record<string, unknown>
+      const keys = Object.keys(r)
+      const ek = keys.find((k) => ENTRY_KEYS.includes(k.toLowerCase()))
+      const tk = keys.find((k) => TARGET_KEYS.includes(k.toLowerCase()))
+      const entry = ek ? r[ek] : undefined
+      const target = tk === undefined ? null : normLegacyTarget(r[tk])
+      if (typeof entry === 'string' && entry.trim() && target !== null) out.push([entry, target])
+    }
+  } else if (typeof v === 'object' && v !== null) {
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const target = normLegacyTarget(val)
+      if (k.trim() && target !== null) out.push([k, target])
+    }
+  }
+  return out
+}
+
+/** File an address-or-domain entry into the right bucket (mirrors addRoute). */
+function legacyAddSender(out: LegacyRules, rawEntry: string, target: string): void {
+  let e = rawEntry.trim().toLowerCase()
+  let domainOnly = false
+  if (e.startsWith('*@')) {
+    e = e.slice(2)
+    domainOnly = true
+  } else if (e.startsWith('@')) {
+    e = e.slice(1)
+    domainOnly = true
+  } else if (!e.includes('@')) {
+    domainOnly = true
+  }
+  if (!e) return
+  if (domainOnly) out.domains[e] = target
+  else out.emails[e] = target
+}
+
+function parseLegacyRules(text: string): LegacyRules | null {
+  let doc: unknown
+  try {
+    // strip a UTF-8 BOM (C#'s File.WriteAllText writes one)
+    doc = JSON.parse(text.replace(/^\uFEFF/, ''))
+  } catch {
+    return null
+  }
+  const out: LegacyRules = { emails: {}, domains: {}, subjects: {}, total: 0 }
+
+  const findKey = (obj: Record<string, unknown>, names: string[]): unknown => {
+    const hit = Object.keys(obj).find((k) => names.includes(k.toLowerCase()))
+    return hit === undefined ? undefined : obj[hit]
+  }
+
+  const ingest = (node: unknown, depth: number): void => {
+    if (depth > 3 || typeof node !== 'object' || node === null) return
+    if (Array.isArray(node)) {
+      for (const [entry, target] of legacyPairs(node)) legacyAddSender(out, entry, target)
+      return
+    }
+    const obj = node as Record<string, unknown>
+    const emailsNode = findKey(obj, ['emails', 'email', 'emailroutes', 'senders', 'senderroutes', 'addresses'])
+    const domainsNode = findKey(obj, ['domains', 'domain', 'domainroutes'])
+    const subjectsNode = findKey(obj, ['subjects', 'subject', 'subjectrules', 'subjectroutes', 'subjectpatterns'])
+    if (emailsNode !== undefined || domainsNode !== undefined || subjectsNode !== undefined) {
+      for (const [k, t] of legacyPairs(emailsNode)) {
+        const e = k.trim().toLowerCase()
+        if (e) out.emails[e] = t
+      }
+      for (const [k, t] of legacyPairs(domainsNode)) {
+        let d = k.trim().toLowerCase()
+        if (d.startsWith('*@')) d = d.slice(2)
+        if (d.startsWith('@')) d = d.slice(1)
+        if (d) out.domains[d] = t
+      }
+      for (const [k, t] of legacyPairs(subjectsNode)) {
+        const s = k.trim()
+        if (s.length >= 3) out.subjects[s] = t
+      }
+      return
+    }
+    const wrapper = findKey(obj, ['routes', 'rules', 'data'])
+    if (wrapper !== undefined) {
+      ingest(wrapper, depth + 1)
+      return
+    }
+    // Bare entry→folder map: address/domain-looking keys are sender rules,
+    // anything else a subject pattern. Only trusted when at least one key
+    // actually looks like an address/domain — otherwise this is some other
+    // app's JSON (settings, license log), not rules, and we import nothing.
+    const pairs = legacyPairs(obj)
+    const senderish = (k: string): boolean => k.includes('@') || /^[\w-]+(\.[\w-]+)+$/.test(k)
+    if (!pairs.some(([k]) => senderish(k.trim()))) return
+    for (const [k, t] of pairs) {
+      const key = k.trim()
+      if (!key) continue
+      if (senderish(key)) legacyAddSender(out, key, t)
+      else if (key.length >= 3) out.subjects[key] = t
+    }
+  }
+
+  ingest(doc, 0)
+  out.total =
+    Object.keys(out.emails).length + Object.keys(out.domains).length + Object.keys(out.subjects).length
+  return out.total > 0 ? out : null
+}
+
+interface LegacyCandidate {
+  file: string
+  emails: number
+  domains: number
+  subjects: number
+  total: number
+}
+
+function readLegacyFile(file: string): LegacyRules | null {
+  try {
+    if (!existsSync(file) || !statSync(file).isFile()) return null
+    if (statSync(file).size > LEGACY_MAX_FILE_BYTES) return null
+    return parseLegacyRules(readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function scanLegacyRules(extraFile?: string): LegacyCandidate[] {
+  const seen = new Set<string>()
+  const candidates: LegacyCandidate[] = []
+  const consider = (file: string): void => {
+    const key = resolve(file).toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    const parsed = readLegacyFile(file)
+    if (parsed)
+      candidates.push({
+        file,
+        emails: Object.keys(parsed.emails).length,
+        domains: Object.keys(parsed.domains).length,
+        subjects: Object.keys(parsed.subjects).length,
+        total: parsed.total
+      })
+  }
+  if (extraFile) consider(extraFile)
+  // `routes` (the live file) is checked before the backups in each dir.
+  for (const dir of legacyRulesDirs()) for (const name of LEGACY_RULE_FILENAMES) consider(join(dir, name))
+  return candidates
 }
 
 /* --------------------------- PowerShell / Outlook ------------------------ */
@@ -533,6 +739,88 @@ export default function register(ctx: ModuleIpcContext): void {
     const routes = normalizeRoutes(raw)
     ctx.storeSet(ROUTES_KEY, routes)
     return { ok: true, routes }
+  })
+
+  /* ---- import rules from the standalone Inbox Cleanup app ---- */
+
+  // Read-only: find the old app's rules files (%LOCALAPPDATA%\InboxCleanup)
+  // and report what each contains. Live `routes` file first, then backups.
+  ctx.ipcMain.handle(`${ID}:import-rules-scan`, () => {
+    return { ok: true, candidates: scanLegacyRules() }
+  })
+
+  // Let the user point at a rules file anywhere (e.g. a copied backup folder).
+  ctx.ipcMain.handle(`${ID}:import-rules-pick`, async () => {
+    const win = ctx.getMainWindow()
+    const opts = {
+      title: 'Choose the standalone Inbox Cleanup rules file (routes / routes.json)',
+      properties: ['openFile' as const],
+      // "All files" FIRST: the old app's live rules file is named just
+      // `routes` with no extension — a JSON-only default filter would hide it.
+      filters: [
+        { name: 'All files', extensions: ['*'] },
+        { name: 'JSON', extensions: ['json', 'bak'] }
+      ]
+    }
+    const res = win ? await ctx.dialog.showOpenDialog(win, opts) : await ctx.dialog.showOpenDialog(opts)
+    if (res.canceled || res.filePaths.length === 0) return { ok: false, cancelled: true }
+    const candidates = scanLegacyRules(res.filePaths[0])
+    const picked = candidates.find((c) => resolve(c.file) === resolve(res.filePaths[0]))
+    if (!picked)
+      return {
+        ok: false,
+        error:
+          'No rules were recognized in that file. Pick the "routes" (or routes.json / routes.recovered-full) file from the old Inbox Cleanup app.'
+      }
+    return { ok: true, candidate: picked }
+  })
+
+  // Merge the old rules into the module's routes. ADDITIVE: rules you already
+  // have in the new app are kept; only missing entries are added.
+  ctx.ipcMain.handle(`${ID}:import-rules`, (_e, raw: unknown) => {
+    const req = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    let file = typeof req.file === 'string' && req.file.trim() ? req.file.trim() : ''
+    if (!file) {
+      const found = scanLegacyRules()
+      if (found.length === 0)
+        return {
+          ok: false,
+          error:
+            'No standalone Inbox Cleanup rules were found (looked in %LOCALAPPDATA%\\InboxCleanup). Use "Choose file…" to pick the routes file manually.'
+        }
+      file = found[0].file
+    }
+    const parsed = readLegacyFile(file)
+    if (!parsed) return { ok: false, error: 'No rules were recognized in that file.' }
+
+    const routes = normalizeRoutes(ctx.storeGet<unknown>(ROUTES_KEY, {}))
+    let added = 0
+    let skippedExisting = 0
+    const merge = (from: Record<string, string>, into: Record<string, string>): void => {
+      for (const [k, v] of Object.entries(from)) {
+        if (k in into) skippedExisting++
+        else {
+          into[k] = v
+          added++
+        }
+      }
+    }
+    merge(parsed.emails, routes.emails)
+    merge(parsed.domains, routes.domains)
+    merge(parsed.subjects, routes.subjects)
+    ctx.storeSet(ROUTES_KEY, routes)
+    return {
+      ok: true,
+      file,
+      added,
+      skippedExisting,
+      counts: {
+        emails: Object.keys(parsed.emails).length,
+        domains: Object.keys(parsed.domains).length,
+        subjects: Object.keys(parsed.subjects).length
+      },
+      routes
+    }
   })
 
   /* ---- Outlook operations ---- */

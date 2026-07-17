@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import {
   AlertTriangle,
+  Download,
   FolderPlus,
   FolderSync,
   Loader2,
@@ -368,10 +369,66 @@ function RulesTab(): React.JSX.Element {
   const domainEntries = Object.entries(s.routes.domains)
   const subjectEntries = Object.entries(s.routes.subjects)
 
+  // Look for the standalone Inbox Cleanup app's rules files once.
+  useEffect(() => {
+    void s.scanLegacyRules()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const targetName = (t: string): string => (t === INBOX ? 'Keep in Inbox' : t)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+      {/* import from the standalone app */}
+      <section className="rounded-lg border border-warn/40 bg-warn/5 p-3">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Download size={15} className="text-warn" />
+          Import rules from the standalone Inbox Cleanup app
+        </div>
+        {s.legacyRules ? (
+          <>
+            <p className="mt-1 text-sm">
+              Found your old rules: <strong>{fmtCount(s.legacyRules.emails)}</strong> sender,{' '}
+              <strong>{fmtCount(s.legacyRules.domains)}</strong> domain and{' '}
+              <strong>{fmtCount(s.legacyRules.subjects)}</strong> subject rule(s).
+            </p>
+            <p className="mt-0.5 break-all text-xs text-muted">{s.legacyRules.file}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => void s.importLegacyRules()}
+                disabled={s.busy || s.legacyImported !== null}
+                className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+              >
+                {s.legacyImported ? 'Imported ✓' : 'Import these rules'}
+              </button>
+              <button
+                onClick={() => void s.pickLegacyRules()}
+                disabled={s.busy}
+                className="rounded-lg border border-edge px-3 py-1.5 text-sm text-muted hover:bg-raised hover:text-ink disabled:opacity-40"
+              >
+                Choose a different file…
+              </button>
+              {s.legacyImported && <span className="text-xs text-ok">{s.legacyImported}</span>}
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              Importing <strong>adds</strong> to the rules below — anything you&apos;ve already set
+              up here is kept, and re-importing skips duplicates.
+            </p>
+          </>
+        ) : (
+          <p className="mt-1 text-sm text-muted">
+            No old rules were found automatically (looked in{' '}
+            <code className="text-xs">%LOCALAPPDATA%\InboxCleanup</code>). If you have the old{' '}
+            <code className="text-xs">routes</code> file somewhere else,{' '}
+            <button
+              onClick={() => void s.pickLegacyRules()}
+              className="font-medium text-accent hover:underline"
+            >
+              choose the file…
+            </button>
+          </p>
+        )}
+      </section>
       {/* sender rule editor */}
       <section className="rounded-lg border border-edge p-3">
         <div className="text-sm font-semibold">Sender / domain rules</div>

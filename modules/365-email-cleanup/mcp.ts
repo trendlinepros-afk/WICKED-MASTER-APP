@@ -152,6 +152,34 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       }
     },
     {
+      name: `${ID}__scan-legacy-rules`,
+      description:
+        'Look for the OLD standalone Inbox Cleanup app\'s saved rules files (%LOCALAPPDATA%\\InboxCleanup: routes / routes.json / backups) and report each file\'s path and how many sender, domain and subject rules it contains. Read-only — changes nothing. Use before import-legacy-rules.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:import-rules-scan`)
+    },
+    {
+      name: `${ID}__import-legacy-rules`,
+      description:
+        'Import the routing rules from an OLD standalone Inbox Cleanup rules file into this module. Additive: existing rules are kept and duplicates are skipped, but it does change the saved rule configuration, so it requires confirmation. Omit `file` to use the best auto-detected file (from scan-legacy-rules).',
+      destructive: true,
+      inputSchema: {
+        file: z
+          .string()
+          .optional()
+          .describe('Absolute path of the old rules file (from scan-legacy-rules). Omit for auto-detect.'),
+        confirm: z.boolean().optional().describe('Set true to actually import (see confirmation).')
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(
+          args.confirm as boolean | undefined,
+          `Import routing rules from ${args.file ? `"${String(args.file)}"` : 'the auto-detected standalone Inbox Cleanup rules file'} into 365 Email Cleanup. Existing rules are kept; duplicates are skipped.`
+        )
+        if (gate) return gate
+        return ctx.invoke(`${ID}:import-rules`, { file: args.file })
+      }
+    },
+    {
       name: `${ID}__cancel`,
       description: 'Cancel the Outlook operation and/or the in-flight AI draft request currently running, if any. Read-only.',
       inputSchema: {},
