@@ -18,6 +18,21 @@ export interface ModuleManifest {
   }
 }
 
+/** Whole-app Backup & Restore preferences (Settings → Backup & Restore). */
+export interface BackupSettings {
+  /** folder backups are written to; '' = the app default (Documents/WICKED-Backups) */
+  destination: string
+  schedule: {
+    enabled: boolean
+    /** hours between automatic backups (24 = daily, 168 = weekly) */
+    intervalHours: number
+  }
+  /** how many backups to keep in the destination (older ones are pruned) */
+  keep: number
+  /** ISO time of the last successful backup (for the scheduler) */
+  lastBackupUtc: string
+}
+
 export interface ShellSettings {
   theme: 'light' | 'dark' | 'system'
   /** module ids the user has hidden from the nav */
@@ -35,6 +50,8 @@ export interface ShellSettings {
   moduleOrder: string[]
   /** per-module display overrides set by the user (pencil-edit on home cards) */
   moduleOverrides: Record<string, { name?: string; description?: string }>
+  /** whole-app backup preferences */
+  backup: BackupSettings
 }
 
 export const DEFAULT_SETTINGS: ShellSettings = {
@@ -44,7 +61,32 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   mcpEnabled: false,
   navExpanded: true,
   moduleOrder: [],
-  moduleOverrides: {}
+  moduleOverrides: {},
+  backup: {
+    destination: '',
+    schedule: { enabled: false, intervalHours: 24 },
+    keep: 10,
+    lastBackupUtc: ''
+  }
+}
+
+/** One backup file in the destination folder. */
+export interface BackupInfo {
+  file: string
+  name: string
+  size: number
+  modifiedUtc: string
+}
+
+export interface BackupResult {
+  ok: boolean
+  canceled?: boolean
+  error?: string
+  file?: string
+  size?: number
+  fileCount?: number
+  /** true when a restore was staged and the app is about to relaunch */
+  staged?: boolean
 }
 
 /**
@@ -95,7 +137,15 @@ export const SHELL_IPC = {
   /** (sourcePath?: string) => RecoveryScan — scan a user-picked folder */
   recoveryPick: 'shell:recovery-pick',
   /** (sourcePath: string) => RecoveryResult — restore old data, then relaunch */
-  recoveryRestore: 'shell:recovery-restore'
+  recoveryRestore: 'shell:recovery-restore',
+  /** () => { destination, isDefaultDestination, backups } — backup config + list */
+  backupConfig: 'shell:backup-config',
+  /** () => BackupResult — create a backup now in the configured destination */
+  backupNow: 'shell:backup-now',
+  /** () => { ok, destination?, backups? } — pick the backup destination folder */
+  backupPickDestination: 'shell:backup-pick-destination',
+  /** (file?: string) => BackupResult — restore from a backup, then relaunch */
+  backupRestore: 'shell:backup-restore'
 } as const
 
 /** A folder that may hold user data from a previous WICKED version. */

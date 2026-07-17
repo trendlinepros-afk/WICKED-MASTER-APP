@@ -11,6 +11,7 @@ import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
 import { registerRecoveryIpc } from './recovery'
+import { registerBackupIpc, scheduleBackups } from './backup'
 
 // Chromium's GPU child process cannot launch when Electron runs from a network
 // share (dev happens on the NAS; mapped drives resolve to UNC). Run the GPU
@@ -112,6 +113,7 @@ app.whenReady().then(() => {
   ipcMain.handle(SHELL_IPC.settingsSet, (_e, patch: Partial<ShellSettings>) => {
     const next = setSettings(patch)
     scheduleChecks() // update prefs may have changed
+    if (patch.backup) scheduleBackups() // backup schedule may have changed
     return next
   })
   ipcMain.handle(SHELL_IPC.openExternal, (_e, url: string) => {
@@ -134,6 +136,7 @@ app.whenReady().then(() => {
 
   registerApiKeyIpc(() => mainWindow)
   registerRecoveryIpc(() => mainWindow)
+  registerBackupIpc(() => mainWindow)
 
   // MCP: the channel registry needs the main window for synthetic-event senders
   setMainWindowGetter(() => mainWindow)
@@ -153,6 +156,9 @@ app.whenReady().then(() => {
   if (getSettings().mcpEnabled) setMcpEnabled(true)
 
   initUpdater(() => mainWindow)
+
+  // start the scheduled-backup timer if the user enabled it
+  scheduleBackups()
 
   createWindow()
 

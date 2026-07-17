@@ -6,18 +6,22 @@ import {
   Copy,
   DatabaseBackup,
   FolderOpen,
+  HardDriveDownload,
   KeyRound,
   Loader2,
   Monitor,
   Moon,
   RefreshCw,
   RotateCcw,
+  Save,
   Sun
 } from 'lucide-react'
 import {
   API_PROVIDERS,
   SHELL_IPC,
   type ApiProviderId,
+  type BackupInfo,
+  type BackupResult,
   type McpStatus,
   type ModuleDataPath,
   type RecoveryResult,
@@ -353,6 +357,216 @@ function RecoverySection(): React.JSX.Element {
   )
 }
 
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function fmtWhen(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+}
+
+const SCHEDULE_OPTS: { hours: number; label: string }[] = [
+  { hours: 12, label: 'Every 12 hours' },
+  { hours: 24, label: 'Daily' },
+  { hours: 168, label: 'Weekly' }
+]
+
+/**
+ * Whole-app Backup & Restore: back up every module's data + settings to a single
+ * .zip in a folder you choose (e.g. a network share), on demand or on a
+ * schedule, and restore it (here or on another PC).
+ */
+function BackupSection(): React.JSX.Element {
+  const settings = useSettings((s) => s.settings)
+  const update = useSettings((s) => s.update)
+  const backup = settings.backup
+  const [destination, setDestination] = useState<string>('')
+  const [isDefault, setIsDefault] = useState(true)
+  const [backups, setBackups] = useState<BackupInfo[]>([])
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = async (): Promise<void> => {
+    const res = (await window.wicked.invoke(SHELL_IPC.backupConfig)) as {
+      destination: string
+      isDefaultDestination: boolean
+      backups: BackupInfo[]
+    }
+    setDestination(res.destination)
+    setIsDefault(res.isDefaultDestination)
+    setBackups(res.backups ?? [])
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const backupNow = async (): Promise<void> => {
+    setBusy(true)
+    setMessage(null)
+    setError(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.backupNow)) as BackupResult
+    if (res.ok) setMessage(`Backed up ${res.fileCount ?? 0} files (${fmtBytes(res.size ?? 0)}).`)
+    else setError(res.error ?? 'Backup failed.')
+    await refresh()
+    setBusy(false)
+  }
+
+  const pickDestination = async (): Promise<void> => {
+    setError(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.backupPickDestination)) as {
+      ok?: boolean
+      canceled?: boolean
+      destination?: string
+    }
+    if (res.ok) await refresh()
+  }
+
+  const restore = async (file?: string): Promise<void> => {
+    setError(null)
+    setMessage(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.backupRestore, file ?? null)) as BackupResult
+    // On success the main process relaunches, so we usually don't return here.
+    if (!res.ok && !res.canceled) setError(res.error ?? 'Restore failed.')
+  }
+
+  const setSchedule = (patch: Partial<ShellSettings['backup']['schedule']>): void => {
+    void update({ backup: { ...backup, schedule: { ...backup.schedule, ...patch } } })
+  }
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <DatabaseBackup size={14} />
+        Backup &amp; Restore
+      </h2>
+      <p className="mt-1 max-w-xl text-xs text-muted">
+        Save every module’s data and all settings — email rules, AI Chat, Project Board, bookmarks,
+        the works — into one <code>.zip</code>. Point the destination at a network share, back up on
+        demand or on a schedule, and restore it here or on a new PC.
+      </p>
+
+      <div className="mt-3 max-w-xl space-y-4 rounded-xl border border-edge bg-surface p-4">
+        {/* destination */}
+        <div>
+          <div className="text-sm font-medium">Backup folder</div>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              readOnly
+              value={destination}
+              title={destination}
+              className="min-w-0 flex-1 truncate rounded-lg border border-edge bg-raised px-3 py-2 text-sm text-muted"
+            />
+            <button
+              onClick={() => void pickDestination()}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
+            >
+              <FolderOpen size={14} /> Change…
+            </button>
+          </div>
+          {isDefault && <p className="mt-1 text-xs text-muted">Default location. Choose a folder (e.g. a network drive) to keep backups off this PC.</p>}
+        </div>
+
+        {/* actions */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-3">
+          <button
+            onClick={() => void backupNow()}
+            disabled={busy}
+            className="flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Back up now
+          </button>
+          <button
+            onClick={() => void restore()}
+            disabled={busy}
+            className="flex items-center gap-2 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+          >
+            <HardDriveDownload size={14} /> Restore from file…
+          </button>
+        </div>
+        {message && <p className="text-xs text-ok">{message}</p>}
+        {error && <p className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{error}</p>}
+
+        {/* schedule */}
+        <div className="border-t border-edge pt-3">
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm font-medium">Scheduled backups</span>
+            <input
+              type="checkbox"
+              checked={backup.schedule.enabled}
+              onChange={(e) => setSchedule({ enabled: e.target.checked })}
+              className="h-4 w-4 accent-[rgb(var(--wk-accent))]"
+            />
+          </label>
+          <div className="mt-2 flex items-center justify-between gap-4">
+            <span className={`text-sm ${backup.schedule.enabled ? '' : 'text-muted'}`}>Frequency</span>
+            <select
+              value={backup.schedule.intervalHours}
+              disabled={!backup.schedule.enabled}
+              onChange={(e) => setSchedule({ intervalHours: Number(e.target.value) })}
+              className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              {SCHEDULE_OPTS.map((o) => (
+                <option key={o.hours} value={o.hours}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            Keeps the newest {backup.keep} backups in the folder; older ones are removed.
+            {backup.lastBackupUtc ? ` Last backup: ${fmtWhen(backup.lastBackupUtc)}.` : ' No backup taken yet.'}
+          </p>
+        </div>
+
+        {/* recent backups */}
+        {backups.length > 0 && (
+          <div className="border-t border-edge pt-3">
+            <div className="text-xs font-medium text-muted">Backups in this folder</div>
+            <div className="mt-2 max-h-44 space-y-1 overflow-y-auto">
+              {backups.map((b) => (
+                <div key={b.file} className="flex items-center gap-2 rounded-md bg-raised/50 px-2.5 py-1.5 text-xs">
+                  <span className="min-w-0 flex-1 truncate" title={b.file}>
+                    {b.name}
+                  </span>
+                  <span className="shrink-0 text-muted">{fmtBytes(b.size)}</span>
+                  <span className="shrink-0 text-muted">{fmtWhen(b.modifiedUtc)}</span>
+                  <button
+                    onClick={() => void restore(b.file)}
+                    className="shrink-0 rounded px-2 py-0.5 font-medium text-accent hover:bg-accent/10"
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="border-t border-edge pt-3 text-xs text-muted">
+          Note: API keys are encrypted per-PC, so after restoring on a <em>different</em> computer
+          you may need to re-enter them in API Keys. External folders you pointed modules at (an
+          Obsidian vault, a custom data root) are your own files — back those up where they live.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function SettingsScreen(): React.JSX.Element {
   const { settings, update } = useSettings()
   const [version, setVersion] = useState('')
@@ -470,6 +684,9 @@ export default function SettingsScreen(): React.JSX.Element {
           </div>
         </div>
       </section>
+
+      {/* Backup & Restore */}
+      <BackupSection />
 
       {/* Data & Recovery */}
       <RecoverySection />

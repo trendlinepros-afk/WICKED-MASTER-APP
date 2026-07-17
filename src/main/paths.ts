@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { cpSync, existsSync, realpathSync } from 'fs'
 import { join } from 'path'
+import { applyPendingRestore } from './backup-core'
 
 // Must run before anything (electron-store, modules) touches userData.
 //
@@ -12,6 +13,10 @@ import { join } from 'path'
 const appData = app.getPath('appData')
 const userData = join(appData, 'WICKED-Suite')
 app.setPath('userData', userData)
+
+// Apply a staged Backup & Restore now — before any store or renderer/IndexedDB
+// opens, so the restored files aren't fighting open handles. No-op if none.
+applyPendingRestore(userData)
 
 /**
  * One-time, NON-DESTRUCTIVE recovery of user data orphaned by an older build.
