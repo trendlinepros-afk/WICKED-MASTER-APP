@@ -567,36 +567,58 @@ export const useCleanup = create<State>((set, get) => {
       }
 
       set({ busy: true, status: `Filing ${total} email(s)…`, error: '' })
+      let applied = false
       try {
         const res = await invoke('cleanup', { moves, learn })
         if (res.ok !== true) {
           set({ error: res.error ?? 'Apply failed.', status: 'Apply failed.' })
           return
         }
-        set({ status: `Done — filed ${fmtCount(Number(res.moved) || 0)} email(s). Undo available, or Scan again.` })
-        // Reload routes (learned) + rescan so the plan reflects the new state.
+        applied = true
+        // Moving an email changes its Outlook EntryID, so the current plan is
+        // now stale — clear it IMMEDIATELY so a second Apply can never re-fire
+        // on dead ids ("filed 0 email(s)"). The rescan below rebuilds it.
+        set({
+          plan: [],
+          headers: [],
+          assignments: {},
+          draftSelection: {},
+          status: `Done — filed ${fmtCount(Number(res.moved) || 0)} email(s). Rescanning…`
+        })
+        // Reload routes (Apply may have learned new ones).
         const routes = await invoke<Routes>('routes-load')
         set({ routes: routes ?? get().routes })
         await get().refreshUndo()
-        await get().scan()
       } finally {
         set({ busy: false })
       }
+      // Rescan AFTER busy clears: scan() is guarded by `busy`, so calling it
+      // inside the busy window (as this used to) silently did nothing — the
+      // "New senders to sort" card kept showing the pre-Apply state.
+      if (applied) await get().scan()
     },
 
     undo: async () => {
       if (get().busy || !get().hasUndo) return
       set({ busy: true, status: 'Undoing the last cleanup…', error: '' })
+      let undone = false
       try {
         const res = await invoke('undo')
         if (res.ok !== true) {
           set({ error: res.error ?? 'Undo failed.', status: 'Undo failed.' })
           return
         }
+        undone = true
         const restored = Number(res.restored) || 0
         const retry = Number(res.retry) || 0
         set({
           hasUndo: res.hasUndo === true,
+          // Restored emails have new EntryIDs — the plan is stale; clear it
+          // now and rebuild it with the rescan below.
+          plan: [],
+          headers: [],
+          assignments: {},
+          draftSelection: {},
           status:
             retry > 0
               ? restored > 0
@@ -607,10 +629,12 @@ export const useCleanup = create<State>((set, get) => {
                 : 'Nothing to undo — those items are no longer in their folder.'
         })
         await get().loadHistory()
-        if (get().conn === 'connected') await get().scan()
       } finally {
         set({ busy: false })
       }
+      // Outside the busy window — inside it, scan()'s busy guard makes this a
+      // silent no-op (same bug Apply had).
+      if (undone && get().conn === 'connected') await get().scan()
     },
 
     refreshUndo: async () => {

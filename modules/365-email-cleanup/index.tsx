@@ -429,6 +429,58 @@ function RulesTab(): React.JSX.Element {
           </p>
         )}
       </section>
+      {/* subject rule editor — first: subject rules override sender rules */}
+      <section className="rounded-lg border border-edge p-3">
+        <div className="text-sm font-semibold">Subject rules</div>
+        <p className="mt-1 text-xs text-muted">
+          Any email whose subject <em>contains</em> the pattern routes to the folder (overrides sender
+          rules). Minimum 3 characters.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={s.subjectPattern}
+            onChange={(e) => s.setSubjectPattern(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void s.addSubjectRule()
+            }}
+            placeholder="e.g. Invoice"
+            className="w-56 rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent"
+          />
+          <select
+            value={s.subjectTarget}
+            onChange={(e) => s.setSubjectTarget(e.target.value)}
+            className="rounded-md border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
+          >
+            {folderOptions.map((f) => (
+              <option key={f || 'inbox'} value={f}>
+                {targetName(f)}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => void s.addSubjectRule()}
+            disabled={s.subjectPattern.trim().length < 3}
+            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            Add rule
+          </button>
+        </div>
+        <div className="mt-3 space-y-1">
+          {subjectEntries.length === 0 ? (
+            <div className="text-xs text-muted">No subject rules yet.</div>
+          ) : (
+            subjectEntries.map(([k, t]) => (
+              <RuleLine
+                key={'s:' + k}
+                label={`"${k}"`}
+                target={targetName(t)}
+                onRemove={() => void s.removeSubjectRule(k)}
+              />
+            ))
+          )}
+        </div>
+      </section>
+
       {/* sender rule editor */}
       <section className="rounded-lg border border-edge p-3">
         <div className="text-sm font-semibold">Sender / domain rules</div>
@@ -481,57 +533,6 @@ function RulesTab(): React.JSX.Element {
         </div>
       </section>
 
-      {/* subject rule editor */}
-      <section className="rounded-lg border border-edge p-3">
-        <div className="text-sm font-semibold">Subject rules</div>
-        <p className="mt-1 text-xs text-muted">
-          Any email whose subject <em>contains</em> the pattern routes to the folder (overrides sender
-          rules). Minimum 3 characters.
-        </p>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <input
-            value={s.subjectPattern}
-            onChange={(e) => s.setSubjectPattern(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void s.addSubjectRule()
-            }}
-            placeholder="e.g. Invoice"
-            className="w-56 rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent"
-          />
-          <select
-            value={s.subjectTarget}
-            onChange={(e) => s.setSubjectTarget(e.target.value)}
-            className="rounded-md border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
-          >
-            {folderOptions.map((f) => (
-              <option key={f || 'inbox'} value={f}>
-                {targetName(f)}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => void s.addSubjectRule()}
-            disabled={s.subjectPattern.trim().length < 3}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
-          >
-            Add rule
-          </button>
-        </div>
-        <div className="mt-3 space-y-1">
-          {subjectEntries.length === 0 ? (
-            <div className="text-xs text-muted">No subject rules yet.</div>
-          ) : (
-            subjectEntries.map(([k, t]) => (
-              <RuleLine
-                key={'s:' + k}
-                label={`"${k}"`}
-                target={targetName(t)}
-                onRemove={() => void s.removeSubjectRule(k)}
-              />
-            ))
-          )}
-        </div>
-      </section>
     </div>
   )
 }
