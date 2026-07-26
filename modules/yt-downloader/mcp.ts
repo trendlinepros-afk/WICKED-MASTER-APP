@@ -21,23 +21,26 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__probe`,
       description:
-        'Read a YouTube URL and report whether it is a single video or a playlist, its title, uploader, and (for playlists) the number of videos. Read-only. Installs yt-dlp first if needed.',
+        'Read a YouTube or YouTube Music URL and report: whether it is a single video/track or a playlist, its title, uploader/artist, item count, whether it is a music.youtube.com link (isMusic), the playlist kind (album | mix | playlist | library), and whether the URL carries BOTH a track and a list (canChooseSingle — in which case pick with isPlaylist on download). Read-only. Installs yt-dlp first if needed.',
       inputSchema: {
-        url: z.string().describe('A YouTube video or playlist URL (https://…).')
+        url: z.string().describe('A YouTube or YouTube Music video/track/playlist/album URL (https://…).')
       },
       handler: (args) => ctx.invoke(`${ID}:probe`, args.url)
     },
     {
       name: `${ID}__download`,
       description:
-        'Download a YouTube video or an entire playlist to the configured folder at the chosen quality. Destructive: it writes files to disk and, for playlists, can run for a very long time and use significant bandwidth/space. quality is one of best|2160|1440|1080|720|480|360|audio (audio = MP3). Set isPlaylist true to grab the whole playlist. Requires confirmation.',
+        'Download a YouTube / YouTube Music video, track, playlist or album to the configured folder at the chosen quality. Destructive: it writes files to disk and, for playlists, can run for a very long time and use significant bandwidth/space. quality is one of best|2160|1440|1080|720|480|360|audio|audio-native — "audio" = MP3 320k and "audio-native" = original opus/m4a (no re-encode); both embed artist/album tags and cover art. Set isPlaylist true to grab the whole playlist/album, false to take only the single track/video (important for YouTube Music song links, which usually carry an endless auto-radio list). Requires confirmation.',
       destructive: true,
       inputSchema: {
-        url: z.string().describe('YouTube video or playlist URL.'),
+        url: z.string().describe('YouTube or YouTube Music video/track/playlist/album URL.'),
         quality: z
-          .enum(['best', '2160', '1440', '1080', '720', '480', '360', 'audio'])
-          .describe('Target quality (video height) or "audio" for MP3.'),
-        isPlaylist: z.boolean().optional().describe('True to download the whole playlist, not just one video.'),
+          .enum(['best', '2160', '1440', '1080', '720', '480', '360', 'audio', 'audio-native'])
+          .describe('Target quality (video height), "audio" (MP3) or "audio-native" (original audio).'),
+        isPlaylist: z
+          .boolean()
+          .optional()
+          .describe('True = whole playlist/album; false = just the single track/video from a track+list URL.'),
         confirm: z.boolean().optional().describe('Set true to actually start the download.')
       },
       handler: (args) => {

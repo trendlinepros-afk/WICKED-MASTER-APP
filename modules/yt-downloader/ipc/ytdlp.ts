@@ -83,10 +83,105 @@ export interface DownloadRequest {
   downloadDir: string
 }
 
+/* ----------------------------- URL analysis ------------------------------ *
+ * YouTube Music (music.youtube.com) is served by the same yt-dlp extractor as
+ * youtube.com, so it works — but its URLs need care:
+ *   - Clicking a song in YT Music yields `watch?v=<track>&list=RDAMVM<track>`,
+ *     i.e. the track PLUS an auto-generated (effectively endless) radio mix.
+ *     yt-dlp's default for a v+list URL is to take the PLAYLIST, so a naive
+ *     download grabs the whole radio instead of the one song. We detect that
+ *     and let the user choose.
+ *   - Album URLs use `list=OLAK5uy_…`, radio/mix use `list=RD…`, and personal
+ *     library lists (LM / liked music) need a signed-in session we don't have.
+ * ------------------------------------------------------------------------- */
+
+export type PlaylistKind = 'album' | 'mix' | 'playlist' | 'library'
+
+export interface YtUrlInfo {
+  isMusic: boolean
+  videoId: string | null
+  listId: string | null
+  playlistKind: PlaylistKind | null
+  /** URL carries BOTH a track and a list → the user must pick which to fetch */
+  hasBoth: boolean
+  /** list needs a signed-in account (personal library) — unsupported */
+  needsAuth: boolean
+}
+
+function classifyList(listId: string | null): PlaylistKind | null {
+  if (!listId) return null
+  if (listId.startsWith('OLAK5uy_')) return 'album' // YT Music album
+  if (/^RD|^RDAMVM|^RDCLAK/.test(listId)) return 'mix' // radio / auto-mix
+  if (listId === 'LM' || listId.startsWith('LL')) return 'library' // liked music
+  return 'playlist'
+}
+
+/** Parse a YouTube / YouTube Music URL (pure). Never throws. */
+export function parseYtUrl(raw: string): YtUrlInfo {
+  const empty: YtUrlInfo = {
+    isMusic: false,
+    videoId: null,
+    listId: null,
+    playlistKind: null,
+    hasBoth: false,
+    needsAuth: false
+  }
+  let u: URL
+  try {
+    u = new URL(raw.trim())
+  } catch {
+    return empty
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, '')
+  const isMusic = host === 'music.youtube.com'
+  let videoId = u.searchParams.get('v')
+  const listId = u.searchParams.get('list')
+
+  // youtu.be/<id>, /shorts/<id>, /live/<id> carry the id in the path
+  if (!videoId) {
+    if (host === 'youtu.be') videoId = u.pathname.replace(/^\//, '').split('/')[0] || null
+    else {
+      const m = u.pathname.match(/^\/(?:shorts|live|embed)\/([^/?#]+)/)
+      if (m) videoId = m[1]
+    }
+  }
+  const playlistKind = classifyList(listId)
+  return {
+    isMusic,
+    videoId: videoId || null,
+    listId: listId || null,
+    playlistKind,
+    hasBoth: !!videoId && !!listId,
+    needsAuth: playlistKind === 'library'
+  }
+}
+
+export function isAudioQuality(quality: string): boolean {
+  return quality === 'audio' || quality === 'audio-native'
+}
+
+/**
+ * Tag + cover-art embedding for audio downloads. Without this, music files land
+ * in a library with no artist/album/artwork, which makes them near-useless.
+ * Thumbnails are converted to jpg because YouTube serves webp, which many
+ * players/taggers won't read as embedded art.
+ */
+const AUDIO_TAG_ARGS = [
+  '--embed-metadata',
+  '--embed-thumbnail',
+  '--convert-thumbnails',
+  'jpg'
+]
+
 /** Map a quality preset to yt-dlp -f / postprocessor args. */
 export function formatArgs(quality: string): string[] {
   if (quality === 'audio') {
-    return ['-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0']
+    // transcode to MP3 (universally compatible)
+    return ['-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', '0', ...AUDIO_TAG_ARGS]
+  }
+  if (quality === 'audio-native') {
+    // keep YouTube's original audio (opus/m4a) — no lossy re-encode
+    return ['-f', 'bestaudio/best', '-x', '--audio-format', 'best', ...AUDIO_TAG_ARGS]
   }
   const height = Number(quality)
   if (Number.isFinite(height) && height > 0) {
@@ -94,21 +189,37 @@ export function formatArgs(quality: string): string[] {
       '-f',
       `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`,
       '--merge-output-format',
-      'mp4'
+      'mp4',
+      '--embed-metadata'
     ]
   }
   // best
-  return ['-f', 'bestvideo*+bestaudio/best', '--merge-output-format', 'mp4']
+  return ['-f', 'bestvideo*+bestaudio/best', '--merge-output-format', 'mp4', '--embed-metadata']
 }
 
 const PGRESS = 'WKPROG'
 
 /** Build the argv for a download job. */
 export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): string[] {
-  const out =
-    req.isPlaylist
-      ? join(req.downloadDir, '%(playlist_title,uploader)s', '%(playlist_index)03d - %(title)s [%(id)s].%(ext)s')
-      : join(req.downloadDir, '%(title)s [%(id)s].%(ext)s')
+  // Audio gets music-library-friendly names (artist in the filename, album as
+  // the folder). yt-dlp's `%(a,b)s` syntax falls back left-to-right, so a
+  // missing artist/album degrades to uploader/playlist title rather than
+  // erroring or producing "NA".
+  const audio = isAudioQuality(req.quality)
+  const out = req.isPlaylist
+    ? join(
+        req.downloadDir,
+        audio ? '%(playlist_title,album,uploader)s' : '%(playlist_title,uploader)s',
+        audio
+          ? '%(playlist_index)03d - %(artist,creator,uploader)s - %(title)s [%(id)s].%(ext)s'
+          : '%(playlist_index)03d - %(title)s [%(id)s].%(ext)s'
+      )
+    : join(
+        req.downloadDir,
+        audio
+          ? '%(artist,creator,uploader)s - %(title)s [%(id)s].%(ext)s'
+          : '%(title)s [%(id)s].%(ext)s'
+      )
 
   const args: string[] = [
     ...formatArgs(req.quality),

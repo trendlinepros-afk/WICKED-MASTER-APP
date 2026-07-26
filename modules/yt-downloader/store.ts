@@ -16,8 +16,19 @@ export const QUALITIES: QualityPreset[] = [
   { id: '720', label: '720p (HD)', note: 'Up to 720p' },
   { id: '480', label: '480p', note: 'Up to 480p' },
   { id: '360', label: '360p', note: 'Smallest video' },
-  { id: 'audio', label: 'Audio only (MP3)', note: 'Extract best audio to MP3' }
+  {
+    id: 'audio',
+    label: 'Music / MP3',
+    note: 'Audio only → MP3 320k with artist/album tags + cover art embedded'
+  },
+  {
+    id: 'audio-native',
+    label: 'Music / original',
+    note: "Audio only in YouTube's original format (opus/m4a) — no re-encode, tags + cover art embedded"
+  }
 ]
+
+export const isAudioPreset = (q: string): boolean => q === 'audio' || q === 'audio-native'
 
 interface Status {
   binReady: boolean
@@ -36,6 +47,14 @@ export interface Probe {
   duration: number | null
   thumbnail: string | null
   id: string
+  /** the URL was a music.youtube.com link */
+  isMusic: boolean
+  /** album (OLAK5uy_) / mix-radio (RD…) / regular playlist */
+  playlistKind: 'album' | 'mix' | 'playlist' | 'library' | null
+  /** URL carries a track AND a list → user picks which to download */
+  canChooseSingle: boolean
+  /** title of just the track, when canChooseSingle */
+  singleTitle: string | null
 }
 
 export interface Progress {
@@ -70,6 +89,8 @@ interface State {
   probing: boolean
   probe: Probe | null
   quality: string
+  /** for track+list URLs: true = whole album/playlist, false = just this track */
+  wholePlaylist: boolean
 
   downloading: boolean
   progress: Progress | null
@@ -80,6 +101,7 @@ interface State {
 
   setUrl: (v: string) => void
   setQuality: (v: string) => void
+  setWholePlaylist: (v: boolean) => void
   dismissError: () => void
 
   loadStatus: () => Promise<void>
@@ -102,6 +124,7 @@ export const useYt = create<State>((set, get) => ({
   probing: false,
   probe: null,
   quality: '1080',
+  wholePlaylist: true,
 
   downloading: false,
   progress: null,
@@ -112,6 +135,7 @@ export const useYt = create<State>((set, get) => ({
 
   setUrl: (v) => set({ url: v, probe: null, lastResult: null }),
   setQuality: (v) => set({ quality: v }),
+  setWholePlaylist: (v) => set({ wholePlaylist: v }),
   dismissError: () => set({ error: '' }),
 
   loadStatus: async () => {
@@ -164,24 +188,44 @@ export const useYt = create<State>((set, get) => ({
         return
       }
       const p = res as unknown as Probe
-      set({
-        probe: p,
-        statusMsg: p.kind === 'playlist' ? `Playlist: ${p.count} video(s).` : 'Video ready to download.'
-      })
+      // A track+list URL defaults to the WHOLE thing for an album/playlist, but
+      // to JUST THE TRACK for an auto-generated radio mix (those are endless —
+      // grabbing the lot is almost never what you want).
+      const wholePlaylist = p.canChooseSingle ? p.playlistKind !== 'mix' : p.kind === 'playlist'
+      const what =
+        p.playlistKind === 'album'
+          ? `Album: ${p.count} track(s).`
+          : p.playlistKind === 'mix'
+            ? `Radio/mix detected (${p.count}+ tracks) — defaulting to just this track.`
+            : p.kind === 'playlist'
+              ? `Playlist: ${p.count} ${p.isMusic ? 'track' : 'video'}(s).`
+              : `${p.isMusic ? 'Track' : 'Video'} ready to download.`
+      set({ probe: p, wholePlaylist, statusMsg: what })
+      // Music links default to a music-friendly preset unless the user already
+      // chose an audio one.
+      if (p.isMusic && !isAudioPreset(get().quality)) set({ quality: 'audio' })
     } finally {
       set({ probing: false })
     }
   },
 
   download: async () => {
-    const { url, probe, quality, downloading } = get()
+    const { url, probe, quality, downloading, wholePlaylist } = get()
     if (downloading || !url.trim()) return
+    // For a track+list URL the user's choice wins; otherwise follow the probe.
+    // With no probe yet, fall back to the URL shape so a pasted playlist link
+    // still downloads the playlist.
+    const isPlaylist = probe
+      ? probe.canChooseSingle
+        ? wholePlaylist
+        : probe.kind === 'playlist'
+      : /[?&]list=/.test(url)
     set({ downloading: true, error: '', progress: null, log: [], lastResult: null, statusMsg: 'Starting download…' })
     try {
       const res = (await invoke('download', {
         url: url.trim(),
         quality,
-        isPlaylist: probe?.kind === 'playlist'
+        isPlaylist
       })) as Res & { warning?: boolean; completed?: number; cancelled?: boolean }
       if (res.cancelled) {
         set({ statusMsg: 'Download cancelled.', lastResult: 'cancelled' })

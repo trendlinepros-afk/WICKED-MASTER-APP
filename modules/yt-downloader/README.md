@@ -1,8 +1,36 @@
 # YouTube Downloader
 
-Paste a YouTube **video** or **playlist** URL, pick a quality, and download to a
-folder you choose. Built on **yt-dlp** (the standard downloader) plus the suite's
-bundled **ffmpeg** (for merging separate video+audio streams into MP4).
+Paste a **YouTube** or **YouTube Music** URL — video, track, playlist or album —
+pick a quality, and download to a folder you choose. Built on **yt-dlp** (the
+standard downloader) plus the suite's bundled **ffmpeg** (for merging separate
+video+audio streams and writing tags/cover art).
+
+## YouTube Music
+
+`music.youtube.com` links are served by the same yt-dlp extractor as regular
+YouTube, so tracks, albums (`list=OLAK5uy_…`), playlists and radio mixes all
+work. Three music-specific behaviors are worth knowing (`parseYtUrl` in
+`ipc/ytdlp.ts` classifies the URL):
+
+- **Track-vs-list disambiguation.** Clicking a song in YT Music gives you
+  `watch?v=<track>&list=RDAMVM<track>` — the track *plus* an auto-generated radio
+  mix. yt-dlp's default for a `v`+`list` URL is to take the **playlist**, so a
+  naive download grabs the whole radio instead of the one song. The module detects
+  this, probes both, and shows an explicit **"Just this track" / "Whole
+  album·playlist·mix"** choice. Default: the whole thing for albums/playlists,
+  **just the track** for radio mixes (those are effectively endless).
+- **Music files get real tags.** The two audio presets embed `--embed-metadata`
+  (artist/album/title) **and cover art** (`--embed-thumbnail`, converted to JPEG
+  because YouTube serves WebP, which many taggers/players won't read). Without
+  this, downloads land in a music library as untitled, art-less files. Audio
+  filenames also lead with the artist, and album downloads get their own folder
+  (`%(playlist_title,album,uploader)s`, with left-to-right fallbacks so missing
+  tags degrade gracefully instead of writing "NA").
+- **Personal library lists aren't supported.** `list=LM` (Liked Music) / `LL…`
+  need a signed-in session, so the module says so up front rather than failing
+  mid-download. Open the album/playlist itself and use its share link.
+
+Pasting a music URL auto-selects a music preset (unless you already picked one).
 
 ## How it works
 
@@ -23,11 +51,18 @@ bundled **ffmpeg** (for merging separate video+audio streams into MP4).
 ## Quality
 
 Preset tiers, not per-video format IDs, so they apply uniformly to playlists:
-`Best`, `2160p (4K)`, `1440p`, `1080p`, `720p`, `480p`, `360p`, and
-`Audio only (MP3)`. Each video-quality tier is `bestvideo[height<=N]+bestaudio`
-with a `/best` fallback, merged to MP4; audio extracts to MP3. yt-dlp picks the
-best available at-or-below the target, so a preset that a given video doesn't have
-degrades gracefully.
+`Best`, `2160p (4K)`, `1440p`, `1080p`, `720p`, `480p`, `360p`, plus two audio
+presets for music:
+
+| Preset | What you get |
+| --- | --- |
+| **Music / MP3** | `bestaudio` transcoded to MP3 320k — universally compatible |
+| **Music / original** | `bestaudio` kept in YouTube's native codec (opus/m4a), **no lossy re-encode** — best fidelity |
+
+Both audio presets embed artist/album tags and cover art. Each video tier is
+`bestvideo[height<=N]+bestaudio` with a `/best` fallback, merged to MP4, and
+yt-dlp picks the best available at-or-below the target, so a preset a given video
+doesn't have degrades gracefully.
 
 ## Output & robustness
 

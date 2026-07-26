@@ -10,6 +10,7 @@ import {
   hasYtDlp,
   isBinaryTooOld,
   parseProgressLine,
+  parseYtUrl,
   resolveFfmpeg,
   spawnYtDlp,
   ytDlpCmd,
@@ -119,16 +120,13 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* -------------------------------- probe -------------------------------- */
 
-  ctx.ipcMain.handle(`${ID}:probe`, async (_e, rawUrl: unknown) => {
-    const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
-    if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'Enter a full YouTube URL (https://…).' }
-    const ud = userData()
-    if (!hasYtDlp(ud)) {
-      const dl = await downloadYtDlp(ud)
-      if (!dl.ok) return { ok: false, error: 'yt-dlp is not installed yet: ' + (dl.error ?? '') }
-    }
-
-    return await new Promise((resolve) => {
+  /** Run `yt-dlp -J` once and return the parsed metadata object. */
+  function probeJson(
+    ud: string,
+    url: string,
+    extraArgs: string[]
+  ): Promise<{ ok: true; json: Record<string, unknown> } | { ok: false; error: string }> {
+    return new Promise((resolve) => {
       let out = ''
       let err = ''
       let done = false
@@ -136,7 +134,7 @@ export default function register(ctx: ModuleIpcContext): void {
       try {
         child = spawn(
           ytDlpCmd(ud),
-          ['-J', '--flat-playlist', '--no-warnings', '--ignore-no-formats-error', url],
+          ['-J', '--flat-playlist', '--no-warnings', '--ignore-no-formats-error', ...extraArgs, url],
           { windowsHide: true }
         )
       } catch (e) {
@@ -169,24 +167,61 @@ export default function register(ctx: ModuleIpcContext): void {
           return
         }
         try {
-          const j = JSON.parse(out.slice(start)) as Record<string, unknown>
-          const isPlaylist = j._type === 'playlist' || Array.isArray(j.entries)
-          const entries = Array.isArray(j.entries) ? j.entries : []
-          resolve({
-            ok: true,
-            kind: isPlaylist ? 'playlist' : 'video',
-            title: String(j.title ?? j.id ?? 'Untitled'),
-            uploader: String(j.uploader ?? j.channel ?? ''),
-            count: isPlaylist ? entries.length : 1,
-            duration: typeof j.duration === 'number' ? j.duration : null,
-            thumbnail: typeof j.thumbnail === 'string' ? j.thumbnail : null,
-            id: String(j.id ?? '')
-          })
+          resolve({ ok: true, json: JSON.parse(out.slice(start)) as Record<string, unknown> })
         } catch (e) {
           resolve({ ok: false, error: 'Could not parse yt-dlp output: ' + errMsg(e) })
         }
       })
     })
+  }
+
+  ctx.ipcMain.handle(`${ID}:probe`, async (_e, rawUrl: unknown) => {
+    const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'Enter a full YouTube or YouTube Music URL (https://…).' }
+    const ud = userData()
+    if (!hasYtDlp(ud)) {
+      const dl = await downloadYtDlp(ud)
+      if (!dl.ok) return { ok: false, error: 'yt-dlp is not installed yet: ' + (dl.error ?? '') }
+    }
+
+    const info = parseYtUrl(url)
+    if (info.needsAuth)
+      return {
+        ok: false,
+        error:
+          'That looks like a personal YouTube Music library list (Liked Music / LM), which needs a signed-in session. Open the album or playlist itself and use its share link instead.'
+      }
+
+    const main = await probeJson(ud, url, [])
+    if (!main.ok) return { ok: false, error: main.error }
+    const j = main.json
+    const isPlaylist = j._type === 'playlist' || Array.isArray(j.entries)
+    const entries = Array.isArray(j.entries) ? j.entries : []
+
+    // A YT Music track URL usually carries its auto-radio (`&list=RD…`), so
+    // yt-dlp's default resolves the LIST. Fetch the single track's title too so
+    // the UI can offer "just this track" vs "the whole album/playlist".
+    let singleTitle: string | null = null
+    if (info.hasBoth) {
+      const one = await probeJson(ud, url, ['--no-playlist'])
+      if (one.ok) singleTitle = String(one.json.title ?? '') || null
+    }
+
+    return {
+      ok: true,
+      kind: isPlaylist ? 'playlist' : 'video',
+      title: String(j.title ?? j.id ?? 'Untitled'),
+      uploader: String(j.uploader ?? j.channel ?? j.artist ?? ''),
+      count: isPlaylist ? entries.length : 1,
+      duration: typeof j.duration === 'number' ? j.duration : null,
+      thumbnail: typeof j.thumbnail === 'string' ? j.thumbnail : null,
+      id: String(j.id ?? ''),
+      // YouTube Music extras
+      isMusic: info.isMusic,
+      playlistKind: info.playlistKind,
+      canChooseSingle: info.hasBoth,
+      singleTitle
+    }
   })
 
   /* ------------------------------ download ------------------------------- */
