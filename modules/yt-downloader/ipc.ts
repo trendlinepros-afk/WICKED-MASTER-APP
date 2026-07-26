@@ -30,6 +30,8 @@ import {
 
 const ID = 'yt-downloader'
 const DIR_KEY = `${ID}.downloadDir`
+const MUSIC_AUDIO_ONLY_KEY = `${ID}.musicAudioOnly`
+const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
 const PROBE_TIMEOUT_MS = 90_000
 
 function errMsg(err: unknown): string {
@@ -94,6 +96,30 @@ export default function register(ctx: ModuleIpcContext): void {
     send(`${ID}:status-msg`, 'Updating yt-dlp to the latest release…')
     const res = await downloadYtDlp(userData())
     return res.ok ? { ok: true } : { ok: false, error: res.error }
+  })
+
+  /* ------------------------------- prefs --------------------------------- *
+   * Persisted module preferences (shell store, `<module-id>.` prefixed).
+   * "Audio only for YouTube Music links" is ON by default: a music.youtube.com
+   * link is a song, so grabbing video is almost never what's wanted.
+   * ---------------------------------------------------------------------- */
+
+  const prefs = (): { musicAudioOnly: boolean; musicFormat: string } => {
+    const fmt = ctx.storeGet<string>(MUSIC_FORMAT_KEY, 'audio')
+    return {
+      musicAudioOnly: ctx.storeGet<boolean>(MUSIC_AUDIO_ONLY_KEY, true) !== false,
+      musicFormat: fmt === 'audio-native' ? 'audio-native' : 'audio'
+    }
+  }
+
+  ctx.ipcMain.handle(`${ID}:prefs-get`, () => ({ ok: true, ...prefs() }))
+
+  ctx.ipcMain.handle(`${ID}:prefs-set`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    if (typeof r.musicAudioOnly === 'boolean') ctx.storeSet(MUSIC_AUDIO_ONLY_KEY, r.musicAudioOnly)
+    if (r.musicFormat === 'audio' || r.musicFormat === 'audio-native')
+      ctx.storeSet(MUSIC_FORMAT_KEY, r.musicFormat)
+    return { ok: true, ...prefs() }
   })
 
   /* -------------------------------- folder ------------------------------- */

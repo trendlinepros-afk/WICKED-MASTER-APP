@@ -30,7 +30,27 @@ work. Three music-specific behaviors are worth knowing (`parseYtUrl` in
   need a signed-in session, so the module says so up front rather than failing
   mid-download. Open the album/playlist itself and use its share link.
 
-Pasting a music URL auto-selects a music preset (unless you already picked one).
+### Setting: "Audio only for YouTube Music links"
+
+A persisted module preference (**on by default** — a `music.youtube.com` link is a
+song, so pulling video is almost never what you want):
+
+- The URL is classified **client-side as you type/paste** (`lib/url.ts` is shared
+  by main and renderer, so no network round-trip is needed) — the quality switches
+  to your chosen music format immediately, before you click Check or Download.
+- **Music format** picker sits next to the toggle: MP3 or original. Changing it
+  re-applies to the current link.
+- **Per-link override**: video tiers are dimmed for a music link but still
+  clickable — clicking one is a deliberate override for that link only (a badge
+  appears with one click to go back). Pasting a new URL resets the override;
+  picking a *different audio* preset is not treated as an override.
+- Turning the setting on while a music link is loaded applies it right away;
+  turning it off leaves your current selection alone rather than jumping back to
+  video.
+- Stored via the shell store (`yt-downloader.musicAudioOnly` /
+  `.musicFormat`), so it survives restarts and is covered by Backup & Restore.
+- The setting is a **UI preference only** — MCP callers pass an explicit
+  `quality`, which is always honored as given.
 
 ## How it works
 

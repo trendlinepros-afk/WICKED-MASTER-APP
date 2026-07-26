@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { parseYtUrl } from './lib/url'
 
 export const ID = 'yt-downloader'
 
@@ -92,6 +93,15 @@ interface State {
   /** for track+list URLs: true = whole album/playlist, false = just this track */
   wholePlaylist: boolean
 
+  /** setting: force audio-only whenever the URL is a music.youtube.com link */
+  musicAudioOnly: boolean
+  /** setting: which audio preset the above forces ('audio' | 'audio-native') */
+  musicFormat: string
+  /** true when the current URL looks like a YouTube Music link (live, no probe) */
+  urlIsMusic: boolean
+  /** user explicitly picked a video quality for this music URL — respect it */
+  musicOverride: boolean
+
   downloading: boolean
   progress: Progress | null
   log: string[]
@@ -102,8 +112,12 @@ interface State {
   setUrl: (v: string) => void
   setQuality: (v: string) => void
   setWholePlaylist: (v: boolean) => void
+  setMusicAudioOnly: (v: boolean) => Promise<void>
+  setMusicFormat: (v: string) => Promise<void>
+  clearMusicOverride: () => void
   dismissError: () => void
 
+  loadPrefs: () => Promise<void>
   loadStatus: () => Promise<void>
   ensureBin: () => Promise<void>
   updateBin: () => Promise<void>
@@ -126,6 +140,11 @@ export const useYt = create<State>((set, get) => ({
   quality: '1080',
   wholePlaylist: true,
 
+  musicAudioOnly: true,
+  musicFormat: 'audio',
+  urlIsMusic: false,
+  musicOverride: false,
+
   downloading: false,
   progress: null,
   log: [],
@@ -133,10 +152,59 @@ export const useYt = create<State>((set, get) => ({
   error: '',
   lastResult: null,
 
-  setUrl: (v) => set({ url: v, probe: null, lastResult: null }),
-  setQuality: (v) => set({ quality: v }),
+  setUrl: (v) => {
+    // Detect a music link as it's typed/pasted — no network call needed — so
+    // the audio-only setting visibly applies before Check or Download.
+    const isMusic = parseYtUrl(v).isMusic
+    const { musicAudioOnly, musicFormat, quality } = get()
+    set({
+      url: v,
+      probe: null,
+      lastResult: null,
+      urlIsMusic: isMusic,
+      musicOverride: false, // a new URL starts fresh
+      quality: isMusic && musicAudioOnly ? musicFormat : quality
+    })
+  },
+
+  setQuality: (v) => {
+    // Choosing a video tier for a music URL is a deliberate one-off override.
+    const { urlIsMusic, musicAudioOnly } = get()
+    const override = urlIsMusic && musicAudioOnly && !isAudioPreset(v)
+    set({ quality: v, musicOverride: override })
+  },
+
   setWholePlaylist: (v) => set({ wholePlaylist: v }),
+
+  setMusicAudioOnly: async (v) => {
+    set({ musicAudioOnly: v })
+    // applying the setting immediately is less surprising than waiting
+    if (v && get().urlIsMusic) set({ quality: get().musicFormat, musicOverride: false })
+    await invoke('prefs-set', { musicAudioOnly: v })
+  },
+
+  setMusicFormat: async (v) => {
+    set({ musicFormat: v })
+    const { urlIsMusic, musicAudioOnly, musicOverride } = get()
+    if (urlIsMusic && musicAudioOnly && !musicOverride) set({ quality: v })
+    await invoke('prefs-set', { musicFormat: v })
+  },
+
+  clearMusicOverride: () => {
+    const { musicFormat } = get()
+    set({ musicOverride: false, quality: musicFormat })
+  },
+
   dismissError: () => set({ error: '' }),
+
+  loadPrefs: async () => {
+    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string }>('prefs-get')
+    if (res.ok)
+      set({
+        musicAudioOnly: res.musicAudioOnly !== false,
+        musicFormat: res.musicFormat === 'audio-native' ? 'audio-native' : 'audio'
+      })
+  },
 
   loadStatus: async () => {
     const res = await invoke<Res & Status>('status')
@@ -200,10 +268,12 @@ export const useYt = create<State>((set, get) => ({
             : p.kind === 'playlist'
               ? `Playlist: ${p.count} ${p.isMusic ? 'track' : 'video'}(s).`
               : `${p.isMusic ? 'Track' : 'Video'} ready to download.`
-      set({ probe: p, wholePlaylist, statusMsg: what })
-      // Music links default to a music-friendly preset unless the user already
-      // chose an audio one.
-      if (p.isMusic && !isAudioPreset(get().quality)) set({ quality: 'audio' })
+      set({ probe: p, wholePlaylist, statusMsg: what, urlIsMusic: p.isMusic })
+      // The probe is authoritative about "is this music" (it also catches links
+      // that don't look like music.youtube.com up front). Apply the setting
+      // unless the user deliberately overrode it for this URL.
+      const { musicAudioOnly, musicFormat, musicOverride } = get()
+      if (p.isMusic && musicAudioOnly && !musicOverride) set({ quality: musicFormat })
     } finally {
       set({ probing: false })
     }

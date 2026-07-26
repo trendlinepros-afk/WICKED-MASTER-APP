@@ -13,7 +13,7 @@ import {
   X,
   Youtube
 } from 'lucide-react'
-import { ID, QUALITIES, useYt } from './store'
+import { ID, QUALITIES, isAudioPreset, useYt } from './store'
 
 function fmtDuration(sec: number | null): string {
   if (!sec || sec <= 0) return ''
@@ -28,6 +28,7 @@ export default function YtDownloader(): React.JSX.Element {
 
   useEffect(() => {
     void s.loadStatus()
+    void s.loadPrefs()
     const offP = window.wicked.on(`${ID}:progress`, (p) => s._onProgress(p))
     const offM = window.wicked.on(`${ID}:status-msg`, (m) => s._onStatusMsg(m))
     return () => {
@@ -39,6 +40,8 @@ export default function YtDownloader(): React.JSX.Element {
 
   const status = s.status
   const binReady = status?.binReady ?? false
+  /** the audio-only setting is actively governing the current URL */
+  const musicForced = s.urlIsMusic && s.musicAudioOnly && !s.musicOverride
 
   /** What the download button will actually fetch, given the probe + choice. */
   const downloadTargetLabel = (): string => {
@@ -234,25 +237,91 @@ export default function YtDownloader(): React.JSX.Element {
             )}
           </div>
 
+          {/* music setting */}
+          <div className="rounded-xl border border-edge bg-surface p-4">
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={s.musicAudioOnly}
+                onChange={(e) => void s.setMusicAudioOnly(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Music size={14} className="text-danger" />
+                  Audio only for YouTube Music links
+                </span>
+                <span className="mt-0.5 block text-xs text-muted">
+                  When the URL is a <code>music.youtube.com</code> link, always download audio instead
+                  of video. Applies the moment you paste the link.
+                </span>
+              </span>
+            </label>
+            {s.musicAudioOnly && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-edge pt-3">
+                <span className="text-xs text-muted">Music format:</span>
+                {QUALITIES.filter((q) => isAudioPreset(q.id)).map((q) => (
+                  <button
+                    key={q.id}
+                    onClick={() => void s.setMusicFormat(q.id)}
+                    disabled={s.downloading}
+                    title={q.note}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
+                      s.musicFormat === q.id ? 'border-accent bg-accent/10 text-ink' : 'border-edge bg-raised text-muted hover:text-ink'
+                    }`}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* quality */}
           <div className="rounded-xl border border-edge bg-surface p-4">
-            <div className="text-sm font-semibold">Quality</div>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {QUALITIES.map((q) => (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-semibold">Quality</div>
+              {musicForced && (
+                <span className="flex items-center gap-1.5 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger">
+                  <Music size={11} /> Music link — audio only (setting)
+                </span>
+              )}
+              {s.musicOverride && (
                 <button
-                  key={q.id}
-                  onClick={() => s.setQuality(q.id)}
-                  disabled={s.downloading}
-                  title={q.note}
-                  className={`rounded-lg border px-3 py-2 text-left text-xs disabled:opacity-50 ${
-                    s.quality === q.id ? 'border-accent bg-accent/10 text-ink' : 'border-edge bg-raised text-muted hover:text-ink'
-                  }`}
+                  onClick={s.clearMusicOverride}
+                  className="rounded-full bg-warn/15 px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/25"
+                  title="Go back to the audio-only setting for this music link"
                 >
-                  <div className="font-semibold">{q.label}</div>
+                  Video override active — back to audio
                 </button>
-              ))}
+              )}
             </div>
-            <p className="mt-2 text-xs text-muted">{QUALITIES.find((q) => q.id === s.quality)?.note}</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {QUALITIES.map((q) => {
+                const dimmed = musicForced && !isAudioPreset(q.id)
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => s.setQuality(q.id)}
+                    disabled={s.downloading}
+                    title={dimmed ? `${q.note} — click to override audio-only for this link` : q.note}
+                    className={`rounded-lg border px-3 py-2 text-left text-xs disabled:opacity-50 ${
+                      s.quality === q.id
+                        ? 'border-accent bg-accent/10 text-ink'
+                        : dimmed
+                          ? 'border-edge/60 bg-raised/40 text-muted/50 hover:text-muted'
+                          : 'border-edge bg-raised text-muted hover:text-ink'
+                    }`}
+                  >
+                    <div className="font-semibold">{q.label}</div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-xs text-muted">
+              {QUALITIES.find((q) => q.id === s.quality)?.note}
+              {musicForced && ' · Video tiers are dimmed because this is a Music link — click one anyway to override.'}
+            </p>
           </div>
 
           {/* download button / progress */}
