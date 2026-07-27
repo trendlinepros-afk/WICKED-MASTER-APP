@@ -45,6 +45,7 @@ export default function register(ctx: ModuleIpcContext): void {
   let aiBusy = false
 
   const aiKeys = () => ({
+    anthropic: ctx.getApiKey('anthropic'),
     gemini: ctx.getApiKey('gemini'),
     deepseek: ctx.getApiKey('deepseek'),
     openai: ctx.getApiKey('openai')

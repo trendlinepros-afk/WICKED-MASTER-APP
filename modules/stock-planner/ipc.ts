@@ -72,6 +72,7 @@ export default function register(ctx: ModuleIpcContext): void {
     finnhub: ctx.getApiKey('finnhub')
   })
   const aiKeys = (): AiKeys => ({
+    anthropic: ctx.getApiKey('anthropic'),
     gemini: ctx.getApiKey('gemini'),
     deepseek: ctx.getApiKey('deepseek'),
     openai: ctx.getApiKey('openai')
@@ -87,7 +88,7 @@ export default function register(ctx: ModuleIpcContext): void {
     ok: true,
     hasMassive: !!ctx.getApiKey('massive'),
     hasFinnhub: !!ctx.getApiKey('finnhub'),
-    hasAi: !!(ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
+    hasAi: !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
     session: marketSession()
   }))
 

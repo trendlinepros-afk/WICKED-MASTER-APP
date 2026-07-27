@@ -236,8 +236,8 @@ async function callAi(
           'content-type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'claude-3-5-sonnet-latest',
-          max_tokens: 1500,
+          model: 'claude-sonnet-5',
+          max_tokens: 2000,
           messages: [{ role: 'user', content: prompt }]
         }),
         signal

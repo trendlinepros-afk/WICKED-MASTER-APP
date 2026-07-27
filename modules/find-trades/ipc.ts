@@ -189,6 +189,7 @@ function parseRank(raw: string): RankOut {
 
 export default function register(ctx: ModuleIpcContext): void {
   const aiKeys = (): AiKeys => ({
+    anthropic: ctx.getApiKey('anthropic'),
     gemini: ctx.getApiKey('gemini'),
     deepseek: ctx.getApiKey('deepseek'),
     openai: ctx.getApiKey('openai')
@@ -198,7 +199,7 @@ export default function register(ctx: ModuleIpcContext): void {
     ok: true,
     hasMassive: !!ctx.getApiKey('massive'),
     hasFinnhub: !!ctx.getApiKey('finnhub'),
-    hasAi: !!(ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
+    hasAi: !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
     session: marketSession()
   }))
 
@@ -236,7 +237,8 @@ export default function register(ctx: ModuleIpcContext): void {
         ...history.slice(-6).map((m) => ({ role: m.role, text: m.text })),
         { role: 'user', text: 'Return the JSON screen plan for my latest request.' }
       ]
-      const planRes = await callAi(aiKeys(), planMsgs, { json: true })
+      // Plan parsing is mechanical structured extraction — cheap/fast tier.
+      const planRes = await callAi(aiKeys(), planMsgs, { json: true, tier: 'lite' })
       if (!planRes.ok) return { ok: false, error: planRes.error }
       const plan = parseScreenPlan(planRes.text)
 
@@ -253,7 +255,8 @@ export default function register(ctx: ModuleIpcContext): void {
           { role: 'system', text: 'You are a sharp trading scout. Be concise, specific, honest; educational only, never financial advice.' },
           { role: 'user', text: rankPrompt(plan, candidates) }
         ],
-        { json: true }
+        // The reasoning/thesis step is quality-critical — strong tier.
+        { json: true, tier: 'pro' }
       )
       const ranked = rankRes.ok ? parseRank(rankRes.text) : { summary: '', picks: [] }
 

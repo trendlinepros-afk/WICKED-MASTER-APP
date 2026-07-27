@@ -24,7 +24,11 @@ tickers and a one-line thesis for each.
 ## Keys
 
 - **Massive / Polygon** — required (market snapshot, details).
-- **Gemini / DeepSeek / OpenAI** — required (the screener AI; standard cascade).
+- **An AI key** — required (the screener brain). Provider preference is
+  **Anthropic (Claude) → Gemini → DeepSeek → OpenAI**; whichever keys you have,
+  the first available is used. With a Claude key the tool runs a cost-aware
+  two-tier setup: **Haiku 4.5** turns your request into a screen plan, **Sonnet
+  5** reads the live data and writes the pick theses.
 - **Finnhub** — optional, richer company news (falls back to Massive news).
 
 Keys come from the shell vault; none are sent to the renderer.

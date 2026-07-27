@@ -144,7 +144,7 @@ export default function FindTrades(): React.JSX.Element {
             {noMarket && noAi && ' '}
             {noAi && (
               <>
-                Add a <strong>Gemini, DeepSeek or OpenAI</strong> key to run the AI screener.
+                Add an <strong>Anthropic (Claude), Gemini, DeepSeek or OpenAI</strong> key to run the AI screener.
               </>
             )}{' '}
             (Settings → API Keys). Finnhub is optional for richer news.
