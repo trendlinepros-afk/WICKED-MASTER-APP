@@ -1,0 +1,14 @@
+{
+  "id": "market-news",
+  "name": "Market News",
+  "icon": "Newspaper",
+  "version": "1.0.0",
+  "description": "Market-wide headlines (Finnhub general news), refreshed on the 6 AM ET news day",
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}

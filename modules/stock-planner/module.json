@@ -1,0 +1,14 @@
+{
+  "id": "stock-planner",
+  "name": "Stock Planner",
+  "icon": "NotebookPen",
+  "version": "1.0.0",
+  "description": "Guided stock research: AI report cards, trendline screenshot analysis, screeners, IPOs, compare and a market-aware assistant",
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
