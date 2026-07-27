@@ -9,6 +9,7 @@ import {
   Plus,
   Settings2,
   Square,
+  StickyNote,
   Upload
 } from 'lucide-react'
 import {
@@ -22,6 +23,7 @@ import {
   type Folder as FolderT
 } from './store'
 import Board from './Board'
+import Freeform from './Freeform'
 import TimeLog from './TimeLog'
 import { ConfirmModal, FolderMenu, SessionNotePrompt, TextPrompt } from './Modals'
 
@@ -88,6 +90,49 @@ function TimerBox(): React.JSX.Element {
   )
 }
 
+/** Thin draggable divider that resizes the Views/Folders sidebar (120–420px). */
+function SidebarResizer({ width, onResize }: { width: number; onResize: (w: number) => void }): React.JSX.Element {
+  const drag = useRef<{ px: number; w: number } | null>(null)
+  return (
+    <div
+      onPointerDown={(e) => {
+        drag.current = { px: e.clientX, w: width }
+        ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current
+        if (!d) return
+        onResize(Math.max(120, Math.min(420, d.w + (e.clientX - d.px))))
+      }}
+      onPointerUp={() => (drag.current = null)}
+      title="Drag to resize"
+      className="w-1.5 shrink-0 cursor-col-resize bg-edge/40 transition-colors hover:bg-accent/50"
+    />
+  )
+}
+
+/** Freeform canvas content for the active folder (fills height, own scroll). */
+function FreeformContent({ onNewFolder }: { onNewFolder: () => void }): React.JSX.Element {
+  const { folders, settings } = useBoard()
+  const folder = folders.find((f) => f.id === settings.activeFolder) ?? folders[0]
+  if (!folder) {
+    return (
+      <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 text-muted">
+        <p>No folder yet.</p>
+        <button onClick={onNewFolder} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink">
+          New folder
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex min-w-0 flex-1 flex-col px-5 pb-4 pt-4">
+      <h1 className="mb-3 text-lg font-semibold">{folder.name}</h1>
+      <Freeform key={folder.id} folderId={folder.id} />
+    </div>
+  )
+}
+
 type Modal =
   | { kind: 'newFolder' }
   | { kind: 'renameFolder'; folder: FolderT }
@@ -126,7 +171,8 @@ export default function GameDevBoard(): React.JSX.Element {
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent): Promise<void> => {
       const state = useBoard.getState()
-      if (state.settings.view !== 'board') return
+      // freeform handles its own paste (drops the image on the canvas)
+      if (state.settings.view !== 'board' || state.settings.boardMode === 'freeform') return
       for (const it of Array.from(e.clipboardData?.items ?? [])) {
         if (it.type.startsWith('image/')) {
           const blob = it.getAsFile()
@@ -172,6 +218,22 @@ export default function GameDevBoard(): React.JSX.Element {
           GameDev Project Board
         </div>
         <div className="flex items-center gap-3.5">
+          {settings.view === 'board' && (
+            <div className="flex overflow-hidden rounded-lg border border-edge text-[13px]">
+              <button
+                onClick={() => saveSettings({ boardMode: 'cards' })}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 font-medium ${settings.boardMode !== 'freeform' ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+              >
+                <LayoutGrid size={14} /> Cards
+              </button>
+              <button
+                onClick={() => saveSettings({ boardMode: 'freeform' })}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 font-medium ${settings.boardMode === 'freeform' ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+              >
+                <StickyNote size={14} /> Freeform
+              </button>
+            </div>
+          )}
           <TimerBox />
           <button
             title="Export backup"
@@ -212,8 +274,11 @@ export default function GameDevBoard(): React.JSX.Element {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* module sidebar */}
-        <div className="flex w-[188px] shrink-0 flex-col overflow-y-auto border-r border-edge bg-surface px-2 py-3">
+        {/* module sidebar (resizable) */}
+        <div
+          className="flex shrink-0 flex-col overflow-y-auto border-r border-edge bg-surface px-2 py-3"
+          style={{ width: settings.sidebarWidth }}
+        >
           <div className="px-2 pb-1 pt-1.5 text-[11px] uppercase tracking-wider text-muted/70">
             Views
           </div>
@@ -264,14 +329,24 @@ export default function GameDevBoard(): React.JSX.Element {
           </button>
         </div>
 
+        {/* drag-to-resize divider */}
+        <SidebarResizer
+          width={settings.sidebarWidth}
+          onResize={(w) => saveSettings({ sidebarWidth: w })}
+        />
+
         {/* content */}
-        <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-16 pt-4">
-          {settings.view === 'log' ? (
+        {settings.view === 'log' ? (
+          <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-16 pt-4">
             <TimeLog />
-          ) : (
+          </div>
+        ) : settings.boardMode === 'freeform' ? (
+          <FreeformContent onNewFolder={() => setModal({ kind: 'newFolder' })} />
+        ) : (
+          <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-16 pt-4">
             <Board onNewFolder={() => setModal({ kind: 'newFolder' })} />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* modals */}

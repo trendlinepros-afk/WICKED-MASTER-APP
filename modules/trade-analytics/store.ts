@@ -113,7 +113,7 @@ interface State {
   createAccount: (name: string) => Promise<string | null>
   renameAccount: (id: string, name: string) => Promise<void>
   deleteAccount: (id: string) => Promise<void>
-  importDialog: () => Promise<void>
+  importDialog: (account?: string) => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
   clearAll: (account?: string) => Promise<void>
   loadSectors: () => Promise<void>
@@ -254,11 +254,13 @@ export const useTrades = create<State>((set, get) => {
       await get().refreshAccounts()
     },
 
-    importDialog: async () => {
+    importDialog: async (account) => {
       if (get().importing) return
-      set({ importing: true, error: '', status: 'Importing…' })
+      const acct = account ?? get().importAccount
+      // remember the choice so drag-drop imports follow the same account
+      set({ importing: true, error: '', status: 'Importing…', importAccount: acct })
       try {
-        await handleImport(await invoke('import-dialog', get().importAccount))
+        await handleImport(await invoke('import-dialog', acct))
       } finally {
         set({ importing: false })
       }

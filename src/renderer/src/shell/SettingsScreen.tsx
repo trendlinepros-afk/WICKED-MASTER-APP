@@ -399,6 +399,9 @@ function BackupSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [hasPassword, setHasPassword] = useState(false)
+  const [pwInput, setPwInput] = useState('')
+  const [editingPw, setEditingPw] = useState(false)
 
   const refresh = async (): Promise<void> => {
     const res = (await window.wicked.invoke(SHELL_IPC.backupConfig)) as {
@@ -409,11 +412,30 @@ function BackupSection(): React.JSX.Element {
     setDestination(res.destination)
     setIsDefault(res.isDefaultDestination)
     setBackups(res.backups ?? [])
+    const pw = (await window.wicked.invoke(SHELL_IPC.backupPasswordStatus)) as { hasPassword?: boolean }
+    setHasPassword(!!pw.hasPassword)
   }
 
   useEffect(() => {
     void refresh()
   }, [])
+
+  const savePassword = async (): Promise<void> => {
+    const res = (await window.wicked.invoke(SHELL_IPC.backupPasswordSet, pwInput)) as { ok?: boolean; error?: string }
+    if (res.ok) {
+      setMessage('Backup password set — future backups will include your API keys (encrypted).')
+      setError(null)
+      setPwInput('')
+      setEditingPw(false)
+      await refresh()
+    } else setError(res.error ?? 'Could not set the password.')
+  }
+
+  const clearPassword = async (): Promise<void> => {
+    await window.wicked.invoke(SHELL_IPC.backupPasswordClear)
+    setMessage('Backup password cleared — API keys will no longer be included in backups.')
+    await refresh()
+  }
 
   const backupNow = async (): Promise<void> => {
     setBusy(true)
@@ -436,10 +458,22 @@ function BackupSection(): React.JSX.Element {
     if (res.ok) await refresh()
   }
 
-  const restore = async (file?: string): Promise<void> => {
+  const restore = async (file?: string, password?: string): Promise<void> => {
     setError(null)
     setMessage(null)
-    const res = (await window.wicked.invoke(SHELL_IPC.backupRestore, file ?? null)) as BackupResult
+    const res = (await window.wicked.invoke(SHELL_IPC.backupRestore, file ?? null, password ?? null)) as BackupResult
+    // The backup carries password-protected API keys → ask for the password and retry.
+    if (res.needPassword) {
+      const pw = window.prompt(
+        'This backup contains API keys protected by a backup password.\nEnter the backup password to import them (Cancel to restore without keys):'
+      )
+      if (pw && pw.trim()) {
+        await restore(res.file ?? file, pw.trim())
+      } else if (pw === '') {
+        setError('No password entered — enter your backup password to import the keys.')
+      }
+      return
+    }
     // On success the main process relaunches, so we usually don't return here.
     if (!res.ok && !res.canceled) setError(res.error ?? 'Restore failed.')
   }
@@ -455,8 +489,9 @@ function BackupSection(): React.JSX.Element {
         Backup &amp; Restore
       </h2>
       <p className="mt-1 max-w-xl text-xs text-muted">
-        Save every module’s data and all settings — email rules, AI Chat, Project Board, bookmarks,
-        the works — into one <code>.zip</code>. Point the destination at a network share, back up on
+        Save every module’s data and all settings — email rules, AI Chat, Project Board (cards, freeform
+        notes &amp; images), Trade Journal, bookmarks, themes, the works — into one <code>.zip</code>. Set a
+        backup password to carry your API keys too. Point the destination at a network share, back up on
         demand or on a schedule, and restore it here or on a new PC.
       </p>
 
@@ -501,6 +536,69 @@ function BackupSection(): React.JSX.Element {
         </div>
         {message && <p className="text-xs text-ok">{message}</p>}
         {error && <p className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{error}</p>}
+
+        {/* API-key portability */}
+        <div className="border-t border-edge pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Include API keys (backup password)</div>
+              <p className="mt-0.5 text-xs text-muted">
+                Set a password to include your API keys in every backup — encrypted, so they move to a new
+                computer. You’ll type this same password when restoring there. Without it, keys stay on this PC
+                only (all other data still backs up).
+              </p>
+            </div>
+            <span className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium ${hasPassword ? 'bg-ok/15 text-ok' : 'bg-raised text-muted'}`}>
+              {hasPassword ? 'Keys included' : 'Keys excluded'}
+            </span>
+          </div>
+          {editingPw ? (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="password"
+                autoFocus
+                value={pwInput}
+                onChange={(e) => setPwInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void savePassword()
+                  if (e.key === 'Escape') setEditingPw(false)
+                }}
+                placeholder="Choose a backup password…"
+                className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
+              />
+              <button
+                onClick={() => void savePassword()}
+                disabled={pwInput.trim().length < 4}
+                className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+              >
+                Save
+              </button>
+              <button onClick={() => setEditingPw(false)} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setPwInput('')
+                  setEditingPw(true)
+                }}
+                className="rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
+              >
+                {hasPassword ? 'Change password' : 'Set backup password'}
+              </button>
+              {hasPassword && (
+                <button
+                  onClick={() => void clearPassword()}
+                  className="rounded-lg px-3 py-2 text-sm font-medium text-muted hover:bg-raised hover:text-danger"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* schedule */}
         <div className="border-t border-edge pt-3">

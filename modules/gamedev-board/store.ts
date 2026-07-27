@@ -30,10 +30,30 @@ export interface TimeEntry {
   createdAt: number
 }
 
+/** A freely-positioned item on a folder's freeform canvas (text or image). */
+export interface CanvasItem {
+  id: string
+  folderId: string
+  kind: 'text' | 'image'
+  x: number
+  y: number
+  w: number
+  h: number
+  z: number
+  text?: string
+  /** image blob id in the shared `images` store (reused from cards) */
+  imageId?: string
+  createdAt: number
+}
+
 interface BoardSettings {
   view: 'board' | 'log'
+  /** how the Board view renders: stacked cards, or a freeform canvas */
+  boardMode: 'cards' | 'freeform'
   activeFolder: string | null
   timerStart: number | null
+  /** width of the module's Views/Folders sidebar (px) */
+  sidebarWidth: number
 }
 
 export function uid(p: string): string {
@@ -97,6 +117,7 @@ interface BoardState {
   ready: boolean
   folders: Folder[]
   cards: Card[]
+  canvasItems: CanvasItem[]
   entries: TimeEntry[]
   settings: BoardSettings
   activeCardId: string | null
@@ -106,6 +127,13 @@ interface BoardState {
   init: () => Promise<void>
   saveSettings: (patch: Partial<BoardSettings>) => Promise<void>
   setActiveCard: (id: string | null) => void
+
+  addCanvasText: (folderId: string, x: number, y: number) => Promise<CanvasItem>
+  addCanvasImage: (folderId: string, blob: Blob, x: number, y: number) => Promise<void>
+  patchCanvasItem: (id: string, patch: Partial<CanvasItem>) => void
+  persistCanvasItem: (id: string) => Promise<void>
+  bringCanvasItemFront: (id: string) => Promise<void>
+  deleteCanvasItem: (id: string) => Promise<void>
 
   addFolder: (name: string) => Promise<Folder>
   renameFolder: (id: string, name: string) => Promise<void>
@@ -135,12 +163,19 @@ export interface BackupDump {
   version?: number
   folders?: Folder[]
   cards?: Card[]
+  canvasItems?: CanvasItem[]
   entries?: TimeEntry[]
   images?: { id: string; data: string }[]
   settings?: Partial<BoardSettings>
 }
 
-const DEFAULT_SETTINGS: BoardSettings = { view: 'board', activeFolder: null, timerStart: null }
+const DEFAULT_SETTINGS: BoardSettings = {
+  view: 'board',
+  boardMode: 'cards',
+  activeFolder: null,
+  timerStart: null,
+  sidebarWidth: 188
+}
 
 async function dataUrlToBlob(u: string): Promise<Blob> {
   return (await fetch(u)).blob()
@@ -158,6 +193,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
   ready: false,
   folders: [],
   cards: [],
+  canvasItems: [],
   entries: [],
   settings: DEFAULT_SETTINGS,
   activeCardId: null,
@@ -172,6 +208,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
       images: c.images ?? [],
       checklist: c.checklist ?? []
     }))
+    const canvasItems = await getAll<CanvasItem>('canvasItems')
     const entries = await getAll<TimeEntry>('timeEntries')
     const saved = await get<{ key: string } & BoardSettings>('settings', 'app')
     let settings = DEFAULT_SETTINGS
@@ -211,7 +248,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
       await put('settings', { key: 'app', ...settings })
     }
 
-    set({ ready: true, folders: seeded, cards: seededCards, entries, settings })
+    set({ ready: true, folders: seeded, cards: seededCards, canvasItems, entries, settings })
   },
 
   saveSettings: async (patch) => {
@@ -221,6 +258,83 @@ export const useBoard = create<BoardState>((set, getState) => ({
   },
 
   setActiveCard: (id) => set({ activeCardId: id }),
+
+  /* --------------------------- freeform canvas --------------------------- */
+
+  addCanvasText: async (folderId, x, y) => {
+    const items = getState().canvasItems
+    const z = items.reduce((m, i) => Math.max(m, i.z), 0) + 1
+    const it: CanvasItem = {
+      id: uid('cv'),
+      folderId,
+      kind: 'text',
+      x,
+      y,
+      w: 220,
+      h: 90,
+      z,
+      text: '',
+      createdAt: Date.now()
+    }
+    set({ canvasItems: [...items, it] })
+    await put('canvasItems', it)
+    return it
+  },
+
+  addCanvasImage: async (folderId, blob, x, y) => {
+    const imageId = uid('img')
+    await put('images', { id: imageId, blob })
+    objUrls.set(imageId, URL.createObjectURL(blob))
+    const items = getState().canvasItems
+    const z = items.reduce((m, i) => Math.max(m, i.z), 0) + 1
+    const it: CanvasItem = {
+      id: uid('cv'),
+      folderId,
+      kind: 'image',
+      x,
+      y,
+      w: 280,
+      h: 200,
+      z,
+      imageId,
+      createdAt: Date.now()
+    }
+    set({ canvasItems: [...items, it] })
+    await put('canvasItems', it)
+  },
+
+  patchCanvasItem: (id, patch) => {
+    set({ canvasItems: getState().canvasItems.map((i) => (i.id === id ? { ...i, ...patch } : i)) })
+  },
+
+  persistCanvasItem: async (id) => {
+    const it = getState().canvasItems.find((i) => i.id === id)
+    if (it) await put('canvasItems', it)
+  },
+
+  bringCanvasItemFront: async (id) => {
+    const items = getState().canvasItems
+    const top = items.reduce((m, i) => Math.max(m, i.z), 0)
+    const it = items.find((i) => i.id === id)
+    if (!it || it.z === top) return
+    getState().patchCanvasItem(id, { z: top + 1 })
+    await getState().persistCanvasItem(id)
+  },
+
+  deleteCanvasItem: async (id) => {
+    const it = getState().canvasItems.find((i) => i.id === id)
+    if (!it) return
+    if (it.kind === 'image' && it.imageId) {
+      await del('images', it.imageId)
+      const u = objUrls.get(it.imageId)
+      if (u) {
+        URL.revokeObjectURL(u)
+        objUrls.delete(it.imageId)
+      }
+    }
+    set({ canvasItems: getState().canvasItems.filter((i) => i.id !== id) })
+    await del('canvasItems', id)
+  },
 
   addFolder: async (name) => {
     const f: Folder = { id: uid('f'), name, createdAt: Date.now() }
@@ -357,16 +471,17 @@ export const useBoard = create<BoardState>((set, getState) => ({
   },
 
   exportData: async () => {
-    const { folders, cards, entries, settings } = getState()
+    const { folders, cards, canvasItems, entries, settings } = getState()
     const images = await getAll<{ id: string; blob: Blob }>('images')
     const imgOut: { id: string; data: string }[] = []
     for (const im of images) imgOut.push({ id: im.id, data: await blobToDataUrl(im.blob) })
     const dump = {
       app: 'GameDevHelper',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       folders,
       cards,
+      canvasItems,
       entries,
       images: imgOut,
       settings
@@ -382,11 +497,12 @@ export const useBoard = create<BoardState>((set, getState) => ({
   },
 
   importData: async (dump) => {
-    for (const n of ['folders', 'cards', 'images', 'timeEntries'] as const) await clearStore(n)
+    for (const n of ['folders', 'cards', 'canvasItems', 'images', 'timeEntries'] as const) await clearStore(n)
     for (const u of objUrls.values()) URL.revokeObjectURL(u)
     objUrls.clear()
     for (const f of dump.folders ?? []) await put('folders', f)
     for (const c of dump.cards ?? []) await put('cards', c)
+    for (const it of dump.canvasItems ?? []) await put('canvasItems', it)
     for (const e of dump.entries ?? []) await put('timeEntries', e)
     for (const im of dump.images ?? []) {
       await put('images', { id: im.id, blob: await dataUrlToBlob(im.data) })
@@ -400,6 +516,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
       images: c.images ?? [],
       checklist: c.checklist ?? []
     }))
+    const canvasItems = await getAll<CanvasItem>('canvasItems')
     const entries = await getAll<TimeEntry>('timeEntries')
     for (const im of await getAll<{ id: string; blob: Blob }>('images')) {
       objUrls.set(im.id, URL.createObjectURL(im.blob))
@@ -407,6 +524,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     set((s) => ({
       folders,
       cards,
+      canvasItems,
       entries,
       settings,
       activeCardId: null,

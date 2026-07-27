@@ -1,9 +1,12 @@
 // IndexedDB layer — identical schema to the standalone GameDevHelper.html app
 // (db "gamedevhelper" v1) so exported backups from the old app import unchanged.
 
+// v2 adds the `canvasItems` store for the freeform board. onupgradeneeded only
+// CREATES missing stores (guarded), so bumping the version never touches the
+// existing folders/cards/images/timeEntries/settings data.
 const DB_NAME = 'gamedevhelper'
-const DB_VER = 1
-const STORES = ['folders', 'cards', 'images', 'timeEntries', 'settings'] as const
+const DB_VER = 2
+const STORES = ['folders', 'cards', 'images', 'timeEntries', 'settings', 'canvasItems'] as const
 export type StoreName = (typeof STORES)[number]
 
 let db: IDBDatabase | null = null

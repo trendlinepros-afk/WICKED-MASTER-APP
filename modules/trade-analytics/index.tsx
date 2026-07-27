@@ -25,7 +25,7 @@ import { ID, useTrades, type Tab } from './store'
 import type { Trade } from './lib/analytics'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
-import { AccountsBar, BreakdownTab, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
+import { AccountsBar, BreakdownTab, ImportModal, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -404,6 +404,7 @@ export default function TradeAnalytics(): React.JSX.Element {
   }, [])
 
   const [manageOpen, setManageOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
@@ -449,7 +450,7 @@ export default function TradeAnalytics(): React.JSX.Element {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void s.importDialog()}
+            onClick={() => setImportOpen(true)}
             disabled={s.importing}
             className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
           >
@@ -519,7 +520,7 @@ export default function TradeAnalytics(): React.JSX.Element {
                 automatically, so you never get doubles.
               </p>
               <button
-                onClick={() => void s.importDialog()}
+                onClick={() => setImportOpen(true)}
                 disabled={s.importing}
                 className="mx-auto mt-5 flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
               >
@@ -543,6 +544,7 @@ export default function TradeAnalytics(): React.JSX.Element {
       </div>
 
       {manageOpen && <ManageAccountsModal onClose={() => setManageOpen(false)} />}
+      {importOpen && <ImportModal onClose={() => setImportOpen(false)} />}
 
       {/* status bar */}
       <footer className="flex items-center gap-2 border-t border-edge px-5 py-1.5 text-xs text-muted">

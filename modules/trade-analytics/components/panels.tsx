@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Check,
   ChevronDown,
+  FolderOpen,
   Layers,
+  Loader2,
   Pencil,
   Plus,
   Trash2,
+  Upload,
   Wallet,
   X
 } from 'lucide-react'
@@ -24,8 +27,6 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
   const selected = useTrades((s) => s.selectedAccounts)
   const toggle = useTrades((s) => s.toggleAccount)
   const selectAll = useTrades((s) => s.selectAllAccounts)
-  const importAccount = useTrades((s) => s.importAccount)
-  const setImportAccount = useTrades((s) => s.setImportAccount)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -95,20 +96,110 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
       >
         <Wallet size={14} /> Manage Accounts
       </button>
+    </div>
+  )
+}
 
-      <div className="ml-auto flex items-center gap-1.5 rounded-lg border border-edge bg-raised px-2" title="New imports go into this account">
-        <span className="text-xs text-muted">Import into</span>
-        <select
-          value={importAccount}
-          onChange={(e) => setImportAccount(e.target.value)}
-          className="cursor-pointer bg-transparent py-1.5 text-sm text-ink outline-none [&>option]:bg-surface"
-        >
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
+/* ============================= import modal ============================= */
+
+/** Pick the destination account, then Browse to choose the CSV to import. */
+export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const accounts = useTrades((s) => s.accounts)
+  const importAccount = useTrades((s) => s.importAccount)
+  const importing = useTrades((s) => s.importing)
+  const importDialog = useTrades((s) => s.importDialog)
+  const createAccount = useTrades((s) => s.createAccount)
+  const [account, setAccount] = useState(importAccount || accounts[0]?.id || 'default')
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
+
+  const browse = async (): Promise<void> => {
+    await importDialog(account)
+    // importDialog opens the OS file picker; close once it returns (imported or cancelled)
+    if (!useTrades.getState().error) onClose()
+  }
+
+  const addAccount = async (): Promise<void> => {
+    const name = newName.trim()
+    if (!name) return
+    const id = await createAccount(name)
+    if (id) {
+      setAccount(id)
+      setNewName('')
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <Upload size={15} className="text-accent" />
+          <span className="text-sm font-semibold">Import Webull CSV</span>
+          <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="space-y-3 p-4">
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted">Import into account</label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <select
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                className="min-w-0 flex-1 cursor-pointer rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm text-ink outline-none focus:border-accent [&>option]:bg-surface"
+              >
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => setCreating((v) => !v)}
+                title="New account"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-edge hover:border-accent/60"
+              >
+                <Plus size={15} />
+              </button>
+            </div>
+            {creating && (
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void addAccount()
+                    if (e.key === 'Escape') setCreating(false)
+                  }}
+                  placeholder="New account name…"
+                  className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm outline-none focus:border-accent"
+                />
+                <button
+                  onClick={() => void addAccount()}
+                  disabled={!newName.trim()}
+                  className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+                >
+                  <Check size={14} />
+                </button>
+              </div>
+            )}
+            <p className="mt-1.5 text-[11px] text-muted">
+              Trades import only into this account and never mix with others. Re-importing skips duplicates.
+            </p>
+          </div>
+
+          <button
+            onClick={() => void browse()}
+            disabled={importing}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {importing ? <Loader2 size={15} className="animate-spin" /> : <FolderOpen size={15} />}
+            Browse for CSV…
+          </button>
+        </div>
       </div>
     </div>
   )

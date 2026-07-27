@@ -27,6 +27,10 @@ export const MANIFEST_NAME = 'wicked-backup.json'
 export const MANIFEST_MAGIC = 'wicked-suite-backup'
 export const PENDING_MARKER = '.wicked-pending-restore'
 export const STAGED_ZIP = '.wicked-restore-staged.zip'
+/** Password-encrypted, portable copy of the API-key vault, stored inside a backup zip. */
+export const PORTABLE_KEYS_NAME = 'wicked-keys-portable.json'
+/** Machine-B-re-encrypted key vault staged at restore time; moved into place on boot. */
+export const RESTORED_KEYS_STAGE = '.wicked-keys-restored.json'
 
 /** Top-level userData entries to include (files or directories). */
 export const INCLUDE_TOP = new Set([
@@ -99,8 +103,16 @@ export function collectEntries(
   return out
 }
 
-/** Build the zip in memory and write it to `outFile` atomically (.tmp+rename). */
-export function writeBackupZip(entries: BackupEntry[], outFile: string, appVersion: string): number {
+/**
+ * Build the zip in memory and write it to `outFile` atomically (.tmp+rename).
+ * `extraFiles` are in-memory virtual entries (e.g. the portable key blob).
+ */
+export function writeBackupZip(
+  entries: BackupEntry[],
+  outFile: string,
+  appVersion: string,
+  extraFiles: { rel: string; data: string }[] = []
+): number {
   const zip = new AdmZip()
   let count = 0
   for (const e of entries) {
@@ -110,6 +122,10 @@ export function writeBackupZip(entries: BackupEntry[], outFile: string, appVersi
     } catch {
       // a single unreadable/locked file must not fail the whole backup
     }
+  }
+  for (const ex of extraFiles) {
+    zip.addFile(ex.rel, Buffer.from(ex.data, 'utf8'))
+    count++
   }
   const manifest: BackupManifest = {
     magic: MANIFEST_MAGIC,
@@ -138,6 +154,17 @@ export function readManifest(zipFile: string): BackupManifest | null {
   }
 }
 
+/** Read one text entry from a backup zip (e.g. the portable key blob), or null. */
+export function readZipTextEntry(zipFile: string, name: string): string | null {
+  try {
+    const zip = new AdmZip(zipFile)
+    const entry = zip.getEntry(name)
+    return entry ? zip.readAsText(entry) : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Extract a validated backup zip into `destRoot`. Path-traversal safe: any entry
  * whose resolved target escapes destRoot is skipped. The manifest file itself is
@@ -150,6 +177,8 @@ export function extractZipTo(zipFile: string, destRoot: string): number {
   for (const entry of zip.getEntries()) {
     if (entry.isDirectory) continue
     if (entry.entryName === MANIFEST_NAME) continue
+    // the portable key blob is handled separately at restore time, never written to disk
+    if (entry.entryName === PORTABLE_KEYS_NAME) continue
     const target = resolve(destRoot, entry.entryName)
     if (target !== rootResolved && !target.startsWith(rootResolved + sep)) continue // traversal guard
     mkdirSync(join(target, '..'), { recursive: true })
@@ -171,6 +200,14 @@ export function applyPendingRestore(userData: string): void {
     try {
       if (existsSync(staged) && readManifest(staged)) {
         const n = extractZipTo(staged, userData)
+        // If a portable key set was unlocked at restore time, it was re-encrypted
+        // for THIS machine and staged; move it in AFTER extraction so it wins over
+        // the (machine-A, un-decryptable) wicked-keys.json inside the backup.
+        const restoredKeys = join(userData, RESTORED_KEYS_STAGE)
+        if (existsSync(restoredKeys)) {
+          renameSync(restoredKeys, join(userData, 'wicked-keys.json'))
+          console.log('[wicked] applied portable API keys from backup')
+        }
         console.log(`[wicked] applied pending restore: ${n} file(s) from backup`)
       } else {
         console.error('[wicked] pending restore marker found but staged backup was missing/invalid')
@@ -179,6 +216,7 @@ export function applyPendingRestore(userData: string): void {
       // Always clear staging so a bad backup can't wedge every launch.
       rmSync(staged, { force: true })
       rmSync(marker, { force: true })
+      rmSync(join(userData, RESTORED_KEYS_STAGE), { force: true })
     }
   } catch (err) {
     console.error('[wicked] applyPendingRestore failed (non-fatal):', err)

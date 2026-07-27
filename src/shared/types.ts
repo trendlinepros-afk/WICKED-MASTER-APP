@@ -127,6 +127,10 @@ export interface BackupResult {
   fileCount?: number
   /** true when a restore was staged and the app is about to relaunch */
   staged?: boolean
+  /** restore: the backup carries password-protected API keys and needs the password */
+  needPassword?: boolean
+  /** backup: whether encrypted API keys were included in the zip */
+  keysIncluded?: boolean
 }
 
 /**
@@ -186,8 +190,14 @@ export const SHELL_IPC = {
   backupNow: 'shell:backup-now',
   /** () => { ok, destination?, backups? } — pick the backup destination folder */
   backupPickDestination: 'shell:backup-pick-destination',
-  /** (file?: string) => BackupResult — restore from a backup, then relaunch */
-  backupRestore: 'shell:backup-restore'
+  /** (file?: string, password?: string) => BackupResult — restore, then relaunch */
+  backupRestore: 'shell:backup-restore',
+  /** () => { hasPassword } — is a backup password set (for portable API keys)? */
+  backupPasswordStatus: 'shell:backup-password-status',
+  /** (password: string) => { ok, error? } — set the backup password */
+  backupPasswordSet: 'shell:backup-password-set',
+  /** () => void — clear the backup password (keys stop being included) */
+  backupPasswordClear: 'shell:backup-password-clear'
 } as const
 
 /** A folder that may hold user data from a previous WICKED version. */
