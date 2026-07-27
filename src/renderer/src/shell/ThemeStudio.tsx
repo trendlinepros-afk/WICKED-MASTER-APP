@@ -6,6 +6,7 @@ import {
   hexToRgb,
   hsvToRgb,
   makeThemeId,
+  migrateTheme,
   normalizeHex,
   rgbToHex,
   rgbToHsv,
@@ -195,17 +196,18 @@ export default function ThemeStudio(): React.JSX.Element {
 
   const activeTheme = customThemes.find((t) => t.id === activeThemeId)
   const systemDark = matchMedia('(prefers-color-scheme: dark)').matches
-  const defaultDark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark)
+  const appDark = settings.theme === 'dark' || (settings.theme === 'system' && systemDark)
 
-  // the editing buffer — starts from the selected theme (or built-in palette)
-  const sourceOf = (t: CustomTheme | undefined): { base: 'light' | 'dark'; colors: ThemeColors } =>
+  // Each theme has BOTH palettes; the buffer holds both, and `editMode` decides
+  // which sub-palette the color fields edit + preview. Default (no custom theme)
+  // seeds from the built-in light/dark palettes.
+  const sourceOf = (t: CustomTheme | undefined): { light: ThemeColors; dark: ThemeColors } =>
     t
-      ? { base: t.base, colors: { ...t.colors } }
-      : defaultDark
-        ? { base: 'dark', colors: { ...DEFAULT_DARK } }
-        : { base: 'light', colors: { ...DEFAULT_LIGHT } }
+      ? { light: { ...migrateTheme(t).light }, dark: { ...migrateTheme(t).dark } }
+      : { light: { ...DEFAULT_LIGHT }, dark: { ...DEFAULT_DARK } }
 
   const [buffer, setBuffer] = useState(() => sourceOf(activeTheme))
+  const [editMode, setEditMode] = useState<'light' | 'dark'>(appDark ? 'dark' : 'light')
   const [openField, setOpenField] = useState('')
   const [saveAsOpen, setSaveAsOpen] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
@@ -214,29 +216,32 @@ export default function ThemeStudio(): React.JSX.Element {
 
   const source = sourceOf(activeTheme)
   const dirty = JSON.stringify(buffer) !== JSON.stringify(source)
+  const palette = buffer[editMode]
 
-  // re-seed the buffer when the selected theme (or the base default) changes
+  // re-seed the buffer when the selected theme changes
   useEffect(() => {
     setBuffer(sourceOf(activeTheme))
     setOpenField('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeThemeId, settings.theme, customThemes])
+  }, [activeThemeId, customThemes])
 
-  // live preview while dirty; restore the saved look when clean/unmounting
+  // Live-preview the sub-palette being edited, in its own light/dark mode, the
+  // whole time the studio is open (toggling Light/Dark shows that sub-theme);
+  // restore the saved look on unmount.
   useEffect(() => {
-    previewAppearance(dirty ? buffer : null)
+    previewAppearance({ mode: editMode, colors: buffer[editMode] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buffer, dirty])
+  }, [buffer, editMode])
   useEffect(() => () => previewAppearance(null), [])
 
   const setColor = (id: string, hex: string): void =>
-    setBuffer((b) => ({ ...b, colors: { ...b.colors, [id]: hex } }))
+    setBuffer((b) => ({ ...b, [editMode]: { ...b[editMode], [id]: hex } }))
 
   const save = async (): Promise<void> => {
     if (!activeTheme) return
     await update({
       customThemes: customThemes.map((t) =>
-        t.id === activeTheme.id ? { ...t, base: buffer.base, colors: buffer.colors } : t
+        t.id === activeTheme.id ? { id: t.id, name: t.name, light: buffer.light, dark: buffer.dark } : t
       )
     })
   }
@@ -247,8 +252,8 @@ export default function ThemeStudio(): React.JSX.Element {
     const theme: CustomTheme = {
       id: makeThemeId(name, customThemes.map((t) => t.id)),
       name,
-      base: buffer.base,
-      colors: buffer.colors
+      light: buffer.light,
+      dark: buffer.dark
     }
     await update({ customThemes: [...customThemes, theme], activeThemeId: theme.id })
     setSaveAsOpen(false)
@@ -271,11 +276,12 @@ export default function ThemeStudio(): React.JSX.Element {
 
   const duplicateTheme = async (t: CustomTheme): Promise<void> => {
     const name = `${t.name} copy`
+    const m = migrateTheme(t)
     const copy: CustomTheme = {
-      ...t,
       id: makeThemeId(name, customThemes.map((x) => x.id)),
       name,
-      colors: { ...t.colors }
+      light: { ...m.light },
+      dark: { ...m.dark }
     }
     await update({ customThemes: [...customThemes, copy] })
   }
@@ -320,13 +326,17 @@ export default function ThemeStudio(): React.JSX.Element {
             </span>
           )}
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="text-xs text-muted">Base</span>
+            <span className="text-xs text-muted">Editing</span>
             {(['light', 'dark'] as const).map((b) => (
               <button
                 key={b}
-                onClick={() => setBuffer((x) => ({ ...x, base: b }))}
+                onClick={() => {
+                  setEditMode(b)
+                  setOpenField('')
+                }}
+                title={`Edit the ${b} sub-theme (previews in ${b} mode)`}
                 className={`rounded-lg px-2.5 py-1 text-xs font-medium capitalize ${
-                  buffer.base === b ? 'bg-accent text-accent-ink' : 'bg-raised text-muted hover:text-ink'
+                  editMode === b ? 'bg-accent text-accent-ink' : 'bg-raised text-muted hover:text-ink'
                 }`}
               >
                 {b}
@@ -335,13 +345,19 @@ export default function ThemeStudio(): React.JSX.Element {
           </div>
         </div>
 
+        <div className="border-b border-edge/50 bg-raised/30 px-3 py-1.5 text-[11px] text-muted">
+          Editing the <strong className="text-ink capitalize">{editMode}</strong> sub-theme — these colors
+          apply when the app is in {editMode} mode. The {editMode === 'light' ? 'dark' : 'light'} colors are
+          separate; switch with the toggle above.
+        </div>
+
         <div>
           {THEME_TOKENS.map((tok) => (
             <ColorField
-              key={tok.id}
+              key={`${editMode}-${tok.id}`}
               label={tok.label}
               hint={tok.hint}
-              value={buffer.colors[tok.id]}
+              value={palette[tok.id]}
               open={openField === tok.id}
               onToggle={() => setOpenField((f) => (f === tok.id ? '' : tok.id))}
               onChange={(hex) => setColor(tok.id, hex)}
@@ -400,7 +416,7 @@ export default function ThemeStudio(): React.JSX.Element {
           >
             <Undo2 size={14} /> Reset
           </button>
-          <span className="ml-auto text-[11px] text-muted">Edits preview live — Save makes them stick.</span>
+          <span className="ml-auto text-[11px] text-muted">Light &amp; dark save together — Save makes them stick.</span>
         </div>
       </div>
 
@@ -424,12 +440,14 @@ export default function ThemeStudio(): React.JSX.Element {
                   No custom themes yet — tweak some colors below and hit <strong>Save As</strong>.
                 </p>
               )}
-              {customThemes.map((t) => (
+              {customThemes.map((t) => {
+                const mt = migrateTheme(t)
+                return (
                 <div key={t.id} className="flex items-center gap-2 border-b border-edge/50 px-4 py-2.5 last:border-b-0">
-                  <span className="flex shrink-0 -space-x-1">
-                    {(['bg', 'surface', 'accent', 'warn'] as const).map((k) => (
-                      <span key={k} className="h-5 w-5 rounded-full border border-edge" style={{ background: t.colors[k] }} />
-                    ))}
+                  <span className="flex shrink-0 -space-x-1" title="Light / dark accents">
+                    <span className="h-5 w-5 rounded-full border border-edge" style={{ background: mt.light.accent }} />
+                    <span className="h-5 w-5 rounded-full border border-edge" style={{ background: mt.dark.bg }} />
+                    <span className="h-5 w-5 rounded-full border border-edge" style={{ background: mt.dark.accent }} />
                   </span>
                   <input
                     defaultValue={t.name}
@@ -439,7 +457,7 @@ export default function ThemeStudio(): React.JSX.Element {
                     }}
                     className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-edge focus:border-accent"
                   />
-                  <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase text-muted">{t.base}</span>
+                  <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase text-muted">L+D</span>
                   {activeThemeId === t.id ? (
                     <span className="shrink-0 rounded bg-ok/15 px-2 py-1 text-xs font-medium text-ok">In use</span>
                   ) : (
@@ -474,7 +492,8 @@ export default function ThemeStudio(): React.JSX.Element {
                     </button>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>

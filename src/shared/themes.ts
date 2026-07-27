@@ -28,10 +28,39 @@ export type ThemeColors = Record<ThemeTokenId, string>
 export interface CustomTheme {
   id: string
   name: string
-  /** which built-in the theme falls back to for non-token styling */
-  base: 'light' | 'dark'
-  /** hex colors, e.g. "#7c3aed" */
-  colors: ThemeColors
+  /**
+   * A theme carries its OWN light and dark palettes. The app's Light/Dark/System
+   * toggle picks which one is shown — so Light and Dark are sub-themes of the
+   * same theme and editing one never bleeds into the other.
+   */
+  light: ThemeColors
+  dark: ThemeColors
+}
+
+/** Legacy single-palette theme shape (pre-0.1.28), migrated on read. */
+interface LegacyTheme {
+  id: string
+  name: string
+  base?: 'light' | 'dark'
+  colors?: Partial<ThemeColors>
+}
+
+/**
+ * Accept either the new two-palette theme or the legacy {base, colors} shape.
+ * A legacy theme's colors seed its declared base; the opposite mode starts from
+ * that built-in default so it's sane until the user edits it.
+ */
+export function migrateTheme(raw: CustomTheme | LegacyTheme): CustomTheme {
+  const t = raw as Partial<CustomTheme> & LegacyTheme
+  if (t.light && t.dark) return { id: t.id, name: t.name, light: t.light, dark: t.dark }
+  const base = t.base === 'dark' ? 'dark' : 'light'
+  const seeded = { ...(base === 'dark' ? DEFAULT_DARK : DEFAULT_LIGHT), ...(t.colors ?? {}) }
+  return {
+    id: t.id,
+    name: t.name,
+    light: base === 'light' ? seeded : { ...DEFAULT_LIGHT },
+    dark: base === 'dark' ? seeded : { ...DEFAULT_DARK }
+  }
 }
 
 /** Mirrors :root in index.css. */
@@ -141,27 +170,31 @@ export interface AppearanceSettingsSlice {
   activeThemeId: string
 }
 
+/** Build the --wk-* variable map from a single palette (with base fallback). */
+export function paletteToVars(colors: ThemeColors, dark: boolean): Record<string, string> {
+  const fallback = dark ? DEFAULT_DARK : DEFAULT_LIGHT
+  const vars: Record<string, string> = {}
+  for (const tok of THEME_TOKENS) {
+    const hex = colors?.[tok.id] ?? fallback[tok.id]
+    vars[`--wk-${tok.id}`] = hexToTriplet(hex) ?? hexToTriplet(fallback[tok.id])!
+  }
+  return vars
+}
+
 /**
- * What the window should look like right now: which base class, and (for a
- * custom theme) the full --wk-* variable map to inline on <html>. vars = null
- * means "use the stylesheet defaults" (built-in light/dark).
+ * What the window should look like right now. The Light/Dark/System toggle
+ * decides light vs dark; a custom theme then supplies the matching sub-palette
+ * (its .light or .dark). vars = null means "use the stylesheet defaults".
  */
 export function resolveAppearance(
   s: AppearanceSettingsSlice,
   systemPrefersDark: boolean
 ): { dark: boolean; vars: Record<string, string> | null } {
+  const dark = s.theme === 'dark' || (s.theme === 'system' && systemPrefersDark)
   const active = s.activeThemeId ? s.customThemes.find((t) => t.id === s.activeThemeId) : undefined
-  if (!active) {
-    const dark = s.theme === 'dark' || (s.theme === 'system' && systemPrefersDark)
-    return { dark, vars: null }
-  }
-  const fallback = active.base === 'dark' ? DEFAULT_DARK : DEFAULT_LIGHT
-  const vars: Record<string, string> = {}
-  for (const tok of THEME_TOKENS) {
-    const hex = active.colors?.[tok.id] ?? fallback[tok.id]
-    vars[`--wk-${tok.id}`] = hexToTriplet(hex) ?? hexToTriplet(fallback[tok.id])!
-  }
-  return { dark: active.base === 'dark', vars }
+  if (!active) return { dark, vars: null }
+  const theme = migrateTheme(active)
+  return { dark, vars: paletteToVars(dark ? theme.dark : theme.light, dark) }
 }
 
 /** kebab-case, collision-free id for a new theme. */

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { DEFAULT_SETTINGS, SHELL_IPC, type ShellSettings } from '@shared/types'
-import { resolveAppearance, type CustomTheme, type ThemeColors } from '@shared/themes'
+import { paletteToVars, resolveAppearance, type ThemeColors } from '@shared/themes'
 
 interface SettingsState {
   settings: ShellSettings
@@ -36,25 +36,22 @@ function applyAppearance(s: ShellSettings): void {
 }
 
 /**
- * Live-preview a candidate theme while editing (does NOT persist anything).
+ * Live-preview one palette in a chosen mode while editing (does NOT persist).
  * Call previewAppearance(null) — or any settings update — to fall back to the
- * saved appearance.
+ * saved appearance. `mode` also flips the app's light/dark class so the editor
+ * shows the sub-theme you're actually editing.
  */
-export function previewAppearance(candidate: { base: CustomTheme['base']; colors: ThemeColors } | null): void {
+export function previewAppearance(candidate: { mode: 'light' | 'dark'; colors: ThemeColors } | null): void {
   const { settings } = useSettings.getState()
   if (!candidate) {
     applyAppearance(settings)
     return
   }
-  const preview: ShellSettings = {
-    ...settings,
-    customThemes: [{ id: '__preview__', name: 'preview', base: candidate.base, colors: candidate.colors }],
-    activeThemeId: '__preview__'
-  }
+  const dark = candidate.mode === 'dark'
   const root = document.documentElement
-  const { dark, vars } = resolveAppearance(preview, matchMedia('(prefers-color-scheme: dark)').matches)
   root.classList.toggle('dark', dark)
-  if (vars) for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
+  const vars = paletteToVars(candidate.colors, dark)
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
 }
 
 export const useSettings = create<SettingsState>((set, get) => ({

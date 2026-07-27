@@ -642,8 +642,8 @@ export default function SettingsScreen(): React.JSX.Element {
         </div>
         {settings.activeThemeId && (
           <p className="mt-2 text-xs text-muted">
-            A custom theme is active — the Light/Dark/System toggle applies when you switch back to the
-            Default theme below.
+            A custom theme is active — the Light/Dark/System toggle above picks which of its sub-themes
+            (light or dark) is shown.
           </p>
         )}
         <ThemeStudio />
