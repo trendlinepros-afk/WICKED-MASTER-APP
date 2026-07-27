@@ -40,7 +40,7 @@ export default function ActivityBar(): React.JSX.Element {
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
 
   const all = orderedModules(order, overrides)
-  const entries = navEntries(settings)
+  const entries = navEntries(settings, { sidebar: true })
   const activeModuleId = location.pathname.startsWith('/m/')
     ? decodeURIComponent(location.pathname.slice(4))
     : ''

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, ExternalLink, FolderPlus, Pencil, SquareArrowOutUpRight } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, FolderPlus, Pencil, SquareArrowOutUpRight } from 'lucide-react'
 import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
@@ -62,6 +62,13 @@ export default function ModuleMenu(): React.JSX.Element | null {
     closeMenu()
   }
 
+  const navHidden = (settings.navHiddenModules ?? []).includes(id)
+  const toggleNavHidden = (): void => {
+    const list = settings.navHiddenModules ?? []
+    update({ navHiddenModules: navHidden ? list.filter((x) => x !== id) : [...list, id] })
+    closeMenu()
+  }
+
   const item =
     'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-ink hover:bg-raised'
 
@@ -94,6 +101,14 @@ export default function ModuleMenu(): React.JSX.Element | null {
       <button className={item} onClick={() => openEdit(id)}>
         <Pencil size={15} className="text-muted" />
         Edit name &amp; description
+      </button>
+      <button
+        className={item}
+        title={navHidden ? 'Show this tool in the left menu again' : 'Hide from the left menu — stays on the home screen'}
+        onClick={toggleNavHidden}
+      >
+        {navHidden ? <Eye size={15} className="text-muted" /> : <EyeOff size={15} className="text-muted" />}
+        {navHidden ? 'Un-Hide' : 'Hide'}
       </button>
 
       {/* Move to folder */}

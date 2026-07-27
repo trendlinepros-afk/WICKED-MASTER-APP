@@ -56,6 +56,8 @@ export interface ShellSettings {
   theme: 'light' | 'dark' | 'system'
   /** module ids the user has hidden from the nav */
   disabledModules: string[]
+  /** module ids hidden from the SIDEBAR only (still shown on the home screen) */
+  navHiddenModules: string[]
   update: {
     autoCheck: boolean
     /** hours between background checks */
@@ -89,6 +91,7 @@ export interface ShellSettings {
 export const DEFAULT_SETTINGS: ShellSettings = {
   theme: 'system',
   disabledModules: [],
+  navHiddenModules: [],
   update: { autoCheck: true, intervalHours: 4 },
   mcpEnabled: false,
   navExpanded: true,

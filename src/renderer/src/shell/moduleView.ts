@@ -54,7 +54,13 @@ export type NavEntry =
 /** Minimal settings slice the grouping helpers need. */
 export type GroupSettings = Pick<
   ShellSettings,
-  'moduleOrder' | 'moduleOverrides' | 'disabledModules' | 'customGroups' | 'moduleGroupOverrides' | 'groupOverrides'
+  | 'moduleOrder'
+  | 'moduleOverrides'
+  | 'disabledModules'
+  | 'navHiddenModules'
+  | 'customGroups'
+  | 'moduleGroupOverrides'
+  | 'groupOverrides'
 >
 
 /**
@@ -112,10 +118,14 @@ export function groupModules(groupId: string, s: GroupSettings): RegisteredModul
  * highest-ordered member (so drag-ordering keeps working). A shipped folder
  * with no visible members disappears; a user-created folder always shows (so a
  * freshly made, still-empty folder doesn't vanish).
+ *
+ * `sidebar: true` additionally drops modules the user hid from the left menu
+ * (navHiddenModules) — those still appear on the home screen.
  */
-export function navEntries(s: GroupSettings): NavEntry[] {
+export function navEntries(s: GroupSettings, opts: { sidebar?: boolean } = {}): NavEntry[] {
+  const navHidden = opts.sidebar ? (s.navHiddenModules ?? []) : []
   const visible = orderedModules(s.moduleOrder, s.moduleOverrides).filter(
-    (m) => !s.disabledModules.includes(m.manifest.id)
+    (m) => !s.disabledModules.includes(m.manifest.id) && !navHidden.includes(m.manifest.id)
   )
   const entries: NavEntry[] = []
   const seenGroups = new Set<string>()
