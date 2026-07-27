@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ExternalLink, Pencil, SquareArrowOutUpRight } from 'lucide-react'
+import { Check, ExternalLink, FolderPlus, Pencil, SquareArrowOutUpRight } from 'lucide-react'
 import { SHELL_IPC } from '@shared/types'
+import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
+import ModuleIcon from './ModuleIcon'
+import { allGroups, effectiveGroupId } from './moduleView'
+import { moduleById } from './registry'
 
 /**
  * Right-click menu for a module (shared by the sidebar and home cards).
@@ -12,6 +16,9 @@ export default function ModuleMenu(): React.JSX.Element | null {
   const menu = useShellUi((s) => s.menu)
   const closeMenu = useShellUi((s) => s.closeMenu)
   const openEdit = useShellUi((s) => s.openEdit)
+  const openFolderCreate = useShellUi((s) => s.openFolderCreate)
+  const settings = useSettings((s) => s.settings)
+  const update = useSettings((s) => s.update)
   const navigate = useNavigate()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x: 0, y: 0 })
@@ -46,6 +53,14 @@ export default function ModuleMenu(): React.JSX.Element | null {
 
   if (!menu) return null
   const id = menu.id
+  const mod = moduleById(id)
+  const folders = allGroups(settings)
+  const currentGroup = mod ? effectiveGroupId(mod, settings) : ''
+
+  const moveTo = (groupId: string): void => {
+    update({ moduleGroupOverrides: { ...settings.moduleGroupOverrides, [id]: groupId } })
+    closeMenu()
+  }
 
   const item =
     'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-ink hover:bg-raised'
@@ -79,6 +94,33 @@ export default function ModuleMenu(): React.JSX.Element | null {
       <button className={item} onClick={() => openEdit(id)}>
         <Pencil size={15} className="text-muted" />
         Edit name &amp; description
+      </button>
+
+      {/* Move to folder */}
+      <div className="my-1 h-px bg-edge" />
+      <div className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+        Move to folder
+      </div>
+      <div className="max-h-56 overflow-y-auto">
+        <button className={item} onClick={() => moveTo('')}>
+          <span className="w-[15px] shrink-0">
+            {currentGroup === '' && <Check size={13} className="text-accent" />}
+          </span>
+          No folder (top level)
+        </button>
+        {folders.map((g) => (
+          <button key={g.id} className={item} onClick={() => moveTo(g.id)}>
+            <span className="w-[15px] shrink-0">
+              {currentGroup === g.id && <Check size={13} className="text-accent" />}
+            </span>
+            <ModuleIcon name={g.icon} size={14} strokeWidth={1.8} className="shrink-0 text-muted" />
+            <span className="min-w-0 truncate">{g.name}</span>
+          </button>
+        ))}
+      </div>
+      <button className={item} onClick={() => openFolderCreate(id)}>
+        <FolderPlus size={15} className="text-accent" />
+        New folder…
       </button>
     </div>
   )

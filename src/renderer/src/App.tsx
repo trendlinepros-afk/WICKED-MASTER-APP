@@ -10,6 +10,7 @@ import {
 import { Loader2 } from 'lucide-react'
 import ActivityBar from './shell/ActivityBar'
 import AddNewApp from './shell/AddNewApp'
+import EditFolderModal from './shell/EditFolderModal'
 import EditModuleModal from './shell/EditModuleModal'
 import GroupView from './shell/GroupView'
 import Home from './shell/Home'
@@ -101,6 +102,7 @@ function AppRoutes(): React.JSX.Element {
       <UpdateToast />
       <ModuleMenu />
       <EditModuleModal />
+      <EditFolderModal />
     </>
   )
 }

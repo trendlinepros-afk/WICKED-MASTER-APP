@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Pencil } from 'lucide-react'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import ModuleIcon from './ModuleIcon'
@@ -13,18 +13,17 @@ import { groupById, groupModules, orderedModules, reorderIds } from './moduleVie
  */
 export default function GroupView(): React.JSX.Element {
   const { groupId = '' } = useParams()
-  const disabled = useSettings((s) => s.settings.disabledModules)
-  const order = useSettings((s) => s.settings.moduleOrder)
-  const overrides = useSettings((s) => s.settings.moduleOverrides)
+  const settings = useSettings((s) => s.settings)
+  const { moduleOrder: order, moduleOverrides: overrides } = settings
   const update = useSettings((s) => s.update)
   const navigate = useNavigate()
-  const { dragId, setDragId } = useShellUi()
+  const { dragId, setDragId, openFolderRename } = useShellUi()
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
-  const group = groupById(groupId)
+  const group = groupById(groupId, settings)
   if (!group) return <Navigate to="/" replace />
 
-  const members = groupModules(groupId, order, overrides, disabled)
+  const members = groupModules(groupId, settings)
 
   // Reordering uses the global module order (group membership comes from the
   // manifest, not the order), so dropping a card only changes its position.
@@ -56,11 +55,20 @@ export default function GroupView(): React.JSX.Element {
           <ModuleIcon name={group.icon} size={24} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">{group.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="truncate text-2xl font-bold tracking-tight">{group.name}</h1>
+            <button
+              onClick={() => openFolderRename(group.id)}
+              title="Rename folder"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+            >
+              <Pencil size={14} />
+            </button>
+          </div>
           <p className="text-sm text-muted">
             {members.length === 0
-              ? 'No tools in this folder yet.'
-              : `${members.length} tool${members.length === 1 ? '' : 's'} · drag to reorder · right-click for options`}
+              ? 'No tools in this folder yet — drag one onto this folder on the home screen, or use a tool’s right-click menu.'
+              : `${members.length} tool${members.length === 1 ? '' : 's'} · drag to reorder · right-click to move or edit`}
           </p>
         </div>
       </div>

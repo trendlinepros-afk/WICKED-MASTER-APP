@@ -69,6 +69,15 @@ export interface ShellSettings {
   moduleOrder: string[]
   /** per-module display overrides set by the user (pencil-edit on home cards) */
   moduleOverrides: Record<string, { name?: string; description?: string }>
+  /** folders the user created on the home screen */
+  customGroups: ModuleGroup[]
+  /**
+   * User's folder assignment per module, overriding the manifest's `group`.
+   * '' means "explicitly no folder" (pulled out of its shipped folder).
+   */
+  moduleGroupOverrides: Record<string, string>
+  /** user renames / re-icons for any folder (shipped or custom), by group id */
+  groupOverrides: Record<string, { name?: string; icon?: string; description?: string }>
   /** whole-app backup preferences */
   backup: BackupSettings
 }
@@ -81,6 +90,9 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   navExpanded: true,
   moduleOrder: [],
   moduleOverrides: {},
+  customGroups: [],
+  moduleGroupOverrides: {},
+  groupOverrides: {},
   backup: {
     destination: '',
     schedule: { enabled: false, intervalHours: 24 },
@@ -118,6 +130,8 @@ export const API_PROVIDERS = [
   { id: 'openai', name: 'OpenAI (GPT, Whisper)', placeholder: 'sk-…' },
   { id: 'gemini', name: 'Google Gemini', placeholder: 'AIza…' },
   { id: 'deepseek', name: 'DeepSeek', placeholder: 'sk-…' },
+  { id: 'massive', name: 'Massive / Polygon (market data)', placeholder: '' },
+  { id: 'finnhub', name: 'Finnhub (news + earnings dates)', placeholder: '' },
   { id: 'opusclip', name: 'OpusClip — shorts (Automatic Editing)', placeholder: '' },
   { id: 's3-access', name: 'S3 access key (Automatic Editing uploads)', placeholder: '' },
   { id: 's3-secret', name: 'S3 secret key (Automatic Editing uploads)', placeholder: '' }

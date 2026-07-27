@@ -26,10 +26,8 @@ function rowClass(isActive: boolean, expanded: boolean): string {
 }
 
 export default function ActivityBar(): React.JSX.Element {
-  const disabled = useSettings((s) => s.settings.disabledModules)
-  const expanded = useSettings((s) => s.settings.navExpanded)
-  const order = useSettings((s) => s.settings.moduleOrder)
-  const overrides = useSettings((s) => s.settings.moduleOverrides)
+  const settings = useSettings((s) => s.settings)
+  const { disabledModules: disabled, navExpanded: expanded, moduleOrder: order, moduleOverrides: overrides } = settings
   const update = useSettings((s) => s.update)
   const checkForUpdates = useUpdates((s) => s.check)
   const updatePhase = useUpdates((s) => s.phase)
@@ -41,7 +39,7 @@ export default function ActivityBar(): React.JSX.Element {
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
 
   const all = orderedModules(order, overrides)
-  const entries = navEntries(order, overrides, disabled)
+  const entries = navEntries(settings)
   const activeModuleId = location.pathname.startsWith('/m/')
     ? decodeURIComponent(location.pathname.slice(4))
     : ''

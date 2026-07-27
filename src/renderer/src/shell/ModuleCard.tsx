@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Pencil } from 'lucide-react'
 import type { ShellSettings } from '@shared/types'
@@ -91,20 +92,48 @@ export function ModuleCard({
   )
 }
 
-/** A folder tile: opens /g/<id> and shows how many tools are inside. */
+/**
+ * A folder tile: opens /g/<id>, renames via the pencil, and accepts a dragged
+ * module card as "file this tool into the folder".
+ */
 export function GroupCard({
   group,
   count,
-  onOpen
+  onOpen,
+  onRename,
+  onDropModule
 }: {
   group: { id: string; name: string; icon: string; description?: string }
   count: number
   onOpen: () => void
+  onRename: () => void
+  onDropModule?: (moduleId: string) => void
 }): React.JSX.Element {
+  const { dragId, setDragId } = useShellUi()
+  const [over, setOver] = useState(false)
+  const canAccept = Boolean(dragId && onDropModule)
+
   return (
     <div
       onClick={onOpen}
-      className="group relative cursor-pointer rounded-xl border border-edge bg-surface p-5 transition-colors hover:border-accent/60"
+      onDragOver={(e) => {
+        if (!canAccept) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        setOver(true)
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        if (!canAccept) return
+        e.preventDefault()
+        e.stopPropagation()
+        setOver(false)
+        if (dragId) onDropModule?.(dragId)
+        setDragId(null)
+      }}
+      className={`group relative cursor-pointer rounded-xl border bg-surface p-5 transition-colors ${
+        over ? 'border-accent ring-2 ring-accent/40' : 'border-edge hover:border-accent/60'
+      }`}
     >
       <div className="flex items-center gap-3">
         <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/15 text-accent">
@@ -118,8 +147,21 @@ export function GroupCard({
         </div>
       </div>
       <p className="mt-3 line-clamp-2 text-sm text-muted">
-        {group.description ?? `Open the ${group.name} folder`}
+        {over
+          ? 'Drop to move it into this folder'
+          : (group.description ?? `Open the ${group.name} folder`)}
       </p>
+
+      <button
+        title="Rename folder"
+        onClick={(e) => {
+          e.stopPropagation()
+          onRename()
+        }}
+        className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-raised hover:text-ink group-hover:opacity-100"
+      >
+        <Pencil size={14} />
+      </button>
     </div>
   )
 }
