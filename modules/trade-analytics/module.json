@@ -4,7 +4,7 @@
   "icon": "CandlestickChart",
   "version": "1.0.0",
   "description": "Import Webull order records → analytics dashboard: P&L, win rate, open positions, charts and AI coaching",
-  "status": "beta",
+  "status": "stable",
   "group": {
     "id": "stocks",
     "name": "Stocks",

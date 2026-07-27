@@ -4,7 +4,7 @@
   "icon": "ScanSearch",
   "version": "1.0.0",
   "description": "Post-trade analysis: fills on a 1-minute chart with round-trip P&L, and an AI coach graded against your swing strategy",
-  "status": "beta",
+  "status": "stable",
   "group": {
     "id": "stocks",
     "name": "Stocks",

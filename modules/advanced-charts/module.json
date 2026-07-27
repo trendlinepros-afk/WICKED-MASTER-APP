@@ -4,7 +4,7 @@
   "icon": "LineChart",
   "version": "1.0.0",
   "description": "Full TradingView charting workspace — drawings, indicators, saved layouts (bring your licensed charting_library)",
-  "status": "beta",
+  "status": "stable",
   "group": {
     "id": "stocks",
     "name": "Stocks",

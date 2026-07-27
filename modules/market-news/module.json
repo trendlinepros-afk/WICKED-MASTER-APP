@@ -4,7 +4,7 @@
   "icon": "Newspaper",
   "version": "1.0.0",
   "description": "Market-wide headlines (Finnhub general news), refreshed on the 6 AM ET news day",
-  "status": "beta",
+  "status": "stable",
   "group": {
     "id": "stocks",
     "name": "Stocks",
