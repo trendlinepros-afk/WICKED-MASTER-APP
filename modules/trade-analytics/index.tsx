@@ -4,6 +4,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
+  CalendarDays,
   CandlestickChart,
   Clock,
   Download,
@@ -25,7 +26,7 @@ import { ID, useTrades, type Tab } from './store'
 import type { Trade } from './lib/analytics'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
-import { AccountsBar, BreakdownTab, ImportModal, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
+import { AccountsBar, BreakdownTab, CalendarTab, ImportModal, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -368,6 +369,7 @@ function AiTab(): React.JSX.Element {
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'overview', label: 'Overview', icon: <BarChart3 size={14} /> },
+  { id: 'calendar', label: 'Calendar', icon: <CalendarDays size={14} /> },
   { id: 'stats', label: 'Stats', icon: <Grid3x3 size={14} /> },
   { id: 'breakdown', label: 'Breakdown', icon: <LayoutGrid size={14} /> },
   { id: 'trades', label: 'Trades', icon: <CandlestickChart size={14} /> },
@@ -532,6 +534,7 @@ export default function TradeAnalytics(): React.JSX.Element {
         ) : (
           <>
             {s.tab === 'overview' && <OverviewTab />}
+            {s.tab === 'calendar' && <CalendarTab />}
             {s.tab === 'stats' && <StatsTab />}
             {s.tab === 'breakdown' && <BreakdownTab />}
             {s.tab === 'trades' && <TradesTab />}

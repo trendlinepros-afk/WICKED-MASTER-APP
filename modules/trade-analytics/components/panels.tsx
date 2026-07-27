@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   FolderOpen,
   Layers,
   Loader2,
@@ -435,6 +437,13 @@ export function StatsTab(): React.JSX.Element {
         <StatCell label="Avg winning %" value={pct(m.avgWinningPct)} tone="ok" />
         <StatCell label="Avg losing %" value={pct(m.avgLosingPct)} tone="danger" />
       </StatGroup>
+
+      <StatGroup title="Risk & consistency">
+        <StatCell label="Max drawdown" value={sm(m.maxDrawdown)} tone="danger" sub={`${m.maxDrawdownPct.toFixed(1)}% from peak`} />
+        <StatCell label="Longest underwater" value={`${num(m.longestDrawdownDays)} day(s)`} sub="consecutive below peak" />
+        <StatCell label="Daily P&L std-dev" value={money(m.dailyStdev)} sub="lower = steadier" />
+        <StatCell label="Avg / day" value={sm(m.avgPerDay.pnl)} tone={t(m.avgPerDay.pnl)} sub={`over ${num(m.tradingDays)} day(s)`} />
+      </StatGroup>
     </div>
   )
 }
@@ -518,6 +527,17 @@ export function BreakdownTab(): React.JSX.Element {
         <StatCell label="Best duration band" value={m.durationHi.best ? signedMoney(m.durationHi.best.pnl) : '—'} tone="ok" sub={m.durationHi.best?.label} />
       </div>
 
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-edge bg-surface p-4">
+          <h3 className="mb-3 text-sm font-semibold">P&L distribution (per trade)</h3>
+          <DistributionChart buckets={m.pnlDistribution} />
+        </div>
+        <div className="rounded-xl border border-edge bg-surface p-4">
+          <h3 className="mb-3 text-sm font-semibold">Weekday × hour heatmap (ET close time)</h3>
+          <HeatmapCard pnl={m.weekdayHourPnl} n={m.weekdayHourN} />
+        </div>
+      </div>
+
       <ChartCard title="P&L vs price range" m={m} buckets={m.byPriceRange} hi={m.priceHi} />
       <ChartCard title="P&L vs volume (share size)" m={m} buckets={m.byVolumeRange} hi={m.volumeHi} />
       <ChartCard title="P&L vs time of day (ET)" m={m} buckets={m.byTimeOfDay} hi={m.timeHi} />
@@ -537,6 +557,211 @@ export function BreakdownTab(): React.JSX.Element {
       <div className="rounded-xl border border-edge bg-surface p-4">
         <h3 className="mb-3 text-sm font-semibold">Daily drawdown (peak-to-trough of cumulative P&L)</h3>
         <DrawdownArea points={m.drawdown} />
+      </div>
+    </div>
+  )
+}
+
+/* =========================== distribution chart ======================= */
+
+/** Count-of-trades columns across P&L buckets; loss side red, profit side green. */
+function DistributionChart({ buckets }: { buckets: MetricBucket[] }): React.JSX.Element {
+  const withData = buckets.some((b) => b.trades > 0)
+  if (!withData) return <div className="flex h-32 items-center justify-center text-sm text-muted">No closed trades.</div>
+  const maxN = Math.max(1, ...buckets.map((b) => b.trades))
+  const isLoss = (label: string): boolean => label.startsWith('-') || label.startsWith('≤')
+  return (
+    <div className="w-full overflow-x-auto">
+      <div className="flex min-w-full items-end gap-1" style={{ height: 180 }}>
+        {buckets.map((b) => (
+          <div key={b.label} className="group flex min-w-[28px] flex-1 flex-col items-center justify-end gap-1" title={`${b.label}: ${b.trades} trade(s)`}>
+            <span className="text-[9px] tabular-nums text-muted opacity-0 group-hover:opacity-100">{b.trades || ''}</span>
+            <div className="flex h-full w-full items-end justify-center">
+              <div
+                className="w-full rounded-t"
+                style={{ height: `${(b.trades / maxN) * 100}%`, background: isLoss(b.label) ? 'rgb(var(--wk-danger))' : 'rgb(var(--wk-ok))', opacity: 0.85, minHeight: b.trades ? 2 : 0 }}
+              />
+            </div>
+            <div className="h-9 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{b.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ============================== heatmap =============================== */
+
+const HEAT_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function HeatmapCard({ pnl, n }: { pnl: number[][]; n: number[][] }): React.JSX.Element {
+  // only show hours that saw any activity, to keep the grid compact
+  const activeHours: number[] = []
+  for (let h = 0; h < 24; h++) {
+    let any = 0
+    for (let d = 0; d < 7; d++) any += n[d]?.[h] ?? 0
+    if (any > 0) activeHours.push(h)
+  }
+  if (activeHours.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No closed trades.</div>
+  let maxAbs = 1
+  for (let d = 0; d < 7; d++) for (const h of activeHours) maxAbs = Math.max(maxAbs, Math.abs(pnl[d]?.[h] ?? 0))
+  const cell = (d: number, h: number): React.JSX.Element => {
+    const v = pnl[d]?.[h] ?? 0
+    const c = n[d]?.[h] ?? 0
+    const intensity = c === 0 ? 0 : Math.max(0.12, Math.abs(v) / maxAbs)
+    const bg = c === 0 ? 'transparent' : `rgb(var(--wk-${v >= 0 ? 'ok' : 'danger'}) / ${intensity.toFixed(2)})`
+    return (
+      <td key={h} className="p-0.5">
+        <div
+          className="h-6 w-full rounded"
+          style={{ background: bg, border: c === 0 ? '1px solid rgb(var(--wk-edge)/0.4)' : 'none' }}
+          title={c === 0 ? `${HEAT_DOW[d]} ${h}:00 — no trades` : `${HEAT_DOW[d]} ${h}:00 — ${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(0)} · ${c} trade(s)`}
+        />
+      </td>
+    )
+  }
+  return (
+    <div className="w-full overflow-x-auto">
+      <table className="w-full border-separate" style={{ borderSpacing: 0 }}>
+        <thead>
+          <tr>
+            <th className="w-8" />
+            {activeHours.map((h) => (
+              <th key={h} className="text-[9px] font-normal text-muted">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[1, 2, 3, 4, 5, 0, 6].map((d) => (
+            <tr key={d}>
+              <td className="pr-1 text-right text-[10px] text-muted">{HEAT_DOW[d]}</td>
+              {activeHours.map((h) => cell(d, h))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1.5 text-[10px] text-muted">Green = net profit, red = net loss; deeper = larger. Hour is ET close time.</p>
+    </div>
+  )
+}
+
+/* ============================== calendar ============================= */
+
+export function CalendarTab(): React.JSX.Element {
+  const m = useTrades((s) => s.metrics)
+  const byDate = new Map((m?.daily ?? []).map((d) => [d.date, d]))
+  // default to the latest trading month (or the current month if none)
+  const latest = m?.daily.length ? m.daily[m.daily.length - 1].date : ''
+  const [ym, setYm] = useState(() => {
+    if (latest) {
+      const [y, mo] = latest.split('-').map(Number)
+      return { y, m: mo }
+    }
+    const now = new Date()
+    return { y: now.getFullYear(), m: now.getMonth() + 1 }
+  })
+
+  if (!m || m.closedTrades === 0) return <div className="p-8 text-sm text-muted">No closed trades yet.</div>
+
+  const key = (d: number): string => `${ym.y}-${String(ym.m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  const daysInMonth = new Date(Date.UTC(ym.y, ym.m, 0)).getUTCDate()
+  const firstDow = new Date(Date.UTC(ym.y, ym.m - 1, 1)).getUTCDay()
+  const monthName = new Date(Date.UTC(ym.y, ym.m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+
+  // month summary
+  let monthPnl = 0
+  let monthTrades = 0
+  let greenDays = 0
+  let redDays = 0
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = byDate.get(key(d))
+    if (!cell) continue
+    monthPnl += cell.pnl
+    monthTrades += cell.trades
+    if (cell.pnl > 0) greenDays++
+    else if (cell.pnl < 0) redDays++
+  }
+
+  const shift = (delta: number): void => {
+    let y = ym.y
+    let mo = ym.m + delta
+    if (mo < 1) {
+      mo = 12
+      y--
+    } else if (mo > 12) {
+      mo = 1
+      y++
+    }
+    setYm({ y, m: mo })
+  }
+
+  // build week rows (each 7 cells; leading blanks before firstDow)
+  const cells: (number | null)[] = []
+  for (let i = 0; i < firstDow; i++) cells.push(null)
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+  while (cells.length % 7 !== 0) cells.push(null)
+  const weeks: (number | null)[][] = []
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => shift(-1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised">
+            <ChevronLeft size={16} />
+          </button>
+          <h2 className="min-w-[160px] text-center text-base font-bold">{monthName}</h2>
+          <button onClick={() => shift(1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised">
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <span>
+            Month P&L <b className={pos(monthPnl)}>{signedMoney(monthPnl)}</b>
+          </span>
+          <span className="text-muted">{num(monthTrades)} trades</span>
+          <span className="text-ok">{greenDays} green</span>
+          <span className="text-danger">{redDays} red</span>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-edge bg-surface">
+        <div className="grid grid-cols-7 border-b border-edge bg-raised/40 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+            <div key={d} className="py-1.5">{d}</div>
+          ))}
+        </div>
+        <div>
+          {weeks.map((week, wi) => {
+            let weekPnl = 0
+            for (const d of week) {
+              const c = d ? byDate.get(key(d)) : undefined
+              if (c) weekPnl += c.pnl
+            }
+            return (
+              <div key={wi} className="grid grid-cols-[repeat(7,1fr)] border-b border-edge/50 last:border-b-0">
+                {week.map((d, di) => {
+                  const c = d ? byDate.get(key(d)) : undefined
+                  return (
+                    <div
+                      key={di}
+                      className="relative min-h-[74px] border-r border-edge/40 p-1.5 last:border-r-0"
+                      style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${Math.min(0.22, 0.06 + Math.abs(c.pnl) / 3000).toFixed(2)})` : 'transparent' }}
+                    >
+                      {d && <div className="text-[11px] font-medium text-muted">{d}</div>}
+                      {c && (
+                        <div className="mt-1">
+                          <div className={`text-[13px] font-bold tabular-nums ${pos(c.pnl)}`}>{signedMoney(c.pnl)}</div>
+                          <div className="text-[10px] text-muted">{c.trades} trade{c.trades === 1 ? '' : 's'}</div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

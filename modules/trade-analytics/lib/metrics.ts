@@ -274,9 +274,34 @@ export interface TradeMetrics {
   powerHour: MetricBucket // 15:00–16:00 ET
   // drawdown curve (daily)
   drawdown: { date: string; value: number }[]
+  // scalar drawdown / consistency (competitor-journal staples)
+  maxDrawdown: number // most-negative $ from a running peak (≤ 0)
+  maxDrawdownPct: number // that trough as % of the peak it fell from (≤ 0)
+  longestDrawdownDays: number // longest run of consecutive days under water
+  dailyStdev: number // std-dev of daily P&L (consistency)
+  // per-day P&L for the calendar heatmap
+  daily: { date: string; pnl: number; trades: number; wins: number; losses: number }[]
+  // per-trade P&L histogram
+  pnlDistribution: MetricBucket[]
+  // weekday × hour P&L heatmap ([dow 0-6][hour 0-23])
+  weekdayHourPnl: number[][]
+  weekdayHourN: number[][]
   // P&L by market sector (populated only when a sector map is supplied)
   bySector: MetricBucket[]
 }
+
+const PNL_RANGES: Range[] = [
+  { label: '≤ -500', min: -Infinity, max: -500 },
+  { label: '-500 to -200', min: -500, max: -200 },
+  { label: '-200 to -100', min: -200, max: -100 },
+  { label: '-100 to -50', min: -100, max: -50 },
+  { label: '-50 to 0', min: -50, max: 0 },
+  { label: '0 to 50', min: 0, max: 50 },
+  { label: '50 to 100', min: 50, max: 100 },
+  { label: '100 to 200', min: 100, max: 200 },
+  { label: '200 to 500', min: 200, max: 500 },
+  { label: '500 +', min: 500, max: Infinity }
+]
 
 /** Half-open [start,end) minute-of-day windows for time-of-day buckets (30m). */
 function timeOfDayLabel(hour: number, minute: number): string {
@@ -303,8 +328,11 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
   let winning = 0
 
   const dayPnl = new Map<string, number>()
+  const dayMap = new Map<string, MetricBucket>() // richer per-day (for the calendar)
   const monthKeys = new Set<string>()
   const yearKeys = new Set<string>()
+  const weekdayHourPnl = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
+  const weekdayHourN = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
 
   const timeBuckets = new Map<string, MetricBucket>()
   const dow = DOW_LABEL.map((l) => emptyBucket(l))
@@ -331,6 +359,11 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
 
     const p = etParts(t.closedAt as number)
     dayPnl.set(p.ymd, (dayPnl.get(p.ymd) ?? 0) + pnl)
+    const db = dayMap.get(p.ymd) ?? emptyBucket(p.ymd)
+    addToBucket(db, t)
+    dayMap.set(p.ymd, db)
+    weekdayHourPnl[p.dow][p.hour] += pnl
+    weekdayHourN[p.dow][p.hour] += 1
     monthKeys.add(`${p.y}-${p.m}`)
     yearKeys.add(String(p.y))
 
@@ -398,15 +431,37 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     addToBucket(assetStock, t) // Webull equity export = stock
   }
 
-  // drawdown from daily cumulative equity
+  // drawdown from daily cumulative equity (+ scalar max drawdown / underwater run)
   const orderedDays = [...dayPnl.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
   let cum = 0
   let peak = 0
+  let maxDrawdown = 0
+  let maxDrawdownPct = 0
+  let underwater = 0
+  let longestDrawdownDays = 0
   const drawdown = orderedDays.map(([date, v]) => {
     cum += v
     peak = Math.max(peak, cum)
-    return { date, value: cum - peak }
+    const dd = cum - peak
+    if (dd < maxDrawdown) maxDrawdown = dd
+    if (peak > 0) maxDrawdownPct = Math.min(maxDrawdownPct, (dd / peak) * 100)
+    if (dd < -1e-9) {
+      underwater += 1
+      longestDrawdownDays = Math.max(longestDrawdownDays, underwater)
+    } else underwater = 0
+    return { date, value: dd }
   })
+
+  // per-day P&L (calendar), P&L histogram, and daily-P&L std-dev (consistency)
+  const daily = [...dayMap.values()]
+    .sort((a, b) => (a.label < b.label ? -1 : 1))
+    .map((b) => ({ date: b.label, pnl: b.pnl, trades: b.trades, wins: b.wins, losses: b.losses }))
+  const pnlDistribution = bucketByRange(closed, PNL_RANGES, (t) => t.realizedPnl)
+  const dayVals = [...dayPnl.values()]
+  const dayMean = dayVals.length ? dayVals.reduce((n, v) => n + v, 0) / dayVals.length : 0
+  const dailyStdev = dayVals.length
+    ? Math.sqrt(dayVals.reduce((n, v) => n + (v - dayMean) ** 2, 0) / dayVals.length)
+    : 0
 
   return {
     totalPnl,
@@ -456,6 +511,14 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     marketOpen,
     powerHour,
     drawdown,
+    maxDrawdown,
+    maxDrawdownPct,
+    longestDrawdownDays,
+    dailyStdev,
+    daily,
+    pnlDistribution,
+    weekdayHourPnl,
+    weekdayHourN,
     bySector: [...sectorMap.values()].sort((a, b) => b.pnl - a.pnl)
   }
 }

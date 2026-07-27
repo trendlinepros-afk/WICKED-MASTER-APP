@@ -6,7 +6,7 @@ import { duration, money, pct } from './lib/format'
 
 export const ID = 'trade-analytics'
 
-export type Tab = 'overview' | 'trades' | 'open' | 'symbols' | 'timing' | 'stats' | 'breakdown' | 'ai'
+export type Tab = 'overview' | 'calendar' | 'trades' | 'open' | 'symbols' | 'timing' | 'stats' | 'breakdown' | 'ai'
 
 export interface Account {
   id: string
