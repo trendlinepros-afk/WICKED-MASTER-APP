@@ -44,6 +44,31 @@ not forgotten.
 | `version` | Version of the module (usually carried over from the standalone app). |
 | `status` | `stable`, `beta` (yellow dot in nav), or `external` (wraps an external exe). |
 | `external` | Only for `status: "external"`: `{ "program": "...", "elevated": true }`. |
+| `group` | Optional nav **folder** this module is filed under (see below). |
+
+### Groups (nav folders)
+
+Related modules can be filed into a folder that shows as ONE nav row / home card
+and opens a folder screen at `/g/<group id>` listing its members. Each member
+keeps its own `/m/<id>` route and works exactly as before.
+
+```json
+"group": {
+  "id": "stocks",
+  "name": "Stocks",
+  "icon": "TrendingUp",
+  "description": "Stock trading tools — journal, analytics and research"
+}
+```
+
+- The group is declared **inline by each member**, so adding a module to a folder
+  still needs zero shell changes. The shell de-duplicates by `group.id`
+  (first declaration wins for name/icon/description) — keep the block identical
+  across members of a group.
+- A folder takes the nav position of its highest-ordered member, so the user's
+  drag ordering keeps working; members can be reordered inside the folder view.
+- A folder whose every member is hidden (Settings → Modules) disappears.
+- Omit `group` entirely for a top-level module.
 
 ## index.tsx
 

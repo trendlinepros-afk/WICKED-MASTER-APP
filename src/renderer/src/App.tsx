@@ -11,6 +11,7 @@ import { Loader2 } from 'lucide-react'
 import ActivityBar from './shell/ActivityBar'
 import AddNewApp from './shell/AddNewApp'
 import EditModuleModal from './shell/EditModuleModal'
+import GroupView from './shell/GroupView'
 import Home from './shell/Home'
 import ModuleBoundary from './shell/ModuleBoundary'
 import ModuleMenu from './shell/ModuleMenu'
@@ -88,6 +89,7 @@ function AppRoutes(): React.JSX.Element {
         <main className="min-w-0 flex-1 bg-bg">
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/g/:groupId" element={<GroupView />} />
             <Route path="/m/:id" element={<ModuleHost />} />
             <Route path="/add-app" element={<AddNewApp />} />
             <Route path="/settings" element={<SettingsScreen />} />

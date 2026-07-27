@@ -21,7 +21,7 @@ export interface FileRole {
 }
 
 export const MODULE_FILE_ROLES: FileRole[] = [
-  { file: 'module.json', role: 'Manifest/metadata: id, name, lucide icon, version, description, status (stable/beta/external).' },
+  { file: 'module.json', role: 'Manifest/metadata: id, name, lucide icon, version, description, status (stable/beta/external), and an optional `group` (nav folder).' },
   { file: 'index.tsx', role: 'Default-export React component. Renders inside the shell (theme already applied). Owns its own scrolling; no BrowserWindow/menus/global shortcuts.' },
   { file: 'mcp.ts', role: 'REQUIRED. Default-export register(ctx) returning MCP tool definitions so AI agents can call the module. Tools delegate to the same IPC channels the UI uses.' },
   { file: 'ipc.ts', role: 'Main-process handlers, auto-registered at startup. Every channel namespaced <module-id>:<action>. Required if the module does any main-process work.' },
@@ -80,6 +80,20 @@ ${MODULE_RULES.map((r) => `- ${r}`).join('\n')}
   "description": "<one line>",
   "status": "stable"
 }
+
+To file the module into a nav FOLDER (one nav row / home card that opens
+/g/<group id> listing its members), add an optional group block — declared
+inline by every member of the folder, identical across them (the shell
+de-duplicates by group.id):
+
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools"
+  }
+
+Omit "group" for a top-level module.
 
 ## index.tsx shape
 

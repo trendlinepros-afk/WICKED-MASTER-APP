@@ -1,0 +1,125 @@
+import { useNavigate } from 'react-router-dom'
+import { Pencil } from 'lucide-react'
+import type { ShellSettings } from '@shared/types'
+import { useShellUi } from '@/stores/shellUi'
+import ModuleIcon from './ModuleIcon'
+import type { RegisteredModule } from './registry'
+import { effectiveDescription, effectiveName } from './moduleView'
+
+/**
+ * One module tile — used by both the Home grid and a group ("folder") view, so
+ * the two can never drift apart. Drag-to-reorder, right-click menu and the
+ * inline edit pencil all live here.
+ */
+export function ModuleCard({
+  m,
+  overrides,
+  dropTarget,
+  setDropTarget,
+  commitReorder
+}: {
+  m: RegisteredModule
+  overrides: ShellSettings['moduleOverrides']
+  dropTarget: string | null
+  setDropTarget: (fn: (t: string | null) => string | null) => void
+  commitReorder: (targetId: string) => void
+}): React.JSX.Element {
+  const navigate = useNavigate()
+  const { openMenu, openEdit, dragId, setDragId } = useShellUi()
+  const { manifest } = m
+  const id = manifest.id
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        setDragId(id)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        if (dragId && dragId !== id) setDropTarget(() => id)
+      }}
+      onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
+      onDrop={(e) => {
+        e.preventDefault()
+        commitReorder(id)
+      }}
+      onDragEnd={() => {
+        setDragId(null)
+        setDropTarget(() => null)
+      }}
+      onClick={() => navigate(`/m/${id}`)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        openMenu(id, e.clientX, e.clientY)
+      }}
+      className={`group relative cursor-pointer rounded-xl border bg-surface p-5 transition-colors hover:border-accent/60 ${
+        dropTarget === id ? 'border-accent' : 'border-edge'
+      } ${dragId === id ? 'opacity-40' : ''}`}
+    >
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-raised text-accent">
+          <ModuleIcon name={manifest.icon} size={20} strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 truncate font-semibold">
+            {effectiveName(m, overrides)}
+            {manifest.status === 'beta' && (
+              <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
+                Beta
+              </span>
+            )}
+          </div>
+          <div className="truncate text-xs text-muted">v{manifest.version}</div>
+        </div>
+      </div>
+      <p className="mt-3 line-clamp-2 text-sm text-muted">{effectiveDescription(m, overrides)}</p>
+
+      {/* pencil — edit name & description */}
+      <button
+        title="Edit name & description"
+        onClick={(e) => {
+          e.stopPropagation()
+          openEdit(id)
+        }}
+        className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-raised hover:text-ink group-hover:opacity-100"
+      >
+        <Pencil size={14} />
+      </button>
+    </div>
+  )
+}
+
+/** A folder tile: opens /g/<id> and shows how many tools are inside. */
+export function GroupCard({
+  group,
+  count,
+  onOpen
+}: {
+  group: { id: string; name: string; icon: string; description?: string }
+  count: number
+  onOpen: () => void
+}): React.JSX.Element {
+  return (
+    <div
+      onClick={onOpen}
+      className="group relative cursor-pointer rounded-xl border border-edge bg-surface p-5 transition-colors hover:border-accent/60"
+    >
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/15 text-accent">
+          <ModuleIcon name={group.icon} size={20} strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{group.name}</div>
+          <div className="truncate text-xs text-muted">
+            Folder · {count} tool{count === 1 ? '' : 's'}
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 line-clamp-2 text-sm text-muted">
+        {group.description ?? `Open the ${group.name} folder`}
+      </p>
+    </div>
+  )
+}

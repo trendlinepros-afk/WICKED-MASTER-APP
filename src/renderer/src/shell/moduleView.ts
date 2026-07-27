@@ -1,4 +1,4 @@
-import type { ShellSettings } from '@shared/types'
+import type { ModuleGroup, ShellSettings } from '@shared/types'
 import { modules, type RegisteredModule } from './registry'
 
 type Overrides = ShellSettings['moduleOverrides']
@@ -26,6 +26,68 @@ export function orderedModules(order: string[], overrides: Overrides): Registere
     if (ai !== bi) return ai - bi
     return effectiveName(a, overrides).localeCompare(effectiveName(b, overrides))
   })
+}
+
+/* ------------------------------- grouping -------------------------------- *
+ * Modules may declare a `group` in their manifest ("folders"). The nav and home
+ * screen then show ONE entry for the folder, which opens /g/<groupId> listing
+ * its members; each member keeps its own /m/<id> route.
+ * ------------------------------------------------------------------------- */
+
+/** One row in the nav / home grid: a lone module, or a folder of modules. */
+export type NavEntry =
+  | { kind: 'module'; module: RegisteredModule }
+  | { kind: 'group'; group: ModuleGroup; modules: RegisteredModule[] }
+
+/** The group declared by any module with this id (first declaration wins). */
+export function groupById(id: string): ModuleGroup | undefined {
+  for (const m of modules) if (m.manifest.group?.id === id) return m.manifest.group
+  return undefined
+}
+
+/** Visible members of a group, in the user's order. */
+export function groupModules(
+  groupId: string,
+  order: string[],
+  overrides: Overrides,
+  disabled: string[] = []
+): RegisteredModule[] {
+  return orderedModules(order, overrides).filter(
+    (m) => m.manifest.group?.id === groupId && !disabled.includes(m.manifest.id)
+  )
+}
+
+/**
+ * Collapse the ordered module list into nav entries: a module that declares a
+ * group is folded into that group's single entry, which takes the position of
+ * its highest-ordered member (so drag-ordering keeps working). Groups whose
+ * every member is hidden disappear entirely.
+ */
+export function navEntries(
+  order: string[],
+  overrides: Overrides,
+  disabled: string[]
+): NavEntry[] {
+  const visible = orderedModules(order, overrides).filter(
+    (m) => !disabled.includes(m.manifest.id)
+  )
+  const entries: NavEntry[] = []
+  const seenGroups = new Set<string>()
+  for (const m of visible) {
+    const g = m.manifest.group
+    if (!g) {
+      entries.push({ kind: 'module', module: m })
+      continue
+    }
+    if (seenGroups.has(g.id)) continue // already emitted at its first member
+    seenGroups.add(g.id)
+    entries.push({
+      kind: 'group',
+      group: g,
+      modules: visible.filter((x) => x.manifest.group?.id === g.id)
+    })
+  }
+  return entries
 }
 
 /** Move `draggedId` to sit immediately before `targetId` in the id list. */

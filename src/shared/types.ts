@@ -1,3 +1,20 @@
+/**
+ * A nav "folder" that related modules are filed under. Declared inline by each
+ * member module (so adding a module to a group still needs zero shell changes);
+ * the shell de-duplicates by `id`. Members are reachable at /g/<group id> and
+ * still keep their own /m/<module id> route.
+ */
+export interface ModuleGroup {
+  /** kebab-case unique id; doubles as the folder route (/g/<id>) */
+  id: string
+  /** folder name shown in the nav and on the home card */
+  name: string
+  /** lucide-react icon name (PascalCase, e.g. "TrendingUp") */
+  icon: string
+  /** one-line description for the folder's home card */
+  description?: string
+}
+
 /** Manifest shape for /modules/<id>/module.json */
 export interface ModuleManifest {
   /** kebab-case unique id; doubles as the route path and IPC namespace */
@@ -9,6 +26,8 @@ export interface ModuleManifest {
   version: string
   description: string
   status: 'stable' | 'beta' | 'external'
+  /** optional nav folder this module is filed under */
+  group?: ModuleGroup
   /** modules that shell out to an external exe rather than render a full UI */
   external?: {
     /** human-readable name of the wrapped program */

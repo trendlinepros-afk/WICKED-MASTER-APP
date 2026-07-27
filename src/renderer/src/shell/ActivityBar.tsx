@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import {
+  ChevronDown,
+  ChevronRight,
   DownloadCloud,
   Loader2,
   PackagePlus,
@@ -12,7 +14,7 @@ import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
 import ModuleIcon from './ModuleIcon'
-import { effectiveName, orderedModules, reorderIds } from './moduleView'
+import { effectiveName, navEntries, orderedModules, reorderIds } from './moduleView'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
 function rowClass(isActive: boolean, expanded: boolean): string {
@@ -34,9 +36,18 @@ export default function ActivityBar(): React.JSX.Element {
   const checking = updatePhase === 'checking' || updatePhase === 'available'
   const { openMenu, dragId, setDragId } = useShellUi()
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const location = useLocation()
+  // folders the user has manually expanded (the active one auto-expands)
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
 
   const all = orderedModules(order, overrides)
-  const visible = all.filter((m) => !disabled.includes(m.manifest.id))
+  const entries = navEntries(order, overrides, disabled)
+  const activeModuleId = location.pathname.startsWith('/m/')
+    ? decodeURIComponent(location.pathname.slice(4))
+    : ''
+  const activeGroupId = location.pathname.startsWith('/g/')
+    ? decodeURIComponent(location.pathname.slice(4))
+    : ''
 
   const commitReorder = (targetId: string): void => {
     if (dragId && dragId !== targetId) {
@@ -44,6 +55,61 @@ export default function ActivityBar(): React.JSX.Element {
     }
     setDragId(null)
     setDropTarget(null)
+  }
+
+  /** One module row (used at top level and nested inside a folder). */
+  const moduleRow = (
+    m: (typeof all)[number],
+    opts: { nested?: boolean } = {}
+  ): React.JSX.Element => {
+    const { manifest } = m
+    const id = manifest.id
+    const name = effectiveName(m, overrides)
+    return (
+      <NavLink
+        key={id}
+        to={`/m/${id}`}
+        draggable
+        onDragStart={(e) => {
+          setDragId(id)
+          e.dataTransfer.effectAllowed = 'move'
+        }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          if (dragId && dragId !== id) setDropTarget(id)
+        }}
+        onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
+        onDrop={(e) => {
+          e.preventDefault()
+          commitReorder(id)
+        }}
+        onDragEnd={() => {
+          setDragId(null)
+          setDropTarget(null)
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          openMenu(id, e.clientX, e.clientY)
+        }}
+        title={expanded ? undefined : `${name}${manifest.status === 'beta' ? ' (Beta)' : ''}`}
+        className={({ isActive }) =>
+          `${rowClass(isActive, expanded)} ${dropTarget === id ? 'ring-1 ring-accent' : ''} ${
+            dragId === id ? 'opacity-40' : ''
+          } ${opts.nested && expanded ? 'ml-3 w-[calc(100%-0.75rem)]' : ''}`
+        }
+      >
+        <ModuleIcon name={manifest.icon} size={opts.nested ? 18 : 20} strokeWidth={1.8} className="shrink-0" />
+        {expanded && <span className="min-w-0 flex-1 truncate text-sm">{name}</span>}
+        {manifest.status === 'beta' &&
+          (expanded ? (
+            <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
+              Beta
+            </span>
+          ) : (
+            <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warn" />
+          ))}
+      </NavLink>
+    )
   }
 
   return (
@@ -77,56 +143,52 @@ export default function ActivityBar(): React.JSX.Element {
 
       <div className="my-1 h-px shrink-0 bg-edge" />
 
-      {/* Modules — drag to reorder, right-click for options */}
+      {/* Modules & folders — drag to reorder, right-click for options */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden">
-        {visible.map((m) => {
-          const { manifest } = m
-          const id = manifest.id
-          const name = effectiveName(m, overrides)
+        {entries.map((e) => {
+          if (e.kind === 'module') return moduleRow(e.module)
+
+          // A folder: opens its own screen, and reveals its tools inline while
+          // you're working inside it (or when manually expanded).
+          const g = e.group
+          const holdsActive = e.modules.some((m) => m.manifest.id === activeModuleId)
+          const isActive = activeGroupId === g.id
+          const showChildren = openFolders[g.id] ?? (isActive || holdsActive)
           return (
-            <NavLink
-              key={id}
-              to={`/m/${id}`}
-              draggable
-              onDragStart={(e) => {
-                setDragId(id)
-                e.dataTransfer.effectAllowed = 'move'
-              }}
-              onDragOver={(e) => {
-                e.preventDefault()
-                if (dragId && dragId !== id) setDropTarget(id)
-              }}
-              onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
-              onDrop={(e) => {
-                e.preventDefault()
-                commitReorder(id)
-              }}
-              onDragEnd={() => {
-                setDragId(null)
-                setDropTarget(null)
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                openMenu(id, e.clientX, e.clientY)
-              }}
-              title={expanded ? undefined : `${name}${manifest.status === 'beta' ? ' (Beta)' : ''}`}
-              className={({ isActive }) =>
-                `${rowClass(isActive, expanded)} ${dropTarget === id ? 'ring-1 ring-accent' : ''} ${
-                  dragId === id ? 'opacity-40' : ''
-                }`
-              }
-            >
-              <ModuleIcon name={manifest.icon} size={20} strokeWidth={1.8} className="shrink-0" />
-              {expanded && <span className="min-w-0 flex-1 truncate text-sm">{name}</span>}
-              {manifest.status === 'beta' &&
-                (expanded ? (
-                  <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
-                    Beta
-                  </span>
-                ) : (
-                  <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warn" />
-                ))}
-            </NavLink>
+            <div key={`g:${g.id}`} className="flex flex-col gap-1">
+              <div className="relative flex items-center">
+                <NavLink
+                  to={`/g/${g.id}`}
+                  title={expanded ? undefined : `${g.name} (folder)`}
+                  className={`${rowClass(isActive || holdsActive, expanded)} min-w-0 flex-1`}
+                >
+                  <ModuleIcon name={g.icon} size={20} strokeWidth={1.8} className="shrink-0" />
+                  {expanded && (
+                    <>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{g.name}</span>
+                      <span className="shrink-0 text-[10px] tabular-nums text-muted">
+                        {e.modules.length}
+                      </span>
+                    </>
+                  )}
+                  {!expanded && (
+                    <span className="absolute bottom-0.5 right-1 text-[9px] font-bold tabular-nums text-muted">
+                      {e.modules.length}
+                    </span>
+                  )}
+                </NavLink>
+                {expanded && (
+                  <button
+                    onClick={() => setOpenFolders((f) => ({ ...f, [g.id]: !showChildren }))}
+                    title={showChildren ? 'Collapse folder' : 'Expand folder'}
+                    className="ml-0.5 flex h-10 w-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                  >
+                    {showChildren ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                )}
+              </div>
+              {showChildren && e.modules.map((m) => moduleRow(m, { nested: true }))}
+            </div>
           )
         })}
       </div>

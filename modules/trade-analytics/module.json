@@ -1,8 +1,14 @@
 {
   "id": "trade-analytics",
-  "name": "Trade Analytics",
+  "name": "Trade Journal",
   "icon": "CandlestickChart",
   "version": "1.0.0",
   "description": "Import Webull order records → analytics dashboard: P&L, win rate, open positions, charts and AI coaching",
-  "status": "beta"
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
 }
