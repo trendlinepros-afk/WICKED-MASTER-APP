@@ -4,6 +4,8 @@ import Database from 'better-sqlite3'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { parseWebullCsv, type Execution } from './lib/parse'
+import { classifySector } from './lib/sector'
+import { getTickerDetails } from '../stock-planner/ipc/market/massive'
 
 /* ------------------------------------------------------------------------ *
  *  TRADE ANALYTICS — main process.
@@ -34,41 +36,104 @@ function moduleDir(app: ModuleIpcContext['app']): string {
   return join(app.getPath('userData'), 'modules', ID)
 }
 
+/** The current executions schema — dedup is scoped PER ACCOUNT (composite PK). */
+const EXEC_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS executions (
+    account TEXT NOT NULL DEFAULT 'default',
+    hash TEXT NOT NULL,
+    name TEXT,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    sideRaw TEXT,
+    status TEXT,
+    filled INTEGER NOT NULL DEFAULT 0,
+    qty REAL NOT NULL DEFAULT 0,
+    totalQty REAL NOT NULL DEFAULT 0,
+    price REAL NOT NULL DEFAULT 0,
+    avgPrice REAL NOT NULL DEFAULT 0,
+    limitPrice REAL NOT NULL DEFAULT 0,
+    timeInForce TEXT,
+    placedText TEXT,
+    filledText TEXT,
+    filledAt INTEGER,
+    placedAt INTEGER,
+    PRIMARY KEY (account, hash)
+  );
+  CREATE INDEX IF NOT EXISTS idx_exec_symbol ON executions(symbol);
+  CREATE INDEX IF NOT EXISTS idx_exec_filledAt ON executions(filledAt);
+  CREATE INDEX IF NOT EXISTS idx_exec_account ON executions(account);
+`
+
+const DEFAULT_ACCOUNT = { id: 'default', name: 'Default' }
+
 function getDb(app: ModuleIpcContext['app']): Database.Database {
   if (db) return db
   const dir = moduleDir(app)
   mkdirSync(dir, { recursive: true })
   db = new Database(join(dir, 'trades.db'))
   db.pragma('journal_mode = WAL')
+
+  // accounts registry (named; can exist with zero executions)
   db.exec(`
-    CREATE TABLE IF NOT EXISTS executions (
-      hash TEXT PRIMARY KEY,
-      name TEXT,
-      symbol TEXT NOT NULL,
-      side TEXT NOT NULL,
-      sideRaw TEXT,
-      status TEXT,
-      filled INTEGER NOT NULL DEFAULT 0,
-      qty REAL NOT NULL DEFAULT 0,
-      totalQty REAL NOT NULL DEFAULT 0,
-      price REAL NOT NULL DEFAULT 0,
-      avgPrice REAL NOT NULL DEFAULT 0,
-      limitPrice REAL NOT NULL DEFAULT 0,
-      timeInForce TEXT,
-      placedText TEXT,
-      filledText TEXT,
-      filledAt INTEGER,
-      placedAt INTEGER
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      createdAt INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_exec_symbol ON executions(symbol);
-    CREATE INDEX IF NOT EXISTS idx_exec_filledAt ON executions(filledAt);
   `)
+
+  // Migrate a pre-account executions table (hash PK, no account column) in
+  // place: everything it holds belongs to the 'default' account.
+  const hasExec = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='executions'")
+    .get()
+  if (hasExec) {
+    const cols = db.prepare('PRAGMA table_info(executions)').all() as { name: string }[]
+    if (!cols.some((c) => c.name === 'account')) {
+      db.exec('ALTER TABLE executions RENAME TO executions_old;')
+      db.exec(EXEC_SCHEMA)
+      db.exec(`
+        INSERT OR IGNORE INTO executions
+          (account, hash, name, symbol, side, sideRaw, status, filled, qty, totalQty, price, avgPrice, limitPrice, timeInForce, placedText, filledText, filledAt, placedAt)
+        SELECT 'default', hash, name, symbol, side, sideRaw, status, filled, qty, totalQty, price, avgPrice, limitPrice, timeInForce, placedText, filledText, filledAt, placedAt
+        FROM executions_old;
+      `)
+      db.exec('DROP TABLE executions_old;')
+    }
+  } else {
+    db.exec(EXEC_SCHEMA)
+  }
+
+  // Ensure the Default account always exists (and covers any pre-existing rows).
+  db.prepare('INSERT OR IGNORE INTO accounts (id, name, createdAt) VALUES (?, ?, ?)').run(
+    DEFAULT_ACCOUNT.id,
+    DEFAULT_ACCOUNT.name,
+    0
+  )
   return db
+}
+
+interface AccountRow {
+  id: string
+  name: string
+  createdAt: number
+  executions: number
+}
+
+function listAccounts(database: Database.Database): AccountRow[] {
+  return database
+    .prepare(
+      `SELECT a.id, a.name, a.createdAt,
+              (SELECT COUNT(*) FROM executions e WHERE e.account = a.id) AS executions
+       FROM accounts a ORDER BY a.createdAt ASC, a.name ASC`
+    )
+    .all() as AccountRow[]
 }
 
 function rowToExecution(r: Record<string, unknown>): Execution {
   return {
     hash: String(r.hash),
+    account: String(r.account ?? 'default'),
     name: String(r.name ?? ''),
     symbol: String(r.symbol),
     side: r.side as Execution['side'],
@@ -88,17 +153,18 @@ function rowToExecution(r: Record<string, unknown>): Execution {
   }
 }
 
-function insertExecutions(database: Database.Database, execs: Execution[]): number {
+function insertExecutions(database: Database.Database, execs: Execution[], account: string): number {
   const stmt = database.prepare(`
     INSERT OR IGNORE INTO executions
-      (hash, name, symbol, side, sideRaw, status, filled, qty, totalQty, price, avgPrice, limitPrice, timeInForce, placedText, filledText, filledAt, placedAt)
+      (account, hash, name, symbol, side, sideRaw, status, filled, qty, totalQty, price, avgPrice, limitPrice, timeInForce, placedText, filledText, filledAt, placedAt)
     VALUES
-      (@hash, @name, @symbol, @side, @sideRaw, @status, @filled, @qty, @totalQty, @price, @avgPrice, @limitPrice, @timeInForce, @placedText, @filledText, @filledAt, @placedAt)
+      (@account, @hash, @name, @symbol, @side, @sideRaw, @status, @filled, @qty, @totalQty, @price, @avgPrice, @limitPrice, @timeInForce, @placedText, @filledText, @filledAt, @placedAt)
   `)
   let imported = 0
   const tx = database.transaction((rows: Execution[]) => {
     for (const e of rows) {
       const info = stmt.run({
+        account,
         hash: e.hash,
         name: e.name,
         symbol: e.symbol,
@@ -129,14 +195,15 @@ function allExecutions(database: Database.Database): Execution[] {
   return rows.map(rowToExecution)
 }
 
-/** Parse one CSV file and import it; returns per-file counts. */
+/** Parse one CSV file and import it into an account; returns per-file counts. */
 function importCsvFile(
   database: Database.Database,
-  path: string
+  path: string,
+  account: string
 ): { file: string; parsed: number; imported: number; skipped: number; errors: number } {
   const text = readFileSync(path, 'utf8')
   const parsed = parseWebullCsv(text)
-  const imported = insertExecutions(database, parsed.executions)
+  const imported = insertExecutions(database, parsed.executions, account)
   return {
     file: path,
     parsed: parsed.executions.length,
@@ -268,7 +335,14 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:import-dialog`, async () => {
+  /** Resolve/validate the destination account id (defaults to 'default'). */
+  const resolveAccount = (database: Database.Database, raw: unknown): string => {
+    const id = typeof raw === 'string' && raw.trim() ? raw.trim() : 'default'
+    const exists = database.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)
+    return exists ? id : 'default'
+  }
+
+  ctx.ipcMain.handle(`${ID}:import-dialog`, async (_e, rawAccount: unknown) => {
     const win = ctx.getMainWindow()
     const opts = {
       title: 'Import Webull order records (CSV)',
@@ -279,9 +353,11 @@ export default function register(ctx: ModuleIpcContext): void {
     if (res.canceled || res.filePaths.length === 0) return { ok: false, canceled: true }
     try {
       const database = getDb(ctx.app)
-      const files = res.filePaths.map((p) => importCsvFile(database, p))
+      const account = resolveAccount(database, rawAccount)
+      const files = res.filePaths.map((p) => importCsvFile(database, p, account))
       return {
         ok: true,
+        account,
         files,
         imported: files.reduce((n, f) => n + f.imported, 0),
         skipped: files.reduce((n, f) => n + f.skipped, 0),
@@ -293,16 +369,18 @@ export default function register(ctx: ModuleIpcContext): void {
   })
 
   // Drag-and-drop path(s) from the renderer (via window.wicked.getPathForFile).
-  ctx.ipcMain.handle(`${ID}:import-file`, async (_e, rawPaths: unknown) => {
+  ctx.ipcMain.handle(`${ID}:import-file`, async (_e, rawPaths: unknown, rawAccount: unknown) => {
     const paths = (Array.isArray(rawPaths) ? rawPaths : [rawPaths]).filter(
       (p): p is string => typeof p === 'string' && p.toLowerCase().endsWith('.csv')
     )
     if (paths.length === 0) return { ok: false, error: 'Drop one or more .csv files exported from Webull.' }
     try {
       const database = getDb(ctx.app)
-      const files = paths.filter(existsSync).map((p) => importCsvFile(database, p))
+      const account = resolveAccount(database, rawAccount)
+      const files = paths.filter(existsSync).map((p) => importCsvFile(database, p, account))
       return {
         ok: true,
+        account,
         files,
         imported: files.reduce((n, f) => n + f.imported, 0),
         skipped: files.reduce((n, f) => n + f.skipped, 0),
@@ -313,10 +391,75 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:clear`, () => {
+  // Clear everything, or just one account when an id is passed.
+  ctx.ipcMain.handle(`${ID}:clear`, (_e, rawAccount: unknown) => {
     try {
-      getDb(ctx.app).exec('DELETE FROM executions')
-      return { ok: true }
+      const database = getDb(ctx.app)
+      if (typeof rawAccount === 'string' && rawAccount.trim()) {
+        database.prepare('DELETE FROM executions WHERE account = ?').run(rawAccount.trim())
+      } else {
+        database.exec('DELETE FROM executions')
+      }
+      return { ok: true, executions: allExecutions(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  /* ------------------------------- accounts -------------------------------- */
+
+  ctx.ipcMain.handle(`${ID}:accounts-list`, () => {
+    try {
+      return { ok: true, accounts: listAccounts(getDb(ctx.app)) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:accounts-create`, (_e, rawName: unknown) => {
+    const name = typeof rawName === 'string' ? rawName.trim() : ''
+    if (!name) return { ok: false, error: 'Enter an account name.' }
+    try {
+      const database = getDb(ctx.app)
+      const taken = new Set((database.prepare('SELECT id FROM accounts').all() as { id: string }[]).map((r) => r.id))
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'account'
+      let id = base
+      for (let i = 2; taken.has(id); i++) id = `${base}-${i}`
+      database.prepare('INSERT INTO accounts (id, name, createdAt) VALUES (?, ?, ?)').run(id, name, Date.now())
+      return { ok: true, id, accounts: listAccounts(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:accounts-rename`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const id = typeof r.id === 'string' ? r.id : ''
+    const name = typeof r.name === 'string' ? r.name.trim() : ''
+    if (!id || !name) return { ok: false, error: 'Missing account or name.' }
+    try {
+      const database = getDb(ctx.app)
+      database.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(name, id)
+      return { ok: true, accounts: listAccounts(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // Delete an account AND its executions. The Default account can be emptied
+  // but not removed (it's the fallback destination).
+  ctx.ipcMain.handle(`${ID}:accounts-delete`, (_e, rawId: unknown) => {
+    const id = typeof rawId === 'string' ? rawId : ''
+    if (!id) return { ok: false, error: 'Missing account.' }
+    if (id === 'default') return { ok: false, error: 'The Default account can’t be deleted — clear it instead.' }
+    try {
+      const database = getDb(ctx.app)
+      const tx = database.transaction(() => {
+        database.prepare('DELETE FROM executions WHERE account = ?').run(id)
+        database.prepare('DELETE FROM accounts WHERE id = ?').run(id)
+      })
+      tx()
+      return { ok: true, accounts: listAccounts(database), executions: allExecutions(database) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
@@ -380,6 +523,66 @@ export default function register(ctx: ModuleIpcContext): void {
     } catch (err) {
       return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
     }
+  })
+
+  /* ------------------------------- sectors --------------------------------- *
+   * Best-effort symbol→sector for the Market Sector P&L card. Classifications
+   * are cached permanently (sectors rarely change); missing ones are fetched
+   * from the shared Massive layer when a key exists, classified to a broad
+   * sector, and cached. No key / lookup failure → the symbol stays Unclassified
+   * and is retried next time (not cached as a failure).
+   * ------------------------------------------------------------------------- */
+  const sectorCachePath = join(moduleDir(ctx.app), 'sectors.json')
+  const readSectorCache = (): Record<string, string> => {
+    try {
+      const o = JSON.parse(readFileSync(sectorCachePath, 'utf8')) as unknown
+      return o && typeof o === 'object' ? (o as Record<string, string>) : {}
+    } catch {
+      return {}
+    }
+  }
+  const writeSectorCache = (m: Record<string, string>): void => {
+    try {
+      writeFileSync(sectorCachePath, JSON.stringify(m, null, 2))
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  ctx.ipcMain.handle(`${ID}:sectors`, async (_e, rawSymbols: unknown) => {
+    const symbols = (Array.isArray(rawSymbols) ? rawSymbols : [])
+      .filter((s): s is string => typeof s === 'string' && !!s.trim())
+      .map((s) => s.trim().toUpperCase())
+    const cache = readSectorCache()
+    const key = ctx.getApiKey('massive')
+    const missing = [...new Set(symbols)].filter((s) => !cache[s])
+
+    let resolved = 0
+    if (key && missing.length > 0) {
+      // small concurrency pool so we don't hammer the API for large symbol sets
+      const queue = [...missing]
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const sym = queue.shift()
+          if (!sym) return
+          try {
+            const details = await getTickerDetails(key, sym)
+            if (details && details.sector) {
+              cache[sym] = classifySector(details.sector)
+              resolved++
+            }
+          } catch {
+            /* leave uncached → retried next time */
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker))
+      if (resolved > 0) writeSectorCache(cache)
+    }
+
+    const out: Record<string, string> = {}
+    for (const s of symbols) out[s] = cache[s] ?? 'Unclassified'
+    return { ok: true, sectors: out, hasKey: !!key, resolved, pending: missing.length - resolved }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

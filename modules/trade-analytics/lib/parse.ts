@@ -19,6 +19,8 @@ export type Side = 'buy' | 'sell' | 'short'
 export interface Execution {
   /** stable de-dup key (Webull exports carry no order id) */
   hash: string
+  /** account this execution belongs to (assigned at import; '' before) */
+  account?: string
   name: string
   symbol: string
   side: Side

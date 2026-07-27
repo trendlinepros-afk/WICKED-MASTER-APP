@@ -187,6 +187,27 @@ export function buildTrades(executions: Execution[]): Trade[] {
   return trades
 }
 
+/**
+ * Build trades across MULTIPLE accounts without letting them mix: each
+ * account's executions are FIFO-matched independently (a buy in account A must
+ * never close a short in account B), then the resulting trades are merged. When
+ * only one account is present this is identical to buildTrades.
+ */
+export function buildTradesByAccount(executions: Execution[]): Trade[] {
+  const byAccount = new Map<string, Execution[]>()
+  for (const e of executions) {
+    const acct = e.account || 'default'
+    const arr = byAccount.get(acct) ?? []
+    arr.push(e)
+    byAccount.set(acct, arr)
+  }
+  if (byAccount.size <= 1) return buildTrades(executions)
+  const all: Trade[] = []
+  for (const execs of byAccount.values()) all.push(...buildTrades(execs))
+  all.sort((a, b) => (b.closedAt ?? Infinity) - (a.closedAt ?? Infinity))
+  return all
+}
+
 /* --------------------------------- stats --------------------------------- */
 
 export interface SymbolStat {

@@ -207,4 +207,121 @@ export function WinLossDonut({
   )
 }
 
-export { ACCENT }
+/* --------------------- labelled aggregate-PnL columns -------------------- */
+
+export interface MetricCol {
+  label: string
+  pnl: number
+  trades: number
+  wins: number
+  losses: number
+}
+
+/** Vertical +/- columns with a zero baseline, rotated labels, hover tooltip. */
+export function AggPnlColumns({
+  cols,
+  height = 200
+}: {
+  cols: MetricCol[]
+  height?: number
+}): React.JSX.Element {
+  if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
+  const maxAbs = Math.max(1, ...cols.map((c) => Math.abs(c.pnl)))
+  return (
+    <div className="w-full overflow-x-auto">
+      <div className="flex min-w-full items-stretch gap-1" style={{ height }}>
+        {cols.map((c) => {
+          const frac = Math.abs(c.pnl) / maxAbs
+          const pos = c.pnl >= 0
+          return (
+            <div
+              key={c.label}
+              className="group relative flex min-w-[26px] flex-1 flex-col"
+              title={`${c.label}\n${pos ? '+' : '-'}$${Math.abs(c.pnl).toFixed(2)} · ${c.trades} trade(s) · ${c.wins}W/${c.losses}L`}
+            >
+              <div className="flex flex-1 flex-col justify-end">
+                {pos && <div className="w-full rounded-t" style={{ height: `${frac * 50}%`, background: OK, opacity: 0.88, minHeight: c.pnl !== 0 ? 2 : 0 }} />}
+              </div>
+              <div className="h-px w-full bg-edge" />
+              <div className="flex flex-1 flex-col justify-start">
+                {!pos && <div className="w-full rounded-b" style={{ height: `${frac * 50}%`, background: DANGER, opacity: 0.88, minHeight: c.pnl !== 0 ? 2 : 0 }} />}
+              </div>
+              <div className="mt-1 h-8 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{c.label}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** Side-by-side win vs loss COUNT columns per bucket. */
+export function WinLossColumns({
+  cols,
+  height = 180
+}: {
+  cols: MetricCol[]
+  height?: number
+}): React.JSX.Element {
+  if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
+  const maxN = Math.max(1, ...cols.map((c) => Math.max(c.wins, c.losses)))
+  return (
+    <div className="w-full overflow-x-auto">
+      <div className="flex min-w-full items-end gap-1.5" style={{ height }}>
+        {cols.map((c) => (
+          <div
+            key={c.label}
+            className="group flex min-w-[26px] flex-1 flex-col items-center justify-end gap-1"
+            title={`${c.label}\n${c.wins} win(s) / ${c.losses} loss(es)`}
+          >
+            <div className="flex h-full w-full items-end justify-center gap-0.5">
+              <div className="w-1/2 rounded-t" style={{ height: `${(c.wins / maxN) * 100}%`, background: OK, opacity: 0.88, minHeight: c.wins ? 2 : 0 }} />
+              <div className="w-1/2 rounded-t" style={{ height: `${(c.losses / maxN) * 100}%`, background: DANGER, opacity: 0.88, minHeight: c.losses ? 2 : 0 }} />
+            </div>
+            <div className="h-8 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{c.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------ drawdown area ---------------------------- */
+
+export function DrawdownArea({
+  points,
+  height = 180
+}: {
+  points: { date: string; value: number }[]
+  height?: number
+}): React.JSX.Element {
+  const gid = useId()
+  const W = 800
+  const H = height
+  const padL = 8
+  const padR = 8
+  const padT = 8
+  const padB = 18
+  if (points.length < 2) return <div className="flex h-40 items-center justify-center text-sm text-muted">Not enough days to chart drawdown yet.</div>
+  const min = Math.min(...points.map((p) => p.value), 0)
+  const range = Math.abs(min) || 1
+  const x = (i: number): number => padL + (i / (points.length - 1)) * (W - padL - padR)
+  const y = (v: number): number => padT + (-v / range) * (H - padT - padB) // v ≤ 0
+  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ')
+  const area = `${line} L${x(points.length - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none" role="img" aria-label="Daily drawdown">
+      <defs>
+        <linearGradient id={`dd-${gid}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={DANGER} stopOpacity="0.04" />
+          <stop offset="100%" stopColor={DANGER} stopOpacity="0.30" />
+        </linearGradient>
+      </defs>
+      <line x1={padL} y1={y(0)} x2={W - padR} y2={y(0)} stroke={EDGE} strokeWidth="1" />
+      <path d={area} fill={`url(#dd-${gid})`} />
+      <path d={line} fill="none" stroke={DANGER} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
+export { ACCENT, OK, DANGER }

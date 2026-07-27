@@ -1,11 +1,19 @@
 import { create } from 'zustand'
-import { buildTrades, computeStats, type Stats, type Trade } from './lib/analytics'
+import { buildTradesByAccount, computeStats, type Stats, type Trade } from './lib/analytics'
+import { computeMetrics, type TradeMetrics } from './lib/metrics'
 import type { Execution } from './lib/parse'
 import { duration, money, pct } from './lib/format'
 
 export const ID = 'trade-analytics'
 
-export type Tab = 'overview' | 'trades' | 'open' | 'symbols' | 'timing' | 'ai'
+export type Tab = 'overview' | 'trades' | 'open' | 'symbols' | 'timing' | 'stats' | 'breakdown' | 'ai'
+
+export interface Account {
+  id: string
+  name: string
+  createdAt: number
+  executions: number
+}
 
 interface ImportSummary {
   imported: number
@@ -60,14 +68,30 @@ export function buildAiPrompt(stats: Stats, trades: Trade[]): string {
 interface State {
   tab: Tab
   loaded: boolean
+  /** every execution across all accounts (unfiltered) */
+  allExecutions: Execution[]
+  /** trades/stats/metrics for the CURRENTLY SELECTED accounts */
   executions: Execution[]
   trades: Trade[]
   stats: Stats | null
+  metrics: TradeMetrics | null
   importing: boolean
   status: string
   error: string
   lastImport: ImportSummary | null
   dragOver: boolean
+
+  // accounts
+  accounts: Account[]
+  /** account ids currently shown (multi-select; empty = all) */
+  selectedAccounts: string[]
+  /** account new imports land in */
+  importAccount: string
+
+  // sectors (symbol → broad sector)
+  sectors: Record<string, string>
+  sectorsBusy: boolean
+  sectorsHasKey: boolean
 
   // AI coach
   hasAiKey: boolean
@@ -80,21 +104,35 @@ interface State {
   dismissError: () => void
   setHasAiKey: (v: boolean) => void
   setDragOver: (v: boolean) => void
+  setImportAccount: (id: string) => void
+  toggleAccount: (id: string) => void
+  selectAllAccounts: () => void
 
   load: () => Promise<void>
-  applyExecutions: (executions: Execution[]) => void
+  refreshAccounts: () => Promise<void>
+  createAccount: (name: string) => Promise<string | null>
+  renameAccount: (id: string, name: string) => Promise<void>
+  deleteAccount: (id: string) => Promise<void>
   importDialog: () => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
-  clearAll: () => Promise<void>
+  clearAll: (account?: string) => Promise<void>
+  loadSectors: () => Promise<void>
   analyze: () => Promise<void>
   cancelAi: () => Promise<void>
 }
 
 export const useTrades = create<State>((set, get) => {
-  const recompute = (executions: Execution[]): void => {
-    const trades = buildTrades(executions)
+  /** Recompute trades/stats/metrics for the current account selection. */
+  const recompute = (
+    all: Execution[],
+    selected: string[] = get().selectedAccounts,
+    sectors: Record<string, string> = get().sectors
+  ): void => {
+    const filtered = selected.length > 0 ? all.filter((e) => selected.includes(e.account || 'default')) : all
+    const trades = buildTradesByAccount(filtered)
     const stats = computeStats(trades)
-    set({ executions, trades, stats })
+    const metrics = computeMetrics(trades, sectors)
+    set({ allExecutions: all, executions: filtered, trades, stats, metrics })
   }
 
   const handleImport = async (res: Res): Promise<void> => {
@@ -102,11 +140,13 @@ export const useTrades = create<State>((set, get) => {
       if (!(res as Err).canceled) set({ error: (res as Err).error ?? 'Import failed.', status: 'Import failed.' })
       return
     }
-    const executions = Array.isArray((res as Ok).executions) ? ((res as Ok).executions as Execution[]) : get().executions
+    const executions = Array.isArray((res as Ok).executions) ? ((res as Ok).executions as Execution[]) : get().allExecutions
     const imported = Number((res as Ok).imported) || 0
     const skipped = Number((res as Ok).skipped) || 0
     const files = Array.isArray((res as Ok).files) ? ((res as Ok).files as unknown[]).length : 1
     recompute(executions)
+    await get().refreshAccounts()
+    void get().loadSectors()
     set({
       lastImport: { imported, skipped, files },
       status:
@@ -119,14 +159,24 @@ export const useTrades = create<State>((set, get) => {
   return {
     tab: 'overview',
     loaded: false,
+    allExecutions: [],
     executions: [],
     trades: [],
     stats: null,
+    metrics: null,
     importing: false,
     status: 'Import your Webull order records to begin.',
     error: '',
     lastImport: null,
     dragOver: false,
+
+    accounts: [],
+    selectedAccounts: [],
+    importAccount: 'default',
+
+    sectors: {},
+    sectorsBusy: false,
+    sectorsHasKey: false,
 
     hasAiKey: false,
     aiBusy: false,
@@ -138,20 +188,77 @@ export const useTrades = create<State>((set, get) => {
     dismissError: () => set({ error: '' }),
     setHasAiKey: (v) => set({ hasAiKey: v }),
     setDragOver: (v) => set({ dragOver: v }),
+    setImportAccount: (id) => set({ importAccount: id }),
+
+    toggleAccount: (id) => {
+      const cur = get().selectedAccounts
+      const has = cur.includes(id)
+      // never allow an empty selection → fall back to all accounts
+      const next = has ? cur.filter((x) => x !== id) : [...cur, id]
+      set({ selectedAccounts: next })
+      recompute(get().allExecutions, next)
+    },
+    selectAllAccounts: () => {
+      set({ selectedAccounts: [] })
+      recompute(get().allExecutions, [])
+    },
 
     load: async () => {
       const res = await invoke('executions')
-      if (res.ok === true) recompute((res.executions as Execution[]) ?? [])
+      if (res.ok === true) recompute((res.executions as Execution[]) ?? [], [])
+      await get().refreshAccounts()
+      void get().loadSectors()
       set({ loaded: true })
     },
 
-    applyExecutions: (executions) => recompute(executions),
+    refreshAccounts: async () => {
+      const res = (await invoke('accounts-list')) as Res & { accounts?: Account[] }
+      if (res.ok === true) {
+        const accounts = res.accounts ?? []
+        // keep importAccount valid
+        const importAccount = accounts.some((a) => a.id === get().importAccount)
+          ? get().importAccount
+          : accounts[0]?.id ?? 'default'
+        // drop any selected ids that no longer exist
+        const validSel = get().selectedAccounts.filter((id) => accounts.some((a) => a.id === id))
+        set({ accounts, importAccount, selectedAccounts: validSel })
+        if (validSel.length !== get().selectedAccounts.length) recompute(get().allExecutions, validSel)
+      }
+    },
+
+    createAccount: async (name) => {
+      const res = (await invoke('accounts-create', name)) as Res & { id?: string; accounts?: Account[] }
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? 'Could not create account.' })
+        return null
+      }
+      set({ accounts: res.accounts ?? get().accounts })
+      return res.id ?? null
+    },
+
+    renameAccount: async (id, name) => {
+      const res = (await invoke('accounts-rename', { id, name })) as Res & { accounts?: Account[] }
+      if (res.ok === true) set({ accounts: res.accounts ?? get().accounts })
+      else set({ error: (res as Err).error ?? 'Could not rename account.' })
+    },
+
+    deleteAccount: async (id) => {
+      const res = (await invoke('accounts-delete', id)) as Res & { accounts?: Account[]; executions?: Execution[] }
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? 'Could not delete account.' })
+        return
+      }
+      const sel = get().selectedAccounts.filter((x) => x !== id)
+      set({ accounts: res.accounts ?? get().accounts, selectedAccounts: sel })
+      recompute((res.executions as Execution[]) ?? get().allExecutions, sel)
+      await get().refreshAccounts()
+    },
 
     importDialog: async () => {
       if (get().importing) return
       set({ importing: true, error: '', status: 'Importing…' })
       try {
-        await handleImport(await invoke('import-dialog'))
+        await handleImport(await invoke('import-dialog', get().importAccount))
       } finally {
         set({ importing: false })
       }
@@ -161,25 +268,48 @@ export const useTrades = create<State>((set, get) => {
       if (get().importing || paths.length === 0) return
       set({ importing: true, error: '', status: 'Importing…', dragOver: false })
       try {
-        await handleImport(await invoke('import-file', paths))
+        await handleImport(await invoke('import-file', paths, get().importAccount))
       } finally {
         set({ importing: false })
       }
     },
 
-    clearAll: async () => {
-      if (!window.confirm('Delete ALL imported trade data? This only clears the analytics database — your Webull account is untouched. You can re-import your CSVs anytime.')) return
+    clearAll: async (account) => {
+      const label = account
+        ? `Delete all trade data for this account? Your Webull account is untouched — you can re-import anytime.`
+        : 'Delete ALL imported trade data across every account? This only clears the analytics database — your Webull account is untouched. You can re-import your CSVs anytime.'
+      if (!window.confirm(label)) return
       set({ importing: true, status: 'Clearing…', error: '' })
       try {
-        const res = await invoke('clear')
+        const res = (await invoke('clear', account)) as Res & { executions?: Execution[] }
         if (res.ok !== true) {
-          set({ error: res.error ?? 'Could not clear data.' })
+          set({ error: (res as Err).error ?? 'Could not clear data.' })
           return
         }
-        recompute([])
-        set({ status: 'All imported trade data cleared.', lastImport: null, aiText: '', aiProvider: '' })
+        recompute((res.executions as Execution[]) ?? [])
+        await get().refreshAccounts()
+        set({ status: account ? 'Account data cleared.' : 'All imported trade data cleared.', lastImport: null, aiText: '', aiProvider: '' })
       } finally {
         set({ importing: false })
+      }
+    },
+
+    loadSectors: async () => {
+      const symbols = [...new Set(get().allExecutions.map((e) => e.symbol))]
+      if (symbols.length === 0) return
+      set({ sectorsBusy: true })
+      try {
+        const res = (await invoke('sectors', symbols)) as Res & {
+          sectors?: Record<string, string>
+          hasKey?: boolean
+        }
+        if (res.ok === true) {
+          const sectors = res.sectors ?? {}
+          set({ sectors, sectorsHasKey: !!res.hasKey })
+          recompute(get().allExecutions, get().selectedAccounts, sectors)
+        }
+      } finally {
+        set({ sectorsBusy: false })
       }
     },
 

@@ -8,6 +8,8 @@ import {
   Clock,
   Download,
   FileDown,
+  Grid3x3,
+  LayoutGrid,
   Loader2,
   Sparkles,
   Trash2,
@@ -23,6 +25,7 @@ import { ID, useTrades, type Tab } from './store'
 import type { Trade } from './lib/analytics'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
+import { AccountsBar, BreakdownTab, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -77,6 +80,9 @@ function OverviewTab(): React.JSX.Element {
         </div>
         <EquityCurve values={stats.equityCurve.map((p) => p.cumulative)} />
       </div>
+
+      {/* market sector P&L */}
+      <SectorCard />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* win/loss */}
@@ -362,6 +368,8 @@ function AiTab(): React.JSX.Element {
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'overview', label: 'Overview', icon: <BarChart3 size={14} /> },
+  { id: 'stats', label: 'Stats', icon: <Grid3x3 size={14} /> },
+  { id: 'breakdown', label: 'Breakdown', icon: <LayoutGrid size={14} /> },
   { id: 'trades', label: 'Trades', icon: <CandlestickChart size={14} /> },
   { id: 'open', label: 'Open Positions', icon: <Wallet size={14} /> },
   { id: 'symbols', label: 'Symbols', icon: <TrendingUp size={14} /> },
@@ -395,6 +403,8 @@ export default function TradeAnalytics(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const [manageOpen, setManageOpen] = useState(false)
+
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
     const paths: string[] = []
@@ -410,7 +420,9 @@ export default function TradeAnalytics(): React.JSX.Element {
     else s.setDragOver(false)
   }
 
-  const empty = s.loaded && s.executions.length === 0
+  // truly empty = nothing imported anywhere; a selected-but-empty account still
+  // shows the dashboard chrome (accounts bar + tabs) with zeroed stats.
+  const empty = s.loaded && s.allExecutions.length === 0
 
   return (
     <div
@@ -456,6 +468,9 @@ export default function TradeAnalytics(): React.JSX.Element {
           )}
         </div>
       </header>
+
+      {/* accounts bar (multi-select view + manage + import target) */}
+      {!empty && <AccountsBar onManage={() => setManageOpen(true)} />}
 
       {/* tabs */}
       {!empty && (
@@ -516,6 +531,8 @@ export default function TradeAnalytics(): React.JSX.Element {
         ) : (
           <>
             {s.tab === 'overview' && <OverviewTab />}
+            {s.tab === 'stats' && <StatsTab />}
+            {s.tab === 'breakdown' && <BreakdownTab />}
             {s.tab === 'trades' && <TradesTab />}
             {s.tab === 'open' && <OpenTab />}
             {s.tab === 'symbols' && <SymbolsTab />}
@@ -524,6 +541,8 @@ export default function TradeAnalytics(): React.JSX.Element {
           </>
         )}
       </div>
+
+      {manageOpen && <ManageAccountsModal onClose={() => setManageOpen(false)} />}
 
       {/* status bar */}
       <footer className="flex items-center gap-2 border-t border-edge px-5 py-1.5 text-xs text-muted">
