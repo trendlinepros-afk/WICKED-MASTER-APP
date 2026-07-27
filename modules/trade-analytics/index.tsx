@@ -12,6 +12,8 @@ import {
   Grid3x3,
   LayoutGrid,
   Loader2,
+  Pencil,
+  Plus,
   Sparkles,
   Trash2,
   TrendingUp,
@@ -22,8 +24,9 @@ import {
 import { SHELL_IPC, type ApiProviderId } from '@shared/types'
 import { buildReportPdf } from '../stock-planner/lib/pdf'
 import { buildJournalReport } from './lib/report'
-import { ID, useTrades, type Tab } from './store'
+import { ID, useTrades, type Tab, type TradeDraft } from './store'
 import type { Trade } from './lib/analytics'
+import { etInputToEpoch, etInputValue } from './lib/et'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
 import { AccountsBar, BreakdownTab, CalendarTab, ImportModal, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
@@ -132,9 +135,11 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: 'ok'
 
 /* --------------------------------- trades -------------------------------- */
 
-function TradeRow({ t }: { t: Trade }): React.JSX.Element {
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4
+
+function TradeRow({ t, onEdit, onDelete }: { t: Trade; onEdit: () => void; onDelete: () => void }): React.JSX.Element {
   return (
-    <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-2 border-b border-edge/50 px-3 py-2 text-xs md:grid-cols-[70px_1fr_90px_90px_110px_110px]">
+    <div className="group grid grid-cols-[auto_1fr_auto_auto_auto_auto_auto] items-center gap-2 border-b border-edge/50 px-3 py-2 text-xs md:grid-cols-[70px_1fr_90px_90px_100px_100px_64px]">
       <div className="flex items-center gap-1 font-semibold">
         {t.direction === 'long' ? <ArrowUpRight size={13} className="text-ok" /> : <ArrowDownRight size={13} className="text-danger" />}
         {t.symbol}
@@ -153,27 +158,259 @@ function TradeRow({ t }: { t: Trade }): React.JSX.Element {
         {t.isOpen ? 'open' : `${signedMoney(t.realizedPnl)}`}
         {!t.isOpen && <span className="ml-1 text-[10px] font-normal opacity-70">{pct(t.realizedPct)}</span>}
       </div>
+      <div className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <button onClick={onEdit} title="Edit trade" className="rounded p-1 text-muted hover:bg-raised hover:text-ink">
+          <Pencil size={13} />
+        </button>
+        <button onClick={onDelete} title="Delete trade" className="rounded p-1 text-muted hover:bg-raised hover:text-danger">
+          <Trash2 size={13} />
+        </button>
+      </div>
     </div>
   )
 }
 
 function TradesTab(): React.JSX.Element {
   const trades = useTrades((s) => s.trades)
-  if (trades.length === 0) return <div className="p-8 text-sm text-muted">No trades yet.</div>
+  const deleteTrade = useTrades((s) => s.deleteTrade)
+  const [editor, setEditor] = useState<{ trade: Trade | null } | null>(null)
+
+  const onDelete = (t: Trade): void => {
+    const hashes = [...new Set(t.fills.map((f) => f.hash))]
+    if (hashes.length === 0) {
+      window.alert('This position has no removable fills (it was split off another trade). Edit or delete the related trade instead.')
+      return
+    }
+    const label = `Delete this ${t.symbol} ${t.direction} trade? Its ${hashes.length} underlying fill(s) are removed from this account — this can’t be undone (re-import or re-enter to restore).`
+    if (window.confirm(label)) void deleteTrade(t.account, hashes)
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid grid-cols-[70px_1fr_90px_90px_110px_110px] gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
-        <div>Symbol</div>
-        <div>Detail</div>
-        <div className="text-right">Entry</div>
-        <div className="text-right">Exit</div>
-        <div className="text-right">Hold</div>
-        <div className="text-right">P&L</div>
+      <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
+        <span className="text-xs text-muted">
+          {trades.length} trade{trades.length === 1 ? '' : 's'} · hover a row to edit or delete
+        </span>
+        <button
+          onClick={() => setEditor({ trade: null })}
+          className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90"
+        >
+          <Plus size={13} /> Add trade
+        </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {trades.map((t) => (
-          <TradeRow key={t.id} t={t} />
-        ))}
+      {trades.length === 0 ? (
+        <div className="p-8 text-sm text-muted">No trades yet — import a Webull CSV or add one manually with “Add trade”.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-[70px_1fr_90px_90px_100px_100px_64px] gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <div>Symbol</div>
+            <div>Detail</div>
+            <div className="text-right">Entry</div>
+            <div className="text-right">Exit</div>
+            <div className="text-right">Hold</div>
+            <div className="text-right">P&L</div>
+            <div />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {trades.map((t) => (
+              <TradeRow key={t.id} t={t} onEdit={() => setEditor({ trade: t })} onDelete={() => onDelete(t)} />
+            ))}
+          </div>
+        </>
+      )}
+      {editor && <TradeEditor trade={editor.trade} onClose={() => setEditor(null)} />}
+    </div>
+  )
+}
+
+/* ---------------------------- add / edit a trade ------------------------- */
+
+function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => void }): React.JSX.Element {
+  const accounts = useTrades((s) => s.accounts)
+  const importAccount = useTrades((s) => s.importAccount)
+  const saveTrade = useTrades((s) => s.saveTrade)
+
+  const editing = trade != null
+  const closed = !!trade && !trade.isOpen
+  const [account, setAccount] = useState(trade?.account ?? importAccount)
+  const [symbol, setSymbol] = useState(trade?.symbol ?? '')
+  const [direction, setDirection] = useState<'long' | 'short'>(trade?.direction ?? 'long')
+  const [qty, setQty] = useState(trade ? String(round4(trade.qty)) : '')
+  const [entryPrice, setEntryPrice] = useState(trade ? String(round4(trade.avgEntry)) : '')
+  const [entryLocal, setEntryLocal] = useState(etInputValue(trade?.openedAt))
+  const [exitPrice, setExitPrice] = useState(closed ? String(round4(trade!.avgExit)) : '')
+  const [exitLocal, setExitLocal] = useState(closed ? etInputValue(trade!.closedAt) : '')
+  const [exitQty, setExitQty] = useState(closed ? String(round4(trade!.closedQty)) : '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const inputCls = 'w-full rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm outline-none focus:border-accent'
+  const labelCls = 'mb-1 block text-[11px] font-medium text-muted'
+
+  const submit = async (): Promise<void> => {
+    const sym = symbol.trim().toUpperCase()
+    const q = Number(qty)
+    const ep = Number(entryPrice)
+    const eAt = etInputToEpoch(entryLocal)
+    if (!sym) return setErr('Enter a ticker symbol.')
+    if (!(q > 0)) return setErr('Quantity must be greater than 0.')
+    if (!(ep > 0)) return setErr('Entry price must be greater than 0.')
+    if (eAt == null) return setErr('Enter a valid entry date & time.')
+
+    const wantExit = exitPrice.trim() !== '' || exitLocal.trim() !== ''
+    let xp: number | null = null
+    let xAt: number | null = null
+    let xq: number | null = null
+    if (wantExit) {
+      xp = Number(exitPrice)
+      xAt = etInputToEpoch(exitLocal)
+      xq = exitQty.trim() === '' ? q : Number(exitQty)
+      if (!(xp > 0)) return setErr('Exit price must be > 0, or clear both exit fields for a still-open position.')
+      if (xAt == null) return setErr('Enter a valid exit date & time.')
+      if (xAt < eAt) return setErr('Exit time can’t be before the entry time.')
+      if (!(xq > 0) || xq > q) return setErr(`Exit quantity must be between 0 and ${round4(q)} (the entry quantity).`)
+    }
+
+    const draft: TradeDraft = {
+      account,
+      fromAccount: trade?.account,
+      deleteHashes: trade ? [...new Set(trade.fills.map((f) => f.hash))] : [],
+      symbol: sym,
+      direction,
+      qty: q,
+      entryPrice: ep,
+      entryAt: eAt,
+      exitPrice: xp,
+      exitAt: xAt,
+      exitQty: xq
+    }
+    setBusy(true)
+    setErr('')
+    const error = await saveTrade(draft)
+    setBusy(false)
+    if (error) setErr(error)
+    else onClose()
+  }
+
+  const multiFill = !!trade && trade.fills.length > 2
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-edge bg-surface"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <CandlestickChart size={15} className="text-accent" />
+          <span className="text-sm font-semibold">{editing ? 'Edit trade' : 'Add trade'}</span>
+          <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          {accounts.length > 0 && (
+            <div>
+              <label className={labelCls}>Account</label>
+              <select value={account} onChange={(e) => setAccount(e.target.value)} className={inputCls}>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-[1fr_auto] gap-3">
+            <div>
+              <label className={labelCls}>Symbol</label>
+              <input
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                placeholder="AAPL"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Direction</label>
+              <div className="flex overflow-hidden rounded-lg border border-edge">
+                <button
+                  type="button"
+                  onClick={() => setDirection('long')}
+                  className={`px-3 py-2 text-sm ${direction === 'long' ? 'bg-ok/20 font-semibold text-ok' : 'text-muted hover:bg-raised'}`}
+                >
+                  Long
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDirection('short')}
+                  className={`px-3 py-2 text-sm ${direction === 'short' ? 'bg-danger/20 font-semibold text-danger' : 'text-muted hover:bg-raised'}`}
+                >
+                  Short
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Quantity (shares)</label>
+              <input value={qty} onChange={(e) => setQty(e.target.value)} inputMode="decimal" placeholder="100" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Entry price</label>
+              <input value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} inputMode="decimal" placeholder="12.34" className={inputCls} />
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Entry date &amp; time (ET)</label>
+            <input type="datetime-local" value={entryLocal} onChange={(e) => setEntryLocal(e.target.value)} className={inputCls} />
+          </div>
+
+          <div className="border-t border-edge pt-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Exit <span className="font-normal normal-case">— leave blank for a still-open position</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelCls}>Exit price</label>
+                <input value={exitPrice} onChange={(e) => setExitPrice(e.target.value)} inputMode="decimal" placeholder="—" className={inputCls} />
+              </div>
+              <div>
+                <label className={labelCls}>Exit quantity</label>
+                <input value={exitQty} onChange={(e) => setExitQty(e.target.value)} inputMode="decimal" placeholder="all" className={inputCls} />
+              </div>
+            </div>
+            <div className="mt-3">
+              <label className={labelCls}>Exit date &amp; time (ET)</label>
+              <input type="datetime-local" value={exitLocal} onChange={(e) => setExitLocal(e.target.value)} className={inputCls} />
+            </div>
+          </div>
+
+          {multiFill && (
+            <p className="flex items-start gap-1.5 rounded-lg bg-warn/10 px-2.5 py-2 text-[11px] text-muted">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warn" />
+              This trade was built from {trade!.fills.length} fills. Saving replaces them with a single entry
+              {exitPrice.trim() ? ' and exit' : ''} at the values above.
+            </p>
+          )}
+          {err && <p className="text-xs text-danger">{err}</p>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-edge px-4 py-3">
+          <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-muted hover:bg-raised hover:text-ink">
+            Cancel
+          </button>
+          <button
+            onClick={() => void submit()}
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            {editing ? 'Save changes' : 'Add trade'}
+          </button>
+        </div>
       </div>
     </div>
   )

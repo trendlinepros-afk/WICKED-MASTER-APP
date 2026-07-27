@@ -20,10 +20,14 @@ export interface Fill {
   price: number
   at: number | null
   hash: string
+  /** account the underlying execution belongs to */
+  account: string
 }
 
 export interface Trade {
   id: string
+  /** account this episode's executions belong to (for edit/delete targeting) */
+  account: string
   symbol: string
   name: string
   direction: 'long' | 'short'
@@ -59,6 +63,7 @@ interface Lot {
 interface Episode {
   symbol: string
   name: string
+  account: string
   direction: 'long' | 'short'
   lots: Lot[]
   entryQty: number
@@ -77,7 +82,8 @@ function toTrade(ep: Episode, seq: number): Trade {
   const avgExit = ep.closedQty > 0 ? ep.exitProceeds / ep.closedQty : 0
   const closedCost = avgEntry * ep.closedQty
   return {
-    id: `${ep.symbol}-${seq}-${ep.openedAt ?? 0}`,
+    id: `${ep.account}-${ep.symbol}-${seq}-${ep.openedAt ?? 0}`,
+    account: ep.account,
     symbol: ep.symbol,
     name: ep.name,
     direction: ep.direction,
@@ -116,9 +122,10 @@ export function buildTrades(executions: Execution[]): Trade[] {
     let ep: Episode | null = null
     let seq = 0
 
-    const openEpisode = (dir: 'long' | 'short', name: string): Episode => ({
+    const openEpisode = (dir: 'long' | 'short', name: string, account: string): Episode => ({
       symbol,
       name,
+      account,
       direction: dir,
       lots: [],
       entryQty: 0,
@@ -137,13 +144,13 @@ export function buildTrades(executions: Execution[]): Trade[] {
 
       // If flat, this fill opens a new episode in its own direction.
       if (!ep) {
-        ep = openEpisode(dirOfExec, e.name)
+        ep = openEpisode(dirOfExec, e.name, e.account ?? 'default')
         ep.openedAt = e.filledAt
       }
 
       const posSign = ep.direction === 'long' ? 1 : -1
       const execSign = signOf(e.side)
-      ep.fills.push({ side: e.side, qty: e.qty, price: e.price, at: e.filledAt, hash: e.hash })
+      ep.fills.push({ side: e.side, qty: e.qty, price: e.price, at: e.filledAt, hash: e.hash, account: e.account ?? 'default' })
 
       if (execSign === posSign) {
         // Adding to the position (entry).
@@ -171,7 +178,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
           trades.push(toTrade(ep, seq++))
           ep = null
           if (remaining > 1e-9) {
-            ep = openEpisode(dirOfExec, e.name)
+            ep = openEpisode(dirOfExec, e.name, e.account ?? 'default')
             ep.openedAt = e.filledAt
             ep.lots.push({ qty: remaining, price: e.price, at: e.filledAt })
             ep.entryQty += remaining

@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { randomUUID } from 'crypto'
 import Database from 'better-sqlite3'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
-import { parseWebullCsv, type Execution } from './lib/parse'
+import { parseWebullCsv, type Execution, type Side } from './lib/parse'
+import { etParts } from './lib/et'
 import { classifySector } from './lib/sector'
 import { getTickerDetails } from '../stock-planner/ipc/market/massive'
 
@@ -193,6 +195,40 @@ function insertExecutions(database: Database.Database, execs: Execution[], accou
 function allExecutions(database: Database.Database): Execution[] {
   const rows = database.prepare('SELECT * FROM executions').all() as Record<string, unknown>[]
   return rows.map(rowToExecution)
+}
+
+/**
+ * Build a single filled execution for a MANUAL (hand-entered) trade. Manual
+ * rows carry a UUID hash so they never collide with — or get de-duped against —
+ * imported rows, and are timestamped on the ET wall clock like imports so all
+ * analytics group them the same way. A round-trip trade is just an entry
+ * execution plus an (optional) exit execution; FIFO reassembles them.
+ */
+function buildManualExec(account: string, symbol: string, side: Side, qty: number, price: number, at: number): Execution {
+  const p = etParts(at)
+  const p2 = (n: number): string => String(n).padStart(2, '0')
+  const stamp = `${p2(p.m)}/${p2(p.d)}/${p.y} ${p2(p.hour)}:${p2(p.minute)}:00 ET`
+  const sideRaw = side === 'buy' ? 'Buy' : side === 'short' ? 'Short' : 'Sell'
+  return {
+    hash: `manual:${randomUUID()}`,
+    account,
+    name: '',
+    symbol,
+    side,
+    sideRaw,
+    status: 'Filled',
+    filled: true,
+    qty,
+    totalQty: qty,
+    price,
+    avgPrice: price,
+    limitPrice: price,
+    timeInForce: '',
+    placedText: stamp,
+    filledText: stamp,
+    filledAt: at,
+    placedAt: at
+  }
 }
 
 /** Parse one CSV file and import it into an account; returns per-file counts. */
@@ -400,6 +436,89 @@ export default function register(ctx: ModuleIpcContext): void {
       } else {
         database.exec('DELETE FROM executions')
       }
+      return { ok: true, executions: allExecutions(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  /* ------------------------- manual trade editing -------------------------- */
+
+  // Delete a trade by removing its underlying executions (the source of truth).
+  // Scoped to the trade's account so a hash can't collide across accounts.
+  ctx.ipcMain.handle(`${ID}:trade-delete`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const account = typeof r.account === 'string' && r.account.trim() ? r.account.trim() : 'default'
+    const hashes = (Array.isArray(r.hashes) ? r.hashes : []).filter((h): h is string => typeof h === 'string')
+    if (hashes.length === 0) return { ok: false, error: 'Nothing to delete.' }
+    try {
+      const database = getDb(ctx.app)
+      const stmt = database.prepare('DELETE FROM executions WHERE account = ? AND hash = ?')
+      const tx = database.transaction(() => {
+        for (const h of hashes) stmt.run(account, h)
+      })
+      tx()
+      return { ok: true, executions: allExecutions(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  /**
+   * Create OR edit a trade. Edit is delete-then-insert: the original fills
+   * (`deleteHashes` in `fromAccount`) are removed and fresh entry/exit
+   * executions are written into `account`, which also lets a trade be moved
+   * between accounts. A blank exit price = still-open position (entry only).
+   */
+  ctx.ipcMain.handle(`${ID}:trade-save`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const numOr = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+
+    const symbol = (typeof r.symbol === 'string' ? r.symbol : '').trim().toUpperCase()
+    const direction = r.direction === 'short' ? 'short' : 'long'
+    const qty = numOr(r.qty)
+    const entryPrice = numOr(r.entryPrice)
+    const entryAt = numOr(r.entryAt)
+    const exitPrice = numOr(r.exitPrice)
+    const exitAt = numOr(r.exitAt)
+    const exitQtyRaw = numOr(r.exitQty)
+    const deleteHashes = (Array.isArray(r.deleteHashes) ? r.deleteHashes : []).filter(
+      (h): h is string => typeof h === 'string'
+    )
+    const fromAccount =
+      typeof r.fromAccount === 'string' && r.fromAccount.trim() ? r.fromAccount.trim() : null
+
+    if (!symbol) return { ok: false, error: 'Enter a ticker symbol.' }
+    if (qty == null || qty <= 0) return { ok: false, error: 'Quantity must be greater than 0.' }
+    if (entryPrice == null || entryPrice <= 0) return { ok: false, error: 'Entry price must be greater than 0.' }
+    if (entryAt == null) return { ok: false, error: 'Enter a valid entry date/time.' }
+
+    const hasExit = exitPrice != null
+    if (hasExit) {
+      if (exitPrice <= 0) return { ok: false, error: 'Exit price must be greater than 0.' }
+      if (exitAt == null) return { ok: false, error: 'Enter a valid exit date/time.' }
+      if (exitAt < entryAt) return { ok: false, error: 'Exit time can’t be before the entry time.' }
+    }
+    const exitQty = hasExit ? (exitQtyRaw != null && exitQtyRaw > 0 ? Math.min(exitQtyRaw, qty) : qty) : 0
+
+    try {
+      const database = getDb(ctx.app)
+      const account = resolveAccount(database, r.account)
+      const entrySide: Side = direction === 'long' ? 'buy' : 'short'
+      const exitSide: Side = direction === 'long' ? 'sell' : 'buy'
+      const rows: Execution[] = [buildManualExec(account, symbol, entrySide, qty, entryPrice, entryAt)]
+      if (hasExit && exitPrice != null && exitAt != null) {
+        rows.push(buildManualExec(account, symbol, exitSide, exitQty, exitPrice, exitAt))
+      }
+      const delStmt = database.prepare('DELETE FROM executions WHERE account = ? AND hash = ?')
+      const tx = database.transaction(() => {
+        if (deleteHashes.length > 0) {
+          const acct = fromAccount ?? account
+          for (const h of deleteHashes) delStmt.run(acct, h)
+        }
+        insertExecutions(database, rows, account)
+      })
+      tx()
       return { ok: true, executions: allExecutions(database) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }

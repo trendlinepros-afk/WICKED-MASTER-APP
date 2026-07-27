@@ -21,6 +21,25 @@ interface ImportSummary {
   files: number
 }
 
+/** A hand-entered or edited trade (times already resolved to epoch ms). */
+export interface TradeDraft {
+  /** destination account for the new executions */
+  account: string
+  /** original account of the fills being replaced (edit/move) */
+  fromAccount?: string
+  /** hashes of the fills to remove first (edit) */
+  deleteHashes?: string[]
+  symbol: string
+  direction: 'long' | 'short'
+  qty: number
+  entryPrice: number
+  entryAt: number
+  /** null = still-open position (no exit) */
+  exitPrice: number | null
+  exitAt: number | null
+  exitQty: number | null
+}
+
 interface Ok {
   ok: true
   [k: string]: unknown
@@ -116,6 +135,8 @@ interface State {
   importDialog: (account?: string) => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
   clearAll: (account?: string) => Promise<void>
+  saveTrade: (draft: TradeDraft) => Promise<string | null>
+  deleteTrade: (account: string, hashes: string[]) => Promise<void>
   loadSectors: () => Promise<void>
   analyze: () => Promise<void>
   cancelAi: () => Promise<void>
@@ -294,6 +315,31 @@ export const useTrades = create<State>((set, get) => {
       } finally {
         set({ importing: false })
       }
+    },
+
+    saveTrade: async (draft) => {
+      const res = (await invoke('trade-save', draft)) as Res & { executions?: Execution[] }
+      if (res.ok !== true) {
+        const msg = (res as Err).error ?? 'Could not save the trade.'
+        set({ error: msg })
+        return msg
+      }
+      recompute((res.executions as Execution[]) ?? get().allExecutions)
+      await get().refreshAccounts()
+      void get().loadSectors()
+      set({ status: draft.deleteHashes && draft.deleteHashes.length > 0 ? 'Trade updated.' : 'Trade added.' })
+      return null
+    },
+
+    deleteTrade: async (account, hashes) => {
+      const res = (await invoke('trade-delete', { account, hashes })) as Res & { executions?: Execution[] }
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? 'Could not delete the trade.' })
+        return
+      }
+      recompute((res.executions as Execution[]) ?? get().allExecutions)
+      await get().refreshAccounts()
+      set({ status: 'Trade deleted.' })
     },
 
     loadSectors: async () => {

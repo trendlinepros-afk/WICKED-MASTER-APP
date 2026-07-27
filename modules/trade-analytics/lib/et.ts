@@ -46,3 +46,32 @@ export function etParts(at: number): EtParts {
     ymd: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
   }
 }
+
+/* --------- <input type="datetime-local"> <-> epoch, in Eastern Time -------- */
+
+const p2 = (n: number): string => String(n).padStart(2, '0')
+
+/** Epoch ms → "YYYY-MM-DDTHH:MM" as the ET wall clock (to prefill a picker). */
+export function etInputValue(at: number | null | undefined): string {
+  if (at == null || !Number.isFinite(at)) return ''
+  const p = etParts(at)
+  return `${p.y}-${p2(p.m)}-${p2(p.d)}T${p2(p.hour)}:${p2(p.minute)}`
+}
+
+/**
+ * "YYYY-MM-DDTHH:MM" (interpreted as an ET wall clock, matching how imported
+ * fills are timestamped) → epoch ms. Uses the offset-correction trick so it is
+ * DST-correct and independent of the host machine's timezone.
+ */
+export function etInputToEpoch(local: string): number | null {
+  const m = (local || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return null
+  const [, y, mo, d, hh, mm, ss] = m
+  const utcGuess = Date.UTC(+y, +mo - 1, +d, +hh, +mm, ss ? +ss : 0)
+  if (Number.isNaN(utcGuess)) return null
+  // How does that UTC instant read on the ET wall clock? The gap is the offset.
+  const p = etParts(utcGuess)
+  const asEt = Date.UTC(p.y, p.m - 1, p.d, p.hour, p.minute, ss ? +ss : 0)
+  const offset = asEt - utcGuess
+  return utcGuess - offset
+}

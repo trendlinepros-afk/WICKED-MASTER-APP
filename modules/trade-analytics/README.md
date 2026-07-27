@@ -45,6 +45,12 @@ cross-checked by hand).
 - **Overview** — KPI tiles, equity curve, win/loss donut, avg win/loss, streaks,
   long-vs-short, volume, best/worst symbol.
 - **Trades** — every round-trip trade (open ones flagged), entry/exit/hold/P&L.
+  Hover a row to **edit** or **delete** it, or use **Add trade** to enter one by
+  hand (symbol, direction, qty, entry/exit price + ET time, optional partial
+  exit and account). Editing/deleting acts on the underlying executions — the
+  source of truth — so FIFO and every stat stay correct; a hand-entered exit
+  price left blank means the position is still open. Manual rows carry a UUID
+  key so they never collide with or get de-duped against imported fills.
 - **Open Positions** — the "no sell yet" list with cost basis and age.
 - **Symbols** — P&L-by-symbol bar chart + a sortable-by-P&L table.
 - **Timing** — P&L by weekday, by hour (ET), and daily.
