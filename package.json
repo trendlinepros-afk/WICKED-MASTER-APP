@@ -1,8 +1,8 @@
 {
   "name": "wicked-suite",
   "productName": "WICKED",
-  "version": "0.1.32",
-  "description": "WICKED — unified Windows app suite (18 modules, one shell)",
+  "version": "0.1.33",
+  "description": "WICKED — unified Windows app suite (19 modules, one shell)",
   "main": "./out/main/index.js",
   "author": "Wicked RC LLC",
   "license": "UNLICENSED",

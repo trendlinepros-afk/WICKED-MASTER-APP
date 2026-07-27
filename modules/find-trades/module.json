@@ -1,0 +1,14 @@
+{
+  "id": "find-trades",
+  "name": "Find Trades",
+  "icon": "Radar",
+  "version": "1.0.0",
+  "description": "Describe what you're hunting for and an AI screens the live market + news to find matching stocks",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
