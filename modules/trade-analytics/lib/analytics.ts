@@ -1,4 +1,5 @@
 import type { Execution, Side } from './parse'
+import { etParts } from './et'
 
 /**
  * Position matching + trade analytics (pure, unit-testable).
@@ -364,11 +365,12 @@ export function computeStats(trades: Trade[]): Stats {
     symMap.set(t.symbol, s)
 
     if (t.closedAt != null) {
-      const d = new Date(t.closedAt)
-      bump(dowMap as Map<number | string, Bucket>, d.getDay(), DOW[d.getDay()], pnl)
-      bump(hourMap as Map<number | string, Bucket>, d.getHours(), `${d.getHours()}:00`, pnl)
-      const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      bump(dayMap as Map<number | string, Bucket>, dayKey, dayKey, pnl)
+      // group by ET (market clock) so results don't depend on the host TZ and
+      // match the Breakdown/Calendar tabs (the UI labels these "ET")
+      const p = etParts(t.closedAt)
+      bump(dowMap as Map<number | string, Bucket>, p.dow, DOW[p.dow], pnl)
+      bump(hourMap as Map<number | string, Bucket>, p.hour, `${p.hour}:00`, pnl)
+      bump(dayMap as Map<number | string, Bucket>, p.ymd, p.ymd, pnl)
       cumulative += pnl
       equityCurve.push({ at: t.closedAt, pnl, cumulative, symbol: t.symbol })
     }

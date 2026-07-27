@@ -190,27 +190,33 @@ function OpenTab(): React.JSX.Element {
         No open positions — every buy has a matching sell. 🎉
       </div>
     )
+  // realized P&L already banked on positions that were partially scaled out
+  const bankedPartial = open.reduce((n, t) => n + (t.closedQty > 0 ? t.realizedPnl : 0), 0)
   return (
     <div className="p-4">
       <p className="mb-3 flex items-center gap-2 text-sm text-muted">
         <Wallet size={15} className="text-accent" /> {open.length} open position(s) — bought (or shorted) with no closing trade yet.
       </p>
       <div className="overflow-hidden rounded-xl border border-edge">
-        <div className="grid grid-cols-[70px_60px_1fr_1fr_1fr_1fr] gap-2 border-b border-edge bg-raised/40 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+        <div className="grid grid-cols-[70px_60px_1fr_1fr_1fr_110px_1fr] gap-2 border-b border-edge bg-raised/40 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
           <div>Symbol</div>
           <div>Side</div>
           <div className="text-right">Open qty</div>
           <div className="text-right">Avg entry</div>
           <div className="text-right">Cost basis</div>
+          <div className="text-right">Realized so far</div>
           <div className="text-right">Opened</div>
         </div>
         {open.map((t) => (
-          <div key={t.id} className="grid grid-cols-[70px_60px_1fr_1fr_1fr_1fr] items-center gap-2 border-b border-edge/50 px-3 py-2.5 text-xs">
+          <div key={t.id} className="grid grid-cols-[70px_60px_1fr_1fr_1fr_110px_1fr] items-center gap-2 border-b border-edge/50 px-3 py-2.5 text-xs">
             <div className="font-semibold">{t.symbol}</div>
             <div className={t.direction === 'long' ? 'text-ok' : 'text-danger'}>{t.direction}</div>
             <div className="text-right tabular-nums">{shares(t.openQty)}</div>
             <div className="text-right tabular-nums">{t.avgEntry.toFixed(4)}</div>
             <div className="text-right font-medium tabular-nums">{money(t.avgEntry * t.openQty)}</div>
+            <div className={`text-right tabular-nums ${t.closedQty > 0 ? pos(t.realizedPnl) : 'text-muted'}`}>
+              {t.closedQty > 0 ? `${signedMoney(t.realizedPnl)}` : '—'}
+            </div>
             <div className="text-right tabular-nums text-muted">{dateTime(t.openedAt)}</div>
           </div>
         ))}
@@ -219,6 +225,14 @@ function OpenTab(): React.JSX.Element {
         Cost basis is what you paid to open. Unrealized P&L needs live prices (not in the Webull order
         export), so it isn&apos;t shown — import a fresh report after you close a position and it moves
         to your realized stats automatically.
+        {bankedPartial !== 0 && (
+          <>
+            {' '}
+            <strong className={pos(bankedPartial)}>{signedMoney(bankedPartial)}</strong> is already realized
+            from partial scale-outs on these open positions (it joins your realized totals once each position
+            is fully closed).
+          </>
+        )}
       </p>
     </div>
   )
