@@ -1,0 +1,14 @@
+{
+  "id": "advanced-charts",
+  "name": "Advanced Charts",
+  "icon": "LineChart",
+  "version": "1.0.0",
+  "description": "Full TradingView charting workspace — drawings, indicators, saved layouts (bring your licensed charting_library)",
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
