@@ -51,7 +51,7 @@ export default function GroupView(): React.JSX.Element {
       </button>
 
       <div className="flex items-center gap-3">
-        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/15 text-accent">
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-warn/15 text-warn">
           <ModuleIcon name={group.icon} size={24} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">

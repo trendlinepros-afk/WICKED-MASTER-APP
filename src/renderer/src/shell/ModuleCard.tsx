@@ -132,16 +132,16 @@ export function GroupCard({
         setDragId(null)
       }}
       className={`group relative cursor-pointer rounded-xl border bg-surface p-5 transition-colors ${
-        over ? 'border-accent ring-2 ring-accent/40' : 'border-edge hover:border-accent/60'
+        over ? 'border-warn ring-2 ring-warn/40' : 'border-edge hover:border-warn/60'
       }`}
     >
       <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/15 text-accent">
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-warn/15 text-warn">
           <ModuleIcon name={group.icon} size={20} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">
           <div className="truncate font-semibold">{group.name}</div>
-          <div className="truncate text-xs text-muted">
+          <div className="truncate text-xs font-medium text-warn">
             Folder · {count} tool{count === 1 ? '' : 's'}
           </div>
         </div>

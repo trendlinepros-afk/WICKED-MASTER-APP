@@ -113,13 +113,13 @@ export default function ModuleMenu(): React.JSX.Element | null {
             <span className="w-[15px] shrink-0">
               {currentGroup === g.id && <Check size={13} className="text-accent" />}
             </span>
-            <ModuleIcon name={g.icon} size={14} strokeWidth={1.8} className="shrink-0 text-muted" />
+            <ModuleIcon name={g.icon} size={14} strokeWidth={1.8} className="shrink-0 text-warn" />
             <span className="min-w-0 truncate">{g.name}</span>
           </button>
         ))}
       </div>
       <button className={item} onClick={() => openFolderCreate(id)}>
-        <FolderPlus size={15} className="text-accent" />
+        <FolderPlus size={15} className="text-warn" />
         New folder…
       </button>
     </div>

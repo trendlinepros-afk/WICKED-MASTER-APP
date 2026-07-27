@@ -50,7 +50,7 @@ export default function Home(): React.JSX.Element {
           onClick={() => openFolderCreate()}
           className="flex shrink-0 items-center gap-2 rounded-lg border border-edge bg-surface px-3 py-2 text-sm font-medium text-ink hover:border-accent/60"
         >
-          <FolderPlus size={15} className="text-accent" />
+          <FolderPlus size={15} className="text-warn" />
           New folder
         </button>
       </div>

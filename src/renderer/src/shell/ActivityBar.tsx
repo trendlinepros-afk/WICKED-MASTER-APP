@@ -160,7 +160,7 @@ export default function ActivityBar(): React.JSX.Element {
                   title={expanded ? undefined : `${g.name} (folder)`}
                   className={`${rowClass(isActive || holdsActive, expanded)} min-w-0 flex-1`}
                 >
-                  <ModuleIcon name={g.icon} size={20} strokeWidth={1.8} className="shrink-0" />
+                  <ModuleIcon name={g.icon} size={20} strokeWidth={1.8} className="shrink-0 text-warn" />
                   {expanded && (
                     <>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{g.name}</span>
