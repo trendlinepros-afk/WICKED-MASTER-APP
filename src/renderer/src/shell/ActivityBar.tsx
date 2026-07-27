@@ -13,6 +13,7 @@ import {
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
+import { BrandLogo, BrandMark } from './BrandLogo'
 import ModuleIcon from './ModuleIcon'
 import { effectiveName, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
 
@@ -124,10 +125,7 @@ export default function ActivityBar(): React.JSX.Element {
         title="Home"
         className={({ isActive }) => `${rowClass(isActive, expanded)} mb-1`}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-sm font-black tracking-tighter text-accent-ink">
-          W
-        </span>
-        {expanded && <span className="truncate text-[15px] font-bold tracking-tight text-ink">WICKED</span>}
+        {expanded ? <BrandLogo markSize={30} /> : <BrandMark size={30} />}
       </NavLink>
 
       {/* Expand / collapse toggle */}

@@ -80,6 +80,10 @@ export interface ShellSettings {
   groupOverrides: Record<string, { name?: string; icon?: string; description?: string }>
   /** whole-app backup preferences */
   backup: BackupSettings
+  /** user-created color themes (Settings → Appearance → Theme studio) */
+  customThemes: import('./themes').CustomTheme[]
+  /** id of the custom theme in use; '' = built-in light/dark/system */
+  activeThemeId: string
 }
 
 export const DEFAULT_SETTINGS: ShellSettings = {
@@ -98,7 +102,9 @@ export const DEFAULT_SETTINGS: ShellSettings = {
     schedule: { enabled: false, intervalHours: 24 },
     keep: 10,
     lastBackupUtc: ''
-  }
+  },
+  customThemes: [],
+  activeThemeId: ''
 }
 
 /** One backup file in the destination folder. */

@@ -33,6 +33,7 @@ import { modules, type RegisteredModule } from './registry'
 import { effectiveDescription, effectiveName } from './moduleView'
 import { useSettings } from '@/stores/settings'
 import ModuleIcon from './ModuleIcon'
+import ThemeStudio from './ThemeStudio'
 
 function ModuleRow({
   mod,
@@ -639,6 +640,13 @@ export default function SettingsScreen(): React.JSX.Element {
             </button>
           ))}
         </div>
+        {settings.activeThemeId && (
+          <p className="mt-2 text-xs text-muted">
+            A custom theme is active — the Light/Dark/System toggle applies when you switch back to the
+            Default theme below.
+          </p>
+        )}
+        <ThemeStudio />
       </section>
 
       {/* Updates */}
