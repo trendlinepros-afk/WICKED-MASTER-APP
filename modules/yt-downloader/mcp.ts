@@ -41,18 +41,25 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           .boolean()
           .optional()
           .describe('True = whole playlist/album; false = just the single track/video from a track+list URL.'),
+        combine: z
+          .boolean()
+          .optional()
+          .describe('After a playlist VIDEO download, shuffle the clips and stitch them into a single movie file (re-encodes; needs ffmpeg). Ignored for single videos and audio downloads.'),
+        title: z.string().optional().describe('Optional title used to name the combined movie file.'),
         confirm: z.boolean().optional().describe('Set true to actually start the download.')
       },
       handler: (args) => {
         const gate = ctx.confirm(
           args.confirm as boolean | undefined,
-          `Download ${args.isPlaylist ? 'the entire playlist' : 'the video'} at ${String(args.quality)} quality to the configured folder. This writes files to disk and may take a long time / a lot of space for playlists.`
+          `Download ${args.isPlaylist ? 'the entire playlist' : 'the video'} at ${String(args.quality)} quality to the configured folder${args.combine ? ', then combine the clips into one movie' : ''}. This writes files to disk and may take a long time / a lot of space for playlists.`
         )
         if (gate) return gate
         return ctx.invoke(`${ID}:download`, {
           url: args.url,
           quality: args.quality,
-          isPlaylist: args.isPlaylist === true
+          isPlaylist: args.isPlaylist === true,
+          combine: args.combine === true,
+          title: args.title
         })
       }
     },

@@ -84,6 +84,33 @@ Both audio presets embed artist/album tags and cover art. Each video tier is
 yt-dlp picks the best available at-or-below the target, so a preset a given video
 doesn't have degrades gracefully.
 
+## Combine clips into one movie
+
+Turn a downloaded **playlist/album into a single video**. Enable **"Combine clips
+into one video"** (a persisted preference, `yt-downloader.combineClips`) before a
+playlist *video* download; when it finishes, `ipc/combine.ts` shuffles the clips
+and stitches them into one file saved alongside the individual videos
+(`<Playlist title> - Combined <timestamp>.mp4`).
+
+Playlist clips vary wildly in resolution, frame rate, codec, and some have no
+audio, so a naive `concat -c copy` would fail or desync. The two-pass pipeline:
+
+1. **Which files?** yt-dlp writes each final path to a manifest
+   (`--print-to-file after_move:filepath`); a folder scan of freshly-written video
+   files is the fallback. (`collectOutputs`)
+2. **Normalize** every clip to identical parameters — scale+pad to a common 16:9
+   canvas sized to the chosen quality, uniform fps, `yuv420p`, AAC 48k stereo,
+   **synthesizing silence (`anullsrc`) for clips with no audio** (detected via the
+   bundled `ffprobe`). One bad clip is skipped, not fatal.
+3. **Concat** the normalized copies with a stream copy (`-f concat -c copy`) —
+   fast and glitch-free because the inputs are now byte-compatible.
+
+It only runs for **playlist + video** downloads (ignored for single videos and
+audio jobs) and needs ffmpeg. It re-encodes every clip, so large playlists take a
+while; progress is reported per clip and the whole thing is cancellable. The
+argument construction, shuffle, file selection and silence-synthesis are unit-
+tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
+
 ## Output & robustness
 
 - Single video → `<folder>/<title> [<id>].<ext>`.
@@ -99,8 +126,8 @@ doesn't have degrades gracefully.
 - Download folder defaults to `Downloads/WICKED YouTube` (changeable; can be a
   network share). yt-dlp binary + module folder are shown in Settings → Modules.
 - MCP: `yt-downloader__status` / `__probe` (read-only), `__download`
-  (destructive, confirm-gated — writes files, can run long), `__update`,
-  `__cancel`.
+  (destructive, confirm-gated — writes files, can run long; takes an optional
+  `combine` flag), `__update`, `__cancel`.
 
 ## Note
 

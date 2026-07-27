@@ -47,6 +47,20 @@ export function resolveFfmpeg(): string | null {
   return null
 }
 
+/** Resolve the bundled ffprobe (used to detect a clip's audio when combining). */
+export function resolveFfprobe(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const m = require('ffprobe-static') as string | { path?: string } | null
+    let p = typeof m === 'string' ? m : m?.path
+    if (p) p = p.replace(/\bapp\.asar([\\/])/, 'app.asar.unpacked$1')
+    if (p && existsSync(p)) return p
+  } catch {
+    /* fall through */
+  }
+  return null
+}
+
 /** True if a usable yt-dlp binary is present (module copy or on PATH). */
 export function hasYtDlp(userData: string): boolean {
   return existsSync(ytDlpPath(userData))
@@ -86,6 +100,8 @@ export interface DownloadRequest {
   quality: string
   isPlaylist: boolean
   downloadDir: string
+  /** when set, yt-dlp appends each final file path here (for combine) */
+  manifestPath?: string
 }
 
 
@@ -164,6 +180,10 @@ export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): 
     '--progress-template',
     `download:${PGRESS}|%(info.playlist_index)s|%(info.n_entries)s|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.title)s`
   ]
+  // Record each item's FINAL path (after any merge/move) so the combine step
+  // knows exactly which files this job produced. --print-to-file (unlike
+  // --print) does not imply --simulate, so the download still happens.
+  if (req.manifestPath) args.push('--print-to-file', 'after_move:filepath', req.manifestPath)
   if (ffmpeg) args.push('--ffmpeg-location', ffmpeg)
   args.push(req.url)
   return args

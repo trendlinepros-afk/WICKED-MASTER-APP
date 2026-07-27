@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, rmSync } from 'fs'
+import { dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import {
@@ -8,15 +8,18 @@ import {
   buildDownloadArgs,
   downloadYtDlp,
   hasYtDlp,
+  isAudioQuality,
   isBinaryTooOld,
   parseProgressLine,
   parseYtUrl,
   resolveFfmpeg,
+  resolveFfprobe,
   spawnYtDlp,
   ytDlpCmd,
   ytDlpPath,
   type DownloadRequest
 } from './ipc/ytdlp'
+import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/combine'
 
 /* ------------------------------------------------------------------------ *
  *  YT DOWNLOADER — main process.
@@ -32,6 +35,7 @@ const ID = 'yt-downloader'
 const DIR_KEY = `${ID}.downloadDir`
 const MUSIC_AUDIO_ONLY_KEY = `${ID}.musicAudioOnly`
 const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
+const COMBINE_KEY = `${ID}.combineClips`
 const PROBE_TIMEOUT_MS = 90_000
 
 function errMsg(err: unknown): string {
@@ -39,7 +43,10 @@ function errMsg(err: unknown): string {
 }
 
 export default function register(ctx: ModuleIpcContext): void {
+  // The currently-running child (yt-dlp, then ffprobe/ffmpeg during combine).
+  // Cancel kills it and flips cancelRequested so the combine loop stops too.
   let downloadChild: ChildProcess | null = null
+  let cancelRequested = false
 
   const userData = (): string => ctx.app.getPath('userData')
 
@@ -104,11 +111,12 @@ export default function register(ctx: ModuleIpcContext): void {
    * link is a song, so grabbing video is almost never what's wanted.
    * ---------------------------------------------------------------------- */
 
-  const prefs = (): { musicAudioOnly: boolean; musicFormat: string } => {
+  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean } => {
     const fmt = ctx.storeGet<string>(MUSIC_FORMAT_KEY, 'audio')
     return {
       musicAudioOnly: ctx.storeGet<boolean>(MUSIC_AUDIO_ONLY_KEY, true) !== false,
-      musicFormat: fmt === 'audio-native' ? 'audio-native' : 'audio'
+      musicFormat: fmt === 'audio-native' ? 'audio-native' : 'audio',
+      combineClips: ctx.storeGet<boolean>(COMBINE_KEY, false) === true
     }
   }
 
@@ -119,6 +127,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (typeof r.musicAudioOnly === 'boolean') ctx.storeSet(MUSIC_AUDIO_ONLY_KEY, r.musicAudioOnly)
     if (r.musicFormat === 'audio' || r.musicFormat === 'audio-native')
       ctx.storeSet(MUSIC_FORMAT_KEY, r.musicFormat)
+    if (typeof r.combineClips === 'boolean') ctx.storeSet(COMBINE_KEY, r.combineClips)
     return { ok: true, ...prefs() }
   })
 
@@ -254,6 +263,7 @@ export default function register(ctx: ModuleIpcContext): void {
 
   ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
     if (downloadChild) return { ok: false, error: 'A download is already running. Cancel it or wait for it to finish.' }
+    cancelRequested = false
     const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
     const url = typeof r.url === 'string' ? r.url.trim() : ''
     if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'A YouTube URL is required.' }
@@ -265,13 +275,28 @@ export default function register(ctx: ModuleIpcContext): void {
     const dir = downloadDir()
     mkdirSync(dir, { recursive: true })
 
-    const req: DownloadRequest = {
-      url,
-      quality: typeof r.quality === 'string' ? r.quality : 'best',
-      isPlaylist: r.isPlaylist === true,
-      downloadDir: dir
+    const quality = typeof r.quality === 'string' ? r.quality : 'best'
+    const isPlaylist = r.isPlaylist === true
+    const ffmpeg = resolveFfmpeg()
+    // "Combine clips" only makes sense for a multi-item VIDEO download and needs
+    // ffmpeg. It's ignored for single videos and audio jobs.
+    const wantCombine = r.combine === true && isPlaylist && !isAudioQuality(quality) && !!ffmpeg
+    const jobStart = Date.now()
+    const manifestPath = wantCombine ? join(ud, 'modules', ID, `combine-manifest-${jobStart}.txt`) : undefined
+    if (manifestPath) mkdirSync(dirname(manifestPath), { recursive: true })
+
+    const req: DownloadRequest = { url, quality, isPlaylist, downloadDir: dir, manifestPath }
+    const args = buildDownloadArgs(req, ffmpeg)
+
+    const cleanupManifest = (): void => {
+      if (manifestPath && existsSync(manifestPath)) {
+        try {
+          rmSync(manifestPath, { force: true })
+        } catch {
+          /* ignore */
+        }
+      }
     }
-    const args = buildDownloadArgs(req, resolveFfmpeg())
 
     let completed = 0
     const result = await spawnYtDlp(
@@ -292,19 +317,59 @@ export default function register(ctx: ModuleIpcContext): void {
         downloadChild = child
       }
     )
-    downloadChild = null
 
-    if (result.cancelled) return { ok: false, cancelled: true }
+    if (result.cancelled) {
+      downloadChild = null
+      cleanupManifest()
+      return { ok: false, cancelled: true }
+    }
+
+    // ---- combine phase (best-effort; never fails the download itself) ----
+    let combined:
+      | { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }
+      | null = null
+    if (wantCombine && !cancelRequested) {
+      const files = collectOutputs(manifestPath ?? null, dir, jobStart)
+      if (files.length >= 2 && ffmpeg) {
+        const title = typeof r.title === 'string' && r.title.trim() ? r.title.trim() : 'Playlist'
+        const stamp = new Date(jobStart).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+        const outPath = join(dir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
+        const tmpDir = join(ud, 'modules', ID, `combine-tmp-${jobStart}`)
+        send(`${ID}:progress`, { kind: 'combine', done: 0, total: files.length, label: `Combining ${files.length} clips…` })
+        const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
+          ffmpeg,
+          ffprobe: resolveFfprobe(),
+          onNote: (note) => send(`${ID}:progress`, { kind: 'note', note }),
+          onStep: (done, total, label) => send(`${ID}:progress`, { kind: 'combine', done, total, label }),
+          registerChild: (c) => {
+            downloadChild = c
+          },
+          shouldCancel: () => cancelRequested
+        })
+        combined = cRes.cancelled
+          ? { ok: false, cancelled: true }
+          : cRes.ok
+            ? { ok: true, path: cRes.outPath, used: cRes.used, total: cRes.total }
+            : { ok: false, error: cRes.error }
+      } else {
+        combined = { ok: false, error: `Only ${files.length} downloaded file(s) found — need at least 2 to combine.` }
+      }
+    }
+
+    downloadChild = null
+    cleanupManifest()
+
     if (!result.ok) {
       const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
       // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
       // treat as a soft warning when at least something downloaded.
-      return { ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed }
+      return { ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined }
     }
-    return { ok: true, completed }
+    return { ok: true, completed, combined }
   })
 
   ctx.ipcMain.handle(`${ID}:cancel`, () => {
+    cancelRequested = true
     if (downloadChild) {
       downloadChild.kill()
       return { ok: true, cancelled: true }

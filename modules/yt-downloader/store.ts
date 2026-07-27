@@ -97,12 +97,18 @@ interface State {
   musicAudioOnly: boolean
   /** setting: which audio preset the above forces ('audio' | 'audio-native') */
   musicFormat: string
+  /** setting: after a playlist video download, stitch the clips into one movie */
+  combineClips: boolean
   /** true when the current URL looks like a YouTube Music link (live, no probe) */
   urlIsMusic: boolean
   /** user explicitly picked a video quality for this music URL — respect it */
   musicOverride: boolean
 
   downloading: boolean
+  /** true while the post-download combine (ffmpeg) phase is running */
+  combining: boolean
+  /** result of the last combine, if any */
+  combinedInfo: { path: string; used: number; total: number } | null
   progress: Progress | null
   log: string[]
   statusMsg: string
@@ -114,6 +120,7 @@ interface State {
   setWholePlaylist: (v: boolean) => void
   setMusicAudioOnly: (v: boolean) => Promise<void>
   setMusicFormat: (v: string) => Promise<void>
+  setCombineClips: (v: boolean) => Promise<void>
   clearMusicOverride: () => void
   dismissError: () => void
 
@@ -142,10 +149,13 @@ export const useYt = create<State>((set, get) => ({
 
   musicAudioOnly: true,
   musicFormat: 'audio',
+  combineClips: false,
   urlIsMusic: false,
   musicOverride: false,
 
   downloading: false,
+  combining: false,
+  combinedInfo: null,
   progress: null,
   log: [],
   statusMsg: 'Paste a YouTube video or playlist URL to begin.',
@@ -190,6 +200,11 @@ export const useYt = create<State>((set, get) => ({
     await invoke('prefs-set', { musicFormat: v })
   },
 
+  setCombineClips: async (v) => {
+    set({ combineClips: v })
+    await invoke('prefs-set', { combineClips: v })
+  },
+
   clearMusicOverride: () => {
     const { musicFormat } = get()
     set({ musicOverride: false, quality: musicFormat })
@@ -198,11 +213,12 @@ export const useYt = create<State>((set, get) => ({
   dismissError: () => set({ error: '' }),
 
   loadPrefs: async () => {
-    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string }>('prefs-get')
+    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean }>('prefs-get')
     if (res.ok)
       set({
         musicAudioOnly: res.musicAudioOnly !== false,
-        musicFormat: res.musicFormat === 'audio-native' ? 'audio-native' : 'audio'
+        musicFormat: res.musicFormat === 'audio-native' ? 'audio-native' : 'audio',
+        combineClips: res.combineClips === true
       })
   },
 
@@ -280,7 +296,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, downloading, wholePlaylist } = get()
+    const { url, probe, quality, downloading, wholePlaylist, combineClips } = get()
     if (downloading || !url.trim()) return
     // For a track+list URL the user's choice wins; otherwise follow the probe.
     // With no probe yet, fall back to the URL shape so a pasted playlist link
@@ -290,27 +306,49 @@ export const useYt = create<State>((set, get) => ({
         ? wholePlaylist
         : probe.kind === 'playlist'
       : /[?&]list=/.test(url)
-    set({ downloading: true, error: '', progress: null, log: [], lastResult: null, statusMsg: 'Starting download…' })
+    set({ downloading: true, combining: false, combinedInfo: null, error: '', progress: null, log: [], lastResult: null, statusMsg: 'Starting download…' })
     try {
       const res = (await invoke('download', {
         url: url.trim(),
         quality,
-        isPlaylist
-      })) as Res & { warning?: boolean; completed?: number; cancelled?: boolean }
+        isPlaylist,
+        combine: combineClips,
+        title: probe?.title ?? ''
+      })) as Res & {
+        warning?: boolean
+        completed?: number
+        cancelled?: boolean
+        combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
+      }
+
+      // Describe how the combine step went, appended to the main status line.
+      const c = res.combined
+      const combineMsg = c
+        ? c.ok
+          ? ` 🎬 Combined ${Number(c.used) || 0} clip(s) into one video.`
+          : c.cancelled
+            ? ' (Combine cancelled.)'
+            : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
+        : ''
+      if (c?.ok && c.path) set({ combinedInfo: { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } })
+
       if (res.cancelled) {
         set({ statusMsg: 'Download cancelled.', lastResult: 'cancelled' })
       } else if (res.ok === true && !res.warning) {
-        set({ statusMsg: `Done — downloaded ${Number(res.completed) || ''} item(s). Saved to your downloads folder.`, lastResult: 'done' })
+        set({
+          statusMsg: `Done — downloaded ${Number(res.completed) || ''} item(s).${combineMsg} Saved to your downloads folder.`,
+          lastResult: c && !c.ok && !c.cancelled ? 'warning' : 'done'
+        })
       } else if (res.warning) {
         set({
-          statusMsg: `Finished with some skips — ${Number(res.completed) || 0} downloaded. ${(res as Err).error ?? ''}`.trim(),
+          statusMsg: `Finished with some skips — ${Number(res.completed) || 0} downloaded.${combineMsg} ${(res as Err).error ?? ''}`.trim(),
           lastResult: 'warning'
         })
       } else {
         set({ error: (res as Err).error ?? 'Download failed.', statusMsg: 'Download failed.', lastResult: 'error' })
       }
     } finally {
-      set({ downloading: false, progress: null })
+      set({ downloading: false, combining: false, progress: null })
     }
   },
 
@@ -319,9 +357,18 @@ export const useYt = create<State>((set, get) => ({
   },
 
   _onProgress: (raw) => {
-    const p = raw as { kind?: string; note?: string } & Progress
+    const p = raw as { kind?: string; note?: string; done?: number; total?: number; label?: string } & Progress
     if (p.kind === 'note' && p.note) {
       set((s) => ({ log: [...s.log.slice(-40), p.note as string], statusMsg: p.note as string }))
+    } else if (p.kind === 'combine') {
+      const total = Number(p.total) || 1
+      const done = Number(p.done) || 0
+      const label = String(p.label ?? 'Combining…')
+      set({
+        combining: true,
+        statusMsg: label,
+        progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
+      })
     } else if (p.kind === 'progress') {
       set({ progress: { index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title } })
     }

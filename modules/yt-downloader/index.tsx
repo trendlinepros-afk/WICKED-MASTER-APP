@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  Film,
   FolderOpen,
   ListVideo,
   Loader2,
@@ -55,6 +56,13 @@ export default function YtDownloader(): React.JSX.Element {
     if (p.kind === 'playlist') return `playlist (${p.count} ${item}s)`
     return `this ${item}`
   }
+
+  const videoSelected = !isAudioPreset(s.quality) && !musicForced
+  /** whether this run will actually stitch a movie (playlist + video + toggle) */
+  const willCombine =
+    s.combineClips &&
+    videoSelected &&
+    (s.probe ? (s.probe.canChooseSingle ? s.wholePlaylist : s.probe.kind === 'playlist') : /[?&]list=/.test(s.url))
 
   return (
     <div className="flex h-full flex-col">
@@ -324,6 +332,44 @@ export default function YtDownloader(): React.JSX.Element {
             </p>
           </div>
 
+          {/* combine clips into one movie */}
+          {videoSelected && (
+            <div className="rounded-xl border border-edge bg-surface p-4">
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={s.combineClips}
+                  onChange={(e) => void s.setCombineClips(e.target.checked)}
+                  disabled={s.downloading}
+                  className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                />
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1.5 text-sm font-medium">
+                    <Film size={14} className="text-accent" />
+                    Combine clips into one video
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    After a <strong>playlist or album</strong> finishes downloading, shuffle all the clips
+                    and stitch them into a single movie file — saved alongside the individual videos. Clips
+                    are re-encoded to a matching format, so large playlists can take a while.
+                  </span>
+                </span>
+              </label>
+              {s.combineClips && status && !status.ffmpegReady && (
+                <p className="mt-2 flex items-start gap-1.5 border-t border-edge pt-2 text-xs text-warn">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  ffmpeg isn&apos;t available, so clips can&apos;t be combined — the individual videos will
+                  still download normally.
+                </p>
+              )}
+              {willCombine && (!status || status.ffmpegReady) && (
+                <p className="mt-2 border-t border-edge pt-2 text-xs text-accent">
+                  This run will stitch the downloaded clips into one shuffled movie.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* download button / progress */}
           <div className="rounded-xl border border-edge bg-surface p-4">
             {!s.downloading ? (
@@ -334,13 +380,18 @@ export default function YtDownloader(): React.JSX.Element {
               >
                 <Download size={16} />
                 Download {downloadTargetLabel()} in {QUALITIES.find((q) => q.id === s.quality)?.label}
+                {willCombine ? ' · then combine' : ''}
               </button>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-2 text-sm">
                   <span className="flex items-center gap-2 font-medium">
-                    <Loader2 size={15} className="animate-spin text-accent" />
-                    {s.progress && s.progress.total > 1 ? `Video ${s.progress.index} of ${s.progress.total}` : 'Downloading…'}
+                    {s.combining ? <Film size={15} className="animate-pulse text-accent" /> : <Loader2 size={15} className="animate-spin text-accent" />}
+                    {s.combining
+                      ? 'Combining clips into one video…'
+                      : s.progress && s.progress.total > 1
+                        ? `Video ${s.progress.index} of ${s.progress.total}`
+                        : 'Downloading…'}
                   </span>
                   <button onClick={() => void s.cancel()} className="rounded-lg bg-raised px-3 py-1.5 text-xs font-medium hover:bg-edge/60">
                     Cancel
@@ -367,11 +418,18 @@ export default function YtDownloader(): React.JSX.Element {
             )}
 
             {s.lastResult === 'done' && (
-              <div className="mt-3 flex items-center gap-2 text-sm text-ok">
-                <CheckCircle2 size={15} /> Download complete.
-                <button onClick={() => void s.openFolder()} className="text-accent hover:underline">
-                  Open folder
-                </button>
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center gap-2 text-sm text-ok">
+                  <CheckCircle2 size={15} /> Download complete.
+                  <button onClick={() => void s.openFolder()} className="text-accent hover:underline">
+                    Open folder
+                  </button>
+                </div>
+                {s.combinedInfo && (
+                  <div className="flex items-center gap-2 text-sm text-accent">
+                    <Film size={15} /> Combined {s.combinedInfo.used} clip(s) into one movie.
+                  </div>
+                )}
               </div>
             )}
           </div>

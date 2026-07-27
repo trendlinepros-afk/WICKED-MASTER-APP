@@ -2,7 +2,7 @@
   "id": "yt-downloader",
   "name": "YouTube Downloader",
   "icon": "Youtube",
-  "version": "1.0.0",
-  "description": "Download YouTube videos or whole playlists in your chosen quality (powered by yt-dlp + ffmpeg)",
+  "version": "1.1.0",
+  "description": "Download YouTube videos or whole playlists in your chosen quality — optionally stitch a playlist into one movie (powered by yt-dlp + ffmpeg)",
   "status": "beta"
 }
