@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
 import Database from 'better-sqlite3'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -354,6 +354,32 @@ export default function register(ctx: ModuleIpcContext): void {
       return { ok: true, cancelled: true }
     }
     return { ok: true, cancelled: false }
+  })
+
+  // The renderer builds the PDF (shared jsPDF renderer) and sends bytes; the
+  // user picks where it goes (defaults next to the Stock Trading exports).
+  ctx.ipcMain.handle(`${ID}:save-pdf`, async (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const b64 = typeof r.data === 'string' ? r.data : ''
+    if (!b64) return { ok: false, error: 'No PDF data.' }
+    const stamp = new Date()
+    const name = `Trade Journal report ${String(stamp.getMonth() + 1).padStart(2, '0')}-${String(stamp.getDate()).padStart(2, '0')}-${stamp.getFullYear()}.pdf`
+    const win = ctx.getMainWindow()
+    const opts = {
+      title: 'Save trading report',
+      defaultPath: join(ctx.app.getPath('documents'), 'Stock Trading', name),
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    }
+    try {
+      const picked = win ? await ctx.dialog.showSaveDialog(win, opts) : await ctx.dialog.showSaveDialog(opts)
+      if (picked.canceled || !picked.filePath) return { ok: false, cancelled: true }
+      mkdirSync(dirname(picked.filePath), { recursive: true })
+      writeFileSync(picked.filePath, Buffer.from(b64, 'base64'))
+      ctx.shell.showItemInFolder(picked.filePath)
+      return { ok: true, file: picked.filePath }
+    } catch (err) {
+      return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
+    }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -7,6 +7,7 @@ import {
   CandlestickChart,
   Clock,
   Download,
+  FileDown,
   Loader2,
   Sparkles,
   Trash2,
@@ -16,6 +17,8 @@ import {
   X
 } from 'lucide-react'
 import { SHELL_IPC, type ApiProviderId } from '@shared/types'
+import { buildReportPdf } from '../stock-planner/lib/pdf'
+import { buildJournalReport } from './lib/report'
 import { ID, useTrades, type Tab } from './store'
 import type { Trade } from './lib/analytics'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
@@ -278,6 +281,32 @@ function TimingTab(): React.JSX.Element {
 
 function AiTab(): React.JSX.Element {
   const s = useTrades()
+  const [exporting, setExporting] = useState(false)
+  const [exportErr, setExportErr] = useState('')
+
+  const exportPdf = async (): Promise<void> => {
+    const { stats, aiText, executions } = useTrades.getState()
+    if (!stats || exporting) return
+    setExporting(true)
+    setExportErr('')
+    try {
+      const now = new Date()
+      const stamp = `${now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })} ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+      const spec = buildJournalReport(stats, aiText, executions.length, stamp)
+      const b64 = buildReportPdf(spec, [], 'WICKED · TRADE JOURNAL')
+      const res = (await window.wicked.invoke(`${ID}:save-pdf`, { data: b64 })) as {
+        ok?: boolean
+        cancelled?: boolean
+        error?: string
+      }
+      if (!res.ok && !res.cancelled) setExportErr(res.error ?? 'PDF export failed.')
+    } catch (err) {
+      setExportErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       {!s.hasAiKey && (
@@ -295,6 +324,15 @@ function AiTab(): React.JSX.Element {
           {s.aiBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
           {s.aiText ? 'Re-analyze my trading' : 'Analyze my trading'}
         </button>
+        <button
+          onClick={() => void exportPdf()}
+          disabled={exporting || !s.stats || s.stats.closedTrades === 0}
+          title={s.aiText ? 'Export your stats + the AI coach analysis as a PDF' : 'Export your stats as a PDF (run the AI analysis first to include it)'}
+          className="flex items-center gap-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+        >
+          {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
+          Export PDF
+        </button>
         {s.aiProvider && <span className="text-xs text-muted">via {s.aiProvider}</span>}
         {s.aiBusy && (
           <button onClick={() => void s.cancelAi()} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
@@ -303,6 +341,7 @@ function AiTab(): React.JSX.Element {
         )}
       </div>
       {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
+      {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
       {s.aiText ? (
         <div className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-xl border border-edge bg-surface p-4 text-sm leading-relaxed text-ink">
           {s.aiText}

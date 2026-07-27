@@ -1,15 +1,8 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, ExternalLink, Loader2, Newspaper, RefreshCw, Search, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ArrowUpDown, ExternalLink, Layers, Loader2, Newspaper, RefreshCw, Search, X } from 'lucide-react'
+import { filterBySector, SECTORS, SORTS, sortRows, type NewsRow, type SortId } from './filters'
 
 const ID = 'market-news'
-
-interface NewsRow {
-  title: string
-  url: string
-  source: string
-  publishedAt: string
-  summary?: string
-}
 
 function when(iso: string): string {
   const d = new Date(iso)
@@ -25,6 +18,10 @@ export default function MarketNews(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [symbol, setSymbol] = useState('')
+  const [sector, setSector] = useState('all')
+  const [sort, setSort] = useState<SortId>('newest')
+
+  const shown = useMemo(() => sortRows(filterBySector(rows, sector), sort), [rows, sector, sort])
 
   const load = async (sym: string): Promise<void> => {
     setBusy(true)
@@ -59,6 +56,34 @@ export default function MarketNews(): React.JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised px-2" title="Filter by market sector">
+            <Layers size={13} className="shrink-0 text-muted" />
+            <select
+              value={sector}
+              onChange={(e) => setSector(e.target.value)}
+              className="max-w-40 cursor-pointer bg-transparent py-2 text-sm text-ink outline-none [&>option]:bg-surface [&>option]:text-ink"
+            >
+              {SECTORS.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised px-2" title="Sort headlines">
+            <ArrowUpDown size={13} className="shrink-0 text-muted" />
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortId)}
+              className="cursor-pointer bg-transparent py-2 text-sm text-ink outline-none [&>option]:bg-surface [&>option]:text-ink"
+            >
+              {SORTS.map((so) => (
+                <option key={so.id} value={so.id}>
+                  {so.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised px-2">
             <Search size={13} className="text-muted" />
             <input
@@ -101,11 +126,20 @@ export default function MarketNews(): React.JSX.Element {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {rows.length === 0 && !busy && !error ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted">No headlines yet.</div>
+        {shown.length === 0 && !busy && !error ? (
+          <div className="flex h-full items-center justify-center text-sm text-muted">
+            {rows.length > 0
+              ? `No headlines match the ${SECTORS.find((x) => x.id === sector)?.label ?? ''} filter — try another sector.`
+              : 'No headlines yet.'}
+          </div>
         ) : (
           <div className="mx-auto max-w-3xl space-y-2">
-            {rows.map((n, i) => (
+            {rows.length > 0 && (
+              <p className="px-1 text-[11px] text-muted">
+                Showing {shown.length} of {rows.length} headline{rows.length === 1 ? '' : 's'}
+              </p>
+            )}
+            {shown.map((n, i) => (
               <button
                 key={i}
                 onClick={() => void window.wicked.invoke('shell:open-external', n.url)}

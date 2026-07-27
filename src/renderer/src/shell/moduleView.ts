@@ -153,10 +153,62 @@ export function navEntries(s: GroupSettings): NavEntry[] {
 
 /** Move `draggedId` to sit immediately before `targetId` in the id list. */
 export function reorderIds(ids: string[], draggedId: string, targetId: string): string[] {
-  if (draggedId === targetId) return ids
+  if (draggedId === targetId || !ids.includes(draggedId)) return ids
   const without = ids.filter((x) => x !== draggedId)
   const ti = without.indexOf(targetId)
   if (ti === -1) return ids
   without.splice(ti, 0, draggedId)
+  return without
+}
+
+/* --------------------------- drag & drop tokens ---------------------------- *
+ * A drag carries either a bare module id or `group:<groupId>` for a whole
+ * folder. Dragging a folder moves ALL its members as one block, so the folder
+ * tile (anchored at its first member) lands where you drop it.
+ * --------------------------------------------------------------------------- */
+
+export const GROUP_DRAG_PREFIX = 'group:'
+
+export function groupDragToken(groupId: string): string {
+  return `${GROUP_DRAG_PREFIX}${groupId}`
+}
+
+export function isGroupDrag(token: string | null): boolean {
+  return !!token && token.startsWith(GROUP_DRAG_PREFIX)
+}
+
+/**
+ * Token-aware reorder for the Home grid / nav. The target token anchors the
+ * insertion point (a module id, or a folder token = before that folder's first
+ * member). Returns the new moduleOrder, or null when the drop is a no-op
+ * (self-drop, empty folder, anchor inside the dragged block…).
+ */
+export function reorderNav(s: GroupSettings, dragToken: string, targetToken: string): string[] | null {
+  if (dragToken === targetToken) return null
+  const ordered = orderedModules(s.moduleOrder, s.moduleOverrides)
+  const ids = ordered.map((m) => m.manifest.id)
+  const byId = new Map(ordered.map((m) => [m.manifest.id, m] as const))
+  const membersOf = (gid: string): string[] =>
+    ids.filter((id) => {
+      const m = byId.get(id)
+      return !!m && effectiveGroupId(m, s) === gid
+    })
+
+  const block = isGroupDrag(dragToken)
+    ? membersOf(dragToken.slice(GROUP_DRAG_PREFIX.length))
+    : ids.includes(dragToken)
+      ? [dragToken]
+      : []
+  if (block.length === 0) return null
+
+  const anchor = isGroupDrag(targetToken)
+    ? membersOf(targetToken.slice(GROUP_DRAG_PREFIX.length))[0]
+    : targetToken
+  if (!anchor || block.includes(anchor)) return null
+
+  const without = ids.filter((id) => !block.includes(id))
+  const ti = without.indexOf(anchor)
+  if (ti === -1) return null
+  without.splice(ti, 0, ...block)
   return without
 }

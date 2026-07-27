@@ -3,7 +3,11 @@ import {
   AlertTriangle,
   ArrowRight,
   BarChart3,
+  ClipboardPaste,
   FileDown,
+  FileText,
+  FolderOpen,
+  History,
   Image as ImageIcon,
   LineChart,
   Loader2,
@@ -54,6 +58,16 @@ function readFilesAsDataUrls(files: FileList | File[], cb: (urls: string[]) => v
         })
     )
   ).then((urls) => cb(urls.filter(Boolean)))
+}
+
+/** Windows path → file:/// URL a <webview> can load (built-in PDF viewer). */
+function fileUrl(p: string): string {
+  return 'file:///' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F')
+}
+
+const exportStamp = (): string => {
+  const now = new Date()
+  return `${now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })} ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
 }
 
 /* ------------------------------- find step ------------------------------- */
@@ -240,6 +254,131 @@ function FindStep(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      <HistoryCard />
+    </div>
+  )
+}
+
+/* ------------------------------ history card ------------------------------ */
+
+interface HistoryRow {
+  ticker: string
+  company: string
+  file: string
+  savedAt: number
+  exists: boolean
+}
+
+function HistoryCard(): React.JSX.Element | null {
+  const setError = useStockPlanner((s) => s.setError)
+  const startAnalysis = useStockPlanner((s) => s.startAnalysis)
+  const [rows, setRows] = useState<HistoryRow[]>([])
+  const [viewer, setViewer] = useState<HistoryRow | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    void window.wicked
+      .invoke(`${ID}:history`)
+      .then((res) => {
+        const r = res as { ok?: boolean; rows?: HistoryRow[] }
+        if (mounted && r.ok) setRows(r.rows ?? [])
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const reveal = async (file: string): Promise<void> => {
+    const res = (await window.wicked.invoke(`${ID}:reveal`, file)) as { ok?: boolean; error?: string }
+    if (!res.ok) setError(res.error ?? 'Could not open the file location.')
+  }
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="rounded-xl border border-edge bg-surface p-4">
+      <label className="flex items-center gap-1.5 text-sm font-semibold">
+        <History size={14} className="text-accent" /> History
+      </label>
+      <p className="mt-0.5 text-xs text-muted">Your previous analyses — every exported report, newest first.</p>
+      <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-edge">
+        {rows.map((r) => (
+          <div
+            key={r.file}
+            className="flex flex-wrap items-center gap-2 border-b border-edge/50 px-3 py-2 last:border-b-0"
+          >
+            <button
+              onClick={() => void startAnalysis(r.ticker)}
+              title={`Re-open ${r.ticker} in the planner`}
+              className="w-14 shrink-0 text-left text-sm font-semibold hover:text-accent"
+            >
+              {r.ticker}
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs text-muted">{r.company || '—'}</div>
+              <div className="text-[11px] tabular-nums text-muted">
+                {new Date(r.savedAt).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit'
+                })}
+                {!r.exists && <span className="ml-2 text-warn">file missing</span>}
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-1.5">
+              <button
+                onClick={() => void reveal(r.file)}
+                disabled={!r.exists}
+                className="flex items-center gap-1 rounded-md bg-raised px-2 py-1 text-xs font-medium hover:bg-edge/60 disabled:opacity-40"
+              >
+                <FolderOpen size={12} /> Go To File
+              </button>
+              <button
+                onClick={() => r.exists && setViewer(r)}
+                disabled={!r.exists}
+                className="flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-xs font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+              >
+                <FileText size={12} /> Open PDF
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* in-app PDF viewer (Chromium's built-in viewer inside a webview) */}
+      {viewer && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-black/70 p-4 md:p-8" onClick={() => setViewer(null)}>
+          <div
+            className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-edge bg-surface"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
+              <FileText size={15} className="shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                {viewer.ticker}
+                {viewer.company ? ` — ${viewer.company}` : ''}
+              </span>
+              <button
+                onClick={() => void reveal(viewer.file)}
+                className="flex items-center gap-1 rounded-md bg-raised px-2 py-1 text-xs font-medium hover:bg-edge/60"
+              >
+                <FolderOpen size={12} /> Go To File
+              </button>
+              <button
+                onClick={() => setViewer(null)}
+                className="rounded-md p-1 text-muted hover:bg-raised hover:text-ink"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <webview src={fileUrl(viewer.file)} plugins className="min-h-0 w-full flex-1" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -412,6 +551,16 @@ function TrendlinesStep(): React.JSX.Element {
   if (!s.ticker) return <NoTicker />
   const images = s.doc?.images ?? []
 
+  const pasteFromClipboard = async (): Promise<void> => {
+    const res = (await window.wicked.invoke(`${ID}:clipboard-image`)) as {
+      ok?: boolean
+      dataUrl?: string
+      error?: string
+    }
+    if (res.ok && res.dataUrl) void s.addImages([res.dataUrl])
+    else s.setError(res.error ?? 'No image on the clipboard — copy a screenshot first.')
+  }
+
   return (
     <div
       className="space-y-4 p-4"
@@ -447,6 +596,14 @@ function TrendlinesStep(): React.JSX.Element {
               className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
             >
               <ImageIcon size={14} /> Add screenshots
+            </button>
+            <button
+              onClick={() => void pasteFromClipboard()}
+              disabled={images.length >= 4}
+              title="Paste the screenshot you copied (Win+Shift+S, then this button)"
+              className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+            >
+              <ClipboardPaste size={14} /> Paste From Clipboard
             </button>
             <button
               onClick={() => void s.analyzeTrendlines()}
@@ -489,7 +646,8 @@ function SummaryStep(): React.JSX.Element {
     if (!s.doc?.report || s.exporting) return
     s.setExporting(true)
     try {
-      const b64 = buildReportPdf(s.doc.report, s.doc.images)
+      // stamp the real export date/time — the AI-written asOf can be stale/wrong
+      const b64 = buildReportPdf({ ...s.doc.report, asOf: exportStamp() }, s.doc.images)
       const res = (await window.wicked.invoke(`${ID}:save-pdf`, { ticker: s.ticker, data: b64 })) as {
         ok?: boolean
         file?: string
@@ -609,6 +767,27 @@ function ChatDock(): React.JSX.Element {
           className="w-full resize-none rounded-lg border border-edge bg-raised px-2.5 py-2 text-xs outline-none focus:border-accent disabled:opacity-50"
         />
       </div>
+      {/* report card done → walk the flow forward */}
+      {s.step === 'analysis' && !!s.doc?.report && (
+        <div className="border-t border-edge p-2">
+          <button
+            onClick={() => s.setStep('trendlines')}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-ok px-3 py-2 text-sm font-semibold text-bg hover:opacity-90"
+          >
+            Next · Trendlines <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+      {s.step === 'trendlines' && !!s.doc?.report && (
+        <div className="border-t border-edge p-2">
+          <button
+            onClick={() => s.setStep('summary')}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-ok px-3 py-2 text-sm font-semibold text-bg hover:opacity-90"
+          >
+            Next · Summary <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
     </aside>
   )
 }
@@ -627,6 +806,8 @@ export default function StockPlanner(): React.JSX.Element {
 
   useEffect(() => {
     void s.loadStatus()
+    // always land on Find when the tool is opened (previous work stays one tab away)
+    s.setStep('find')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

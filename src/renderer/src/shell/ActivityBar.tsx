@@ -14,7 +14,7 @@ import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
 import ModuleIcon from './ModuleIcon'
-import { effectiveName, navEntries, orderedModules, reorderIds } from './moduleView'
+import { effectiveName, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
 function rowClass(isActive: boolean, expanded: boolean): string {
@@ -47,9 +47,10 @@ export default function ActivityBar(): React.JSX.Element {
     ? decodeURIComponent(location.pathname.slice(4))
     : ''
 
-  const commitReorder = (targetId: string): void => {
-    if (dragId && dragId !== targetId) {
-      update({ moduleOrder: reorderIds(all.map((m) => m.manifest.id), dragId, targetId) })
+  const commitReorder = (targetToken: string): void => {
+    if (dragId && dragId !== targetToken) {
+      const next = reorderNav(settings, dragId, targetToken)
+      if (next) update({ moduleOrder: next })
     }
     setDragId(null)
     setDropTarget(null)
@@ -149,6 +150,7 @@ export default function ActivityBar(): React.JSX.Element {
           // A folder: opens its own screen, and reveals its tools inline while
           // you're working inside it (or when manually expanded).
           const g = e.group
+          const token = groupDragToken(g.id)
           const holdsActive = e.modules.some((m) => m.manifest.id === activeModuleId)
           const isActive = activeGroupId === g.id
           const showChildren = openFolders[g.id] ?? (isActive || holdsActive)
@@ -157,8 +159,28 @@ export default function ActivityBar(): React.JSX.Element {
               <div className="relative flex items-center">
                 <NavLink
                   to={`/g/${g.id}`}
+                  draggable
+                  onDragStart={(e2) => {
+                    setDragId(token)
+                    e2.dataTransfer.effectAllowed = 'move'
+                  }}
+                  onDragOver={(e2) => {
+                    e2.preventDefault()
+                    if (dragId && dragId !== token) setDropTarget(token)
+                  }}
+                  onDragLeave={() => setDropTarget((t) => (t === token ? null : t))}
+                  onDrop={(e2) => {
+                    e2.preventDefault()
+                    commitReorder(token)
+                  }}
+                  onDragEnd={() => {
+                    setDragId(null)
+                    setDropTarget(null)
+                  }}
                   title={expanded ? undefined : `${g.name} (folder)`}
-                  className={`${rowClass(isActive || holdsActive, expanded)} min-w-0 flex-1`}
+                  className={`${rowClass(isActive || holdsActive, expanded)} min-w-0 flex-1 ${
+                    dropTarget === token ? 'ring-1 ring-accent' : ''
+                  } ${dragId === token ? 'opacity-40' : ''}`}
                 >
                   <ModuleIcon name={g.icon} size={20} strokeWidth={1.8} className="shrink-0 text-warn" />
                   {expanded && (

@@ -5,7 +5,7 @@ import type { ShellSettings } from '@shared/types'
 import { useShellUi } from '@/stores/shellUi'
 import ModuleIcon from './ModuleIcon'
 import type { RegisteredModule } from './registry'
-import { effectiveDescription, effectiveName } from './moduleView'
+import { effectiveDescription, effectiveName, groupDragToken, isGroupDrag } from './moduleView'
 
 /**
  * One module tile — used by both the Home grid and a group ("folder") view, so
@@ -93,28 +93,42 @@ export function ModuleCard({
 }
 
 /**
- * A folder tile: opens /g/<id>, renames via the pencil, and accepts a dragged
- * module card as "file this tool into the folder".
+ * A folder tile: opens /g/<id>, renames via the pencil, drags to reorder (its
+ * members move as one block), and accepts a dragged module card as "file this
+ * tool into the folder" — or a dragged folder as "drop the folder here".
  */
 export function GroupCard({
   group,
   count,
   onOpen,
   onRename,
-  onDropModule
+  onDropModule,
+  commitReorder
 }: {
   group: { id: string; name: string; icon: string; description?: string }
   count: number
   onOpen: () => void
   onRename: () => void
   onDropModule?: (moduleId: string) => void
+  commitReorder?: (targetToken: string) => void
 }): React.JSX.Element {
   const { dragId, setDragId } = useShellUi()
   const [over, setOver] = useState(false)
-  const canAccept = Boolean(dragId && onDropModule)
+  const token = groupDragToken(group.id)
+  const groupDrag = isGroupDrag(dragId)
+  const canAccept = Boolean(dragId && dragId !== token && (groupDrag ? commitReorder : onDropModule))
 
   return (
     <div
+      draggable
+      onDragStart={(e) => {
+        setDragId(token)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragEnd={() => {
+        setDragId(null)
+        setOver(false)
+      }}
       onClick={onOpen}
       onDragOver={(e) => {
         if (!canAccept) return
@@ -124,16 +138,17 @@ export function GroupCard({
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {
-        if (!canAccept) return
+        if (!canAccept || !dragId) return
         e.preventDefault()
         e.stopPropagation()
         setOver(false)
-        if (dragId) onDropModule?.(dragId)
+        if (isGroupDrag(dragId)) commitReorder?.(token)
+        else onDropModule?.(dragId)
         setDragId(null)
       }}
       className={`group relative cursor-pointer rounded-xl border bg-surface p-5 transition-colors ${
         over ? 'border-warn ring-2 ring-warn/40' : 'border-edge hover:border-warn/60'
-      }`}
+      } ${dragId === token ? 'opacity-40' : ''}`}
     >
       <div className="flex items-center gap-3">
         <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-warn/15 text-warn">
@@ -148,7 +163,9 @@ export function GroupCard({
       </div>
       <p className="mt-3 line-clamp-2 text-sm text-muted">
         {over
-          ? 'Drop to move it into this folder'
+          ? groupDrag
+            ? 'Drop to move the folder here'
+            : 'Drop to move it into this folder'
           : (group.description ?? `Open the ${group.name} folder`)}
       </p>
 

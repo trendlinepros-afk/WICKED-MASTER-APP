@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { clipboard } from 'electron'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { callAi, type AiKeys, type AiMessage } from './ipc/ai'
@@ -298,6 +299,34 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* ------------------------------- PDF export ------------------------------ */
 
+  // Export history: every saved PDF is remembered so the Find tab can list
+  // previous analyses with "Go To File" / "Open PDF".
+  interface HistoryEntry {
+    ticker: string
+    company: string
+    file: string
+    savedAt: number
+  }
+  const historyPath = join(ctx.app.getPath('userData'), 'modules', ID, 'history.json')
+  const readHistory = (): HistoryEntry[] => {
+    try {
+      const arr = JSON.parse(readFileSync(historyPath, 'utf8')) as unknown
+      return Array.isArray(arr)
+        ? (arr.filter((e) => e && typeof (e as HistoryEntry).file === 'string') as HistoryEntry[])
+        : []
+    } catch {
+      return []
+    }
+  }
+  const writeHistory = (rows: HistoryEntry[]): void => {
+    try {
+      mkdirSync(dirname(historyPath), { recursive: true })
+      writeFileSync(historyPath, JSON.stringify(rows.slice(0, 200), null, 2))
+    } catch {
+      /* history is best-effort — never fail the export over it */
+    }
+  }
+
   // The renderer builds the PDF (jsPDF) and sends bytes; default save location
   // is Documents/Stock Trading/{TICKER — Company}/ per the ported convention.
   ctx.ipcMain.handle(`${ID}:save-pdf`, async (_e, raw: unknown) => {
@@ -317,11 +346,39 @@ export default function register(ctx: ModuleIpcContext): void {
       const name = `${sym} report ${String(stamp.getMonth() + 1).padStart(2, '0')}-${String(stamp.getDate()).padStart(2, '0')}-${stamp.getFullYear()}.pdf`
       const file = join(folder, name)
       writeFileSync(file, Buffer.from(b64, 'base64'))
+      writeHistory([
+        { ticker: sym, company, file, savedAt: Date.now() },
+        ...readHistory().filter((e) => e.file !== file)
+      ])
       await ctx.shell.openPath(folder)
       return { ok: true, file }
     } catch (err) {
       return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
     }
+  })
+
+  ctx.ipcMain.handle(`${ID}:history`, () => ({
+    ok: true,
+    rows: readHistory().map((e) => ({ ...e, exists: existsSync(e.file) }))
+  }))
+
+  ctx.ipcMain.handle(`${ID}:reveal`, (_e, raw: unknown) => {
+    const file = typeof raw === 'string' ? raw : ''
+    if (!file || !existsSync(file)) {
+      return { ok: false, error: 'That PDF was not found — it may have been moved or deleted.' }
+    }
+    ctx.shell.showItemInFolder(file)
+    return { ok: true }
+  })
+
+  // "Paste From Clipboard" on the Trendlines step — reads the OS clipboard in
+  // main (reliable on Windows, no renderer permission prompts).
+  ctx.ipcMain.handle(`${ID}:clipboard-image`, () => {
+    const img = clipboard.readImage()
+    if (img.isEmpty()) {
+      return { ok: false, error: 'No image on the clipboard — copy a screenshot first, then click Paste.' }
+    }
+    return { ok: true, dataUrl: img.toDataURL() }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

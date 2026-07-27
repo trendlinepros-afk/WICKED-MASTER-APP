@@ -4,7 +4,7 @@ import { FolderPlus } from 'lucide-react'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { GroupCard, ModuleCard } from './ModuleCard'
-import { navEntries, orderedModules, reorderIds } from './moduleView'
+import { navEntries, orderedModules, reorderNav } from './moduleView'
 
 export default function Home(): React.JSX.Element {
   const settings = useSettings((s) => s.settings)
@@ -20,9 +20,10 @@ export default function Home(): React.JSX.Element {
   const toolCount = all.filter((m) => !disabled.includes(m.manifest.id)).length
   const folderCount = entries.filter((e) => e.kind === 'group').length
 
-  const commitReorder = (targetId: string): void => {
-    if (dragId && dragId !== targetId) {
-      update({ moduleOrder: reorderIds(all.map((m) => m.manifest.id), dragId, targetId) })
+  const commitReorder = (targetToken: string): void => {
+    if (dragId && dragId !== targetToken) {
+      const next = reorderNav(settings, dragId, targetToken)
+      if (next) update({ moduleOrder: next })
     }
     setDragId(null)
     setDropTarget(null)
@@ -43,7 +44,7 @@ export default function Home(): React.JSX.Element {
           <p className="mt-1 text-sm text-muted">
             {toolCount === 0
               ? 'No modules installed yet. Drop a module folder into /modules and rebuild.'
-              : `${toolCount} app${toolCount === 1 ? '' : 's'}${folderCount > 0 ? ` · ${folderCount} folder${folderCount === 1 ? '' : 's'}` : ''} · drag onto a folder to file it · right-click for options`}
+              : `${toolCount} app${toolCount === 1 ? '' : 's'}${folderCount > 0 ? ` · ${folderCount} folder${folderCount === 1 ? '' : 's'}` : ''} · drag tiles or folders to arrange · drop a tool on a folder to file it · right-click for options`}
           </p>
         </div>
         <button
@@ -65,6 +66,7 @@ export default function Home(): React.JSX.Element {
               onOpen={() => navigate(`/g/${e.group.id}`)}
               onRename={() => openFolderRename(e.group.id)}
               onDropModule={(moduleId) => moveToFolder(moduleId, e.group.id)}
+              commitReorder={commitReorder}
             />
           ) : (
             <ModuleCard
