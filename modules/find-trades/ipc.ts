@@ -20,6 +20,7 @@ import {
   type Candidate,
   type ScreenPlan
 } from './lib/plan'
+import { fetchTrending, rateTicker, tallyMentions } from './ipc/x'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -53,6 +54,23 @@ export interface Pick {
   thesis: string
   flags: string[]
   news: { title: string; url: string; source: string; publishedAt: string }[]
+}
+
+/** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
+export interface TrendRow {
+  ticker: string
+  name: string
+  mentions: number
+  engagement: number
+  bull: number
+  bear: number
+  neutral: number
+  sentiment: number
+  price: number | null
+  changePct: number | null
+  volume: number | null
+  score: number
+  label: string
 }
 
 const fmtCap = (v: number | null): string =>
@@ -200,8 +218,94 @@ export default function register(ctx: ModuleIpcContext): void {
     hasMassive: !!ctx.getApiKey('massive'),
     hasFinnhub: !!ctx.getApiKey('finnhub'),
     hasAi: !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
+    hasX: !!ctx.getApiKey('x'),
     session: marketSession()
   }))
+
+  /* ---------------------------- X (social) trends ----------------------- */
+
+  // Trending pulls are cached per window (X's monthly tweet quota is small, so
+  // opening the tool repeatedly must not re-spend it). Manual refresh bypasses.
+  const xCache = new Map<string, { at: number; payload: Record<string, unknown> }>()
+  const X_TTL_MS = 30 * 60 * 1000
+
+  ctx.ipcMain.handle(`${ID}:x-status`, () => ({ ok: true, hasX: !!ctx.getApiKey('x'), hasMassive: !!ctx.getApiKey('massive') }))
+
+  ctx.ipcMain.handle(`${ID}:x-trending`, async (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const windowId = typeof r.window === 'string' ? r.window : '24h'
+    const force = r.force === true
+    const bearer = ctx.getApiKey('x')
+    if (!bearer) return { ok: false, error: 'Add your X (Twitter) Bearer Token in Settings → API Keys to see trending tickers.' }
+
+    const cached = xCache.get(windowId)
+    if (!force && cached && Date.now() - cached.at < X_TTL_MS) return cached.payload
+
+    try {
+      const now = Date.now()
+      const res = await fetchTrending(bearer, windowId, now, 3)
+      if (!res.ok && res.tweets.length === 0)
+        return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
+
+      const tallies = tallyMentions(res.tweets)
+
+      // Validate + enrich against the live market snapshot: drops junk cashtags
+      // ($ROPE, $$$) and attaches price/change/volume for the rating.
+      const massiveKey = ctx.getApiKey('massive')
+      const quoteByTicker = new Map<string, { price: number | null; changePct: number | null; volume: number | null }>()
+      if (massiveKey) {
+        try {
+          const snap = await getFullSnapshot(massiveKey)
+          for (const row of snap) {
+            const q = resolveQuote(row, row.prevDay ?? null)
+            quoteByTicker.set(row.ticker, { price: q.price, changePct: q.changePct, volume: q.volume })
+          }
+        } catch {
+          /* leave market data empty; rating falls back to buzz + sentiment */
+        }
+      }
+      const haveMarket = quoteByTicker.size > 0
+      const validated = haveMarket ? tallies.filter((t) => quoteByTicker.has(t.ticker)) : tallies
+      const top = validated.slice(0, 20)
+      const maxMentions = top.length > 0 ? top[0].mentions : 0
+
+      const rows: TrendRow[] = top.map((t) => {
+        const q = quoteByTicker.get(t.ticker)
+        const rating = rateTicker({ mentions: t.mentions, maxMentions, changePct: q?.changePct ?? null, sentiment: t.sentiment })
+        return {
+          ticker: t.ticker,
+          name: '',
+          mentions: t.mentions,
+          engagement: t.engagement,
+          bull: t.bull,
+          bear: t.bear,
+          neutral: t.neutral,
+          sentiment: t.sentiment,
+          price: q?.price ?? null,
+          changePct: q?.changePct ?? null,
+          volume: q?.volume ?? null,
+          score: rating.score,
+          label: rating.label
+        }
+      })
+
+      const payload: Record<string, unknown> = {
+        ok: true,
+        window: windowId,
+        rows,
+        sampled: res.tweets.length,
+        endpoint: res.endpoint,
+        marketValidated: haveMarket,
+        generatedAt: now,
+        note: res.error ?? '',
+        cached: false
+      }
+      xCache.set(windowId, { at: now, payload: { ...payload, cached: true } })
+      return payload
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
 
   /**
    * Deterministic screen (no AI) — the primitive the agent and the MCP tool

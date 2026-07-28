@@ -21,9 +21,34 @@ tickers and a one-line thesis for each.
    to the AI, which picks the best fits and writes a short thesis + risk flags.
    The thesis is joined back onto the real rows.
 
+## Trending on X (social)
+
+A section at the top of the tool that **auto-loads on open** and shows the stock
+tickers **mentioned most on X (Twitter)** over a chosen window — **24h, 7d, 2wk,
+1mo, 90d, 6mo** — each with a bull/bear sentiment read and a **heat rating**
+(`ipc/x.ts`).
+
+- **How.** App-only Bearer auth searches finance tweets (`has:cashtags`, with a
+  broad-finance fallback if that operator isn't on your access tier), pulls the
+  `$CASHTAG` entities, and tallies mentions + engagement + a lightweight
+  lexicon sentiment. No AI tokens are spent — the rating is deterministic.
+- **Rating** = buzz (mentions vs the hottest ticker) 50% + price momentum (today's
+  move) 25% + tweet sentiment 25%, bucketed **Hot / Warm / Watch / Cool**.
+- **Validated against the market.** When a Massive key is present, tickers are
+  filtered to real US equities (drops junk cashtags like `$ROPE`) and decorated
+  with live price/change/volume.
+- **Window reality.** Recent-search covers the **last 7 days**; **windows over 7
+  days need X API Pro** (full-archive access) — the tool says so and still serves
+  24h/7d on Basic.
+- **Quota-aware.** X's monthly tweet cap is small, so each window is **cached ~30
+  min**; opening the tool repeatedly won't re-spend it. Manual **Refresh** bypasses
+  the cache. **Ask AI** on any row hands the ticker to the screener chat below.
+
 ## Keys
 
 - **Massive / Polygon** — required (market snapshot, details).
+- **X (Twitter) Bearer Token** — optional, powers "Trending on X" (OAuth 2.0
+  App-Only token; Basic tier reaches 7 days, Pro for longer windows).
 - **An AI key** — required (the screener brain). Provider preference is
   **Anthropic (Claude) → Gemini → DeepSeek → OpenAI**; whichever keys you have,
   the first available is used. With a Claude key the tool runs a cost-aware
@@ -35,8 +60,9 @@ Keys come from the shell vault; none are sent to the renderer.
 
 ## MCP
 
-Only the **deterministic** `find-trades__screen` is exposed to agents (explicit
-numeric criteria in, matching tickers out). The AI chat consumes vault AI keys,
-so it stays off MCP per the module contract.
+Two **deterministic** read-only tools are exposed to agents: `find-trades__screen`
+(explicit numeric criteria in, matching tickers out) and `find-trades__trending`
+(most-mentioned tickers on X over a window, rated). The AI chat consumes vault AI
+keys, so it stays off MCP per the module contract.
 
 Educational screening for ideas to research — not financial advice.

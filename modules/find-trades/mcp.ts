@@ -37,6 +37,19 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         limit: z.number().int().optional().describe('Max results (default 12, cap 30).')
       },
       handler: (args) => ctx.invoke(`${ID}:screen`, args)
+    },
+    {
+      name: `${ID}__trending`,
+      description:
+        'The stock tickers mentioned MOST on X (Twitter) over a time window, each rated by buzz + price momentum + tweet sentiment. Read-only. Needs the X Bearer Token (and the Massive key for price + junk-cashtag filtering). Windows are 24h | 7d | 14d | 30d | 90d | 180d; anything over 7 days needs X API Pro (full-archive access). Results are cached ~30 min to respect X quota.',
+      inputSchema: {
+        window: z
+          .enum(['24h', '7d', '14d', '30d', '90d', '180d'])
+          .optional()
+          .describe('Look-back window (default 24h). Over 7 days requires X API Pro.'),
+        force: z.boolean().optional().describe('Bypass the 30-minute cache and re-pull from X.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:x-trending`, { window: args.window ?? '24h', force: args.force === true })
     }
   ]
 }

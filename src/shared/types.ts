@@ -145,6 +145,7 @@ export const API_PROVIDERS = [
   { id: 'deepseek', name: 'DeepSeek', placeholder: 'sk-…' },
   { id: 'massive', name: 'Massive / Polygon (market data)', placeholder: '' },
   { id: 'finnhub', name: 'Finnhub (news + earnings dates)', placeholder: '' },
+  { id: 'x', name: 'X / Twitter (Bearer Token — social ticker trends)', placeholder: 'AAAAAAAA… (OAuth 2.0 App-Only Bearer Token)' },
   { id: 'opusclip', name: 'OpusClip — shorts (Automatic Editing)', placeholder: '' },
   { id: 's3-access', name: 'S3 access key (Automatic Editing uploads)', placeholder: '' },
   { id: 's3-secret', name: 'S3 secret key (Automatic Editing uploads)', placeholder: '' }

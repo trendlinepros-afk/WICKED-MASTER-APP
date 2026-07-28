@@ -1,0 +1,295 @@
+/**
+ * X (Twitter) API v2 client — social ticker trends for Find Trades.
+ *
+ * Uses app-only OAuth2 (a single Bearer Token from the vault, id 'x'). We search
+ * finance tweets, pull the `$CASHTAG` entities, and tally which tickers are
+ * mentioned most over a time window, with a lightweight bull/bear sentiment read
+ * and a deterministic "heat" rating (buzz + price momentum + sentiment).
+ *
+ * Endpoint reality: recent-search covers the LAST 7 DAYS on Basic access;
+ * windows longer than 7 days use the full-archive endpoint, which needs X API
+ * Pro. Everything except the two fetch helpers is pure and unit-tested.
+ */
+
+const API_BASE = 'https://api.twitter.com/2'
+const TIMEOUT_MS = 30_000
+/** recent-search only reaches back 7 days; longer windows need full archive. */
+export const RECENT_MAX_HOURS = 24 * 7
+
+export interface XWindow {
+  id: string
+  label: string
+  hours: number
+}
+
+export const X_WINDOWS: XWindow[] = [
+  { id: '24h', label: '24 hours', hours: 24 },
+  { id: '7d', label: '7 days', hours: 24 * 7 },
+  { id: '14d', label: '2 weeks', hours: 24 * 14 },
+  { id: '30d', label: '1 month', hours: 24 * 30 },
+  { id: '90d', label: '90 days', hours: 24 * 90 },
+  { id: '180d', label: '6 months', hours: 24 * 180 }
+]
+
+export function windowById(id: string): XWindow {
+  return X_WINDOWS.find((w) => w.id === id) ?? X_WINDOWS[0]
+}
+
+/* ------------------------------- sentiment ------------------------------- */
+
+// Small finance lexicon — cheap, deterministic, no AI tokens spent on the auto
+// poll. Multi-word phrases are matched as substrings.
+const BULL = [
+  'moon', 'breakout', 'bullish', ' buy', 'buying', 'calls', ' long ', 'rocket', 'squeeze', 'ripping',
+  'soaring', 'beat', 'upgrade', 'rally', 'gap up', 'strong', 'accumulate', 'undervalued', 'all time high',
+  'ath', 'up big', 'green', 'bull '
+]
+const BEAR = [
+  'crash', 'bearish', ' sell', 'selling', 'puts', ' short ', 'dump', 'tank', 'plunge', 'miss',
+  'downgrade', 'bankruptcy', 'dilution', 'weak', 'overvalued', 'avoid', 'bagholder', 'falling', 'red ',
+  'sell off', 'selloff', 'bear ', 'rug'
+]
+
+/** Sentiment of one tweet in [-1, 1] from lexicon hits (0 = neutral/unknown). */
+export function scoreSentiment(text: string): number {
+  const t = ' ' + text.toLowerCase().replace(/[\n\r]+/g, ' ') + ' '
+  let pos = 0
+  let neg = 0
+  for (const w of BULL) if (t.includes(w)) pos++
+  for (const w of BEAR) if (t.includes(w)) neg++
+  const tot = pos + neg
+  return tot === 0 ? 0 : (pos - neg) / tot
+}
+
+/* ------------------------------- cashtags -------------------------------- */
+
+export function validTicker(t: string): boolean {
+  return /^[A-Z]{1,6}$/.test(t)
+}
+
+interface XEntities {
+  cashtags?: { tag?: string }[]
+}
+
+/** Cashtags from a tweet — entities first, regex fallback; upper-cased, valid. */
+export function extractCashtags(entities: XEntities | undefined, text: string): string[] {
+  const set = new Set<string>()
+  for (const c of entities?.cashtags ?? []) {
+    const tag = String(c?.tag ?? '').toUpperCase()
+    if (validTicker(tag)) set.add(tag)
+  }
+  if (set.size === 0) {
+    for (const m of text.match(/\$[A-Za-z]{1,6}\b/g) ?? []) {
+      const tag = m.slice(1).toUpperCase()
+      if (validTicker(tag)) set.add(tag)
+    }
+  }
+  return [...set]
+}
+
+export interface XTweet {
+  id: string
+  text: string
+  cashtags: string[]
+  engagement: number
+}
+
+interface RawTweet {
+  id?: string | number
+  text?: string
+  entities?: XEntities
+  public_metrics?: { like_count?: number; retweet_count?: number; reply_count?: number; quote_count?: number }
+}
+
+/** Parse one search response page into tweets + the pagination token. */
+export function parseSearchPage(json: unknown): { tweets: XTweet[]; nextToken: string | null } {
+  const j = (json ?? {}) as { data?: RawTweet[]; meta?: { next_token?: string } }
+  const data = Array.isArray(j.data) ? j.data : []
+  const tweets = data.map((d): XTweet => {
+    const text = String(d.text ?? '')
+    const pm = d.public_metrics ?? {}
+    return {
+      id: String(d.id ?? ''),
+      text,
+      cashtags: extractCashtags(d.entities, text),
+      engagement: Number(pm.like_count ?? 0) + Number(pm.retweet_count ?? 0) + Number(pm.quote_count ?? 0)
+    }
+  })
+  const nextToken = j.meta?.next_token ? String(j.meta.next_token) : null
+  return { tweets, nextToken }
+}
+
+/* -------------------------------- tallying ------------------------------- */
+
+export interface Tally {
+  ticker: string
+  mentions: number
+  engagement: number
+  /** average sentiment over mentioning tweets, [-1, 1] */
+  sentiment: number
+  bull: number
+  bear: number
+  neutral: number
+}
+
+/** Count mentions per ticker across tweets, with sentiment + engagement. */
+export function tallyMentions(tweets: XTweet[]): Tally[] {
+  const map = new Map<string, { mentions: number; engagement: number; sSum: number; bull: number; bear: number; neutral: number }>()
+  for (const tw of tweets) {
+    const s = scoreSentiment(tw.text)
+    for (const tag of tw.cashtags) {
+      const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, bull: 0, bear: 0, neutral: 0 }
+      e.mentions++
+      e.engagement += tw.engagement
+      e.sSum += s
+      if (s > 0.1) e.bull++
+      else if (s < -0.1) e.bear++
+      else e.neutral++
+      map.set(tag, e)
+    }
+  }
+  return [...map.entries()]
+    .map(([ticker, e]) => ({
+      ticker,
+      mentions: e.mentions,
+      engagement: e.engagement,
+      sentiment: e.mentions ? e.sSum / e.mentions : 0,
+      bull: e.bull,
+      bear: e.bear,
+      neutral: e.neutral
+    }))
+    .sort((a, b) => b.mentions - a.mentions || b.engagement - a.engagement)
+}
+
+/* -------------------------------- rating --------------------------------- */
+
+/**
+ * A 0–100 "heat" score: buzz (mentions vs the hottest ticker) 50%, price
+ * momentum (today's move, ±10% saturates) 25%, and tweet sentiment 25%.
+ */
+export function rateTicker(o: { mentions: number; maxMentions: number; changePct: number | null; sentiment: number }): {
+  score: number
+  label: 'Hot' | 'Warm' | 'Watch' | 'Cool'
+} {
+  const buzz = o.maxMentions > 0 ? o.mentions / o.maxMentions : 0
+  const mom = o.changePct == null ? 0 : Math.max(-1, Math.min(1, o.changePct / 10))
+  const sent = Math.max(-1, Math.min(1, o.sentiment))
+  const raw = 0.5 * buzz + 0.25 * ((mom + 1) / 2) + 0.25 * ((sent + 1) / 2)
+  const score = Math.max(0, Math.min(100, Math.round(raw * 100)))
+  const label = score >= 75 ? 'Hot' : score >= 55 ? 'Warm' : score >= 35 ? 'Watch' : 'Cool'
+  return { score, label }
+}
+
+/* ----------------------------- query + params ---------------------------- */
+
+/** Primary: any tweet carrying a cashtag. */
+export function buildQuery(): string {
+  return 'has:cashtags lang:en -is:retweet'
+}
+
+/** Fallback if `has:cashtags` isn't permitted on the key's access tier. */
+export function buildFallbackQuery(): string {
+  return '(stocks OR "stock market" OR earnings OR $SPY OR $QQQ OR $AAPL OR $TSLA OR $NVDA) lang:en -is:retweet'
+}
+
+/** Search params for a page; start_time is clamped to the endpoint's horizon. */
+export function searchParams(
+  query: string,
+  window: XWindow,
+  nowMs: number,
+  useArchive: boolean,
+  nextToken: string | null,
+  maxResults = 100
+): Record<string, string> {
+  let startMs = nowMs - window.hours * 3_600_000
+  if (!useArchive) {
+    // recent-search rejects start_time older than ~7 days; keep a 1-min margin.
+    const floor = nowMs - RECENT_MAX_HOURS * 3_600_000 + 60_000
+    if (startMs < floor) startMs = floor
+  }
+  const p: Record<string, string> = {
+    query,
+    max_results: String(maxResults),
+    'tweet.fields': 'entities,public_metrics,created_at',
+    start_time: new Date(startMs).toISOString()
+  }
+  if (nextToken) p.pagination_token = nextToken
+  return p
+}
+
+/* -------------------------------- network -------------------------------- */
+
+interface FetchOut {
+  ok: boolean
+  status: number
+  json: unknown
+  error?: string
+}
+
+async function xFetch(bearer: string, path: string, params: Record<string, string>): Promise<FetchOut> {
+  const qs = new URLSearchParams(params).toString()
+  let resp: Response
+  try {
+    resp = await fetch(`${API_BASE}${path}?${qs}`, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    })
+  } catch (err) {
+    return { ok: false, status: 0, json: null, error: err instanceof Error ? err.message : String(err) }
+  }
+  const json = (await resp.json().catch(() => null)) as { title?: string; detail?: string; errors?: { message?: string }[] } | null
+  if (!resp.ok) {
+    const detail = json?.detail || json?.title || json?.errors?.[0]?.message || `HTTP ${resp.status}`
+    return { ok: false, status: resp.status, json, error: detail }
+  }
+  return { ok: true, status: resp.status, json }
+}
+
+export interface TrendingFetch {
+  ok: boolean
+  tweets: XTweet[]
+  endpoint: 'recent' | 'all'
+  error?: string
+  archiveNeeded?: boolean
+}
+
+/**
+ * Fetch and accumulate tweets for a window (paginated up to maxPages). Falls back
+ * from `has:cashtags` to a broad finance query if the operator is rejected, and
+ * returns partial results on a rate-limit rather than failing outright.
+ */
+export async function fetchTrending(bearer: string, windowId: string, nowMs: number, maxPages = 3): Promise<TrendingFetch> {
+  const w = windowById(windowId)
+  const useArchive = w.hours > RECENT_MAX_HOURS
+  const path = useArchive ? '/tweets/search/all' : '/tweets/search/recent'
+  const endpoint = useArchive ? 'all' : 'recent'
+  let query = buildQuery()
+  let triedFallback = false
+  const tweets: XTweet[] = []
+  let next: string | null = null
+
+  for (let page = 0; page < maxPages; page++) {
+    const r = await xFetch(bearer, path, searchParams(query, w, nowMs, useArchive, next))
+    if (!r.ok) {
+      if (r.status === 400 && !triedFallback) {
+        // operator/query not allowed on this tier — retry the same page broadly
+        triedFallback = true
+        query = buildFallbackQuery()
+        page--
+        continue
+      }
+      if (r.status === 403 && useArchive)
+        return { ok: false, tweets, endpoint, archiveNeeded: true, error: 'Windows longer than 7 days need X API Pro (full-archive access). Try 24h or 7d.' }
+      if (r.status === 401)
+        return { ok: false, tweets: [], endpoint, error: 'X rejected the Bearer Token (401). Check it in Settings → API Keys.' }
+      if (r.status === 429)
+        return { ok: tweets.length > 0, tweets, endpoint, error: 'X rate limit hit — showing partial results. Try again shortly.' }
+      return { ok: tweets.length > 0, tweets, endpoint, error: r.error }
+    }
+    const parsed = parseSearchPage(r.json)
+    tweets.push(...parsed.tweets)
+    next = parsed.nextToken
+    if (!next) break
+  }
+  return { ok: true, tweets, endpoint }
+}
