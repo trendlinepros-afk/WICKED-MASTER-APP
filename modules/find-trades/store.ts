@@ -43,6 +43,36 @@ interface TrendingRes {
   note?: string
 }
 
+export interface MentionBucket {
+  start: string
+  count: number
+}
+
+export interface MentionCounts {
+  ticker: string
+  window: string
+  buckets: MentionBucket[]
+  total: number
+  granularity: string
+  endpoint: string
+  generatedAt: number | null
+  note: string
+}
+
+interface CountsRes {
+  ok: boolean
+  error?: string
+  archiveNeeded?: boolean
+  ticker?: string
+  window?: string
+  buckets?: MentionBucket[]
+  total?: number
+  granularity?: string
+  endpoint?: string
+  generatedAt?: number
+  note?: string
+}
+
 const invoke = <T = Res>(channel: string, ...args: unknown[]): Promise<T> =>
   window.wicked.invoke(`${ID}:${channel}`, ...args) as Promise<T>
 
@@ -66,6 +96,14 @@ interface State {
   xMarketValidated: boolean
   xLoaded: boolean
 
+  // per-ticker mention history (counts endpoint)
+  xCountsTicker: string | null
+  xCounts: MentionCounts | null
+  xCountsBusy: boolean
+  xCountsError: string
+  xCountsArchiveNeeded: boolean
+  xLookup: string
+
   setInput: (v: string) => void
   dismissError: () => void
   loadStatus: () => Promise<void>
@@ -73,6 +111,9 @@ interface State {
   clear: () => void
   setXWindow: (id: string) => void
   loadTrending: (force?: boolean) => Promise<void>
+  setXLookup: (v: string) => void
+  loadMentions: (ticker: string, force?: boolean) => Promise<void>
+  closeMentions: () => void
 }
 
 export const useFindTrades = create<State>((set, get) => ({
@@ -94,6 +135,13 @@ export const useFindTrades = create<State>((set, get) => ({
   xMarketValidated: false,
   xLoaded: false,
 
+  xCountsTicker: null,
+  xCounts: null,
+  xCountsBusy: false,
+  xCountsError: '',
+  xCountsArchiveNeeded: false,
+  xLookup: '',
+
   setInput: (v) => set({ input: v }),
   dismissError: () => set({ error: '' }),
 
@@ -109,6 +157,8 @@ export const useFindTrades = create<State>((set, get) => ({
     if (id === get().xWindow) return
     set({ xWindow: id })
     void get().loadTrending(false)
+    // keep an open mention-history chart in sync with the new window
+    if (get().xCountsTicker) void get().loadMentions(get().xCountsTicker as string)
   },
 
   loadTrending: async (force = false) => {
@@ -136,6 +186,39 @@ export const useFindTrades = create<State>((set, get) => ({
       set({ xBusy: false })
     }
   },
+
+  setXLookup: (v) => set({ xLookup: v.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6) }),
+
+  loadMentions: async (ticker, force = false) => {
+    const t = ticker.trim().toUpperCase().replace(/^\$/, '')
+    if (!t) return
+    set({ xCountsTicker: t, xCountsBusy: true, xCountsError: '', xCountsArchiveNeeded: false })
+    try {
+      const res = await invoke<CountsRes>('x-mentions', { ticker: t, window: get().xWindow, force })
+      if (!res.ok) {
+        set({ xCountsError: res.error ?? 'Could not load mention history.', xCountsArchiveNeeded: res.archiveNeeded === true, xCounts: null })
+        return
+      }
+      set({
+        xCounts: {
+          ticker: res.ticker ?? t,
+          window: res.window ?? get().xWindow,
+          buckets: res.buckets ?? [],
+          total: res.total ?? 0,
+          granularity: res.granularity ?? 'day',
+          endpoint: res.endpoint ?? '',
+          generatedAt: res.generatedAt ?? null,
+          note: res.note ?? ''
+        }
+      })
+    } catch (err) {
+      set({ xCountsError: err instanceof Error ? err.message : String(err) })
+    } finally {
+      set({ xCountsBusy: false })
+    }
+  },
+
+  closeMentions: () => set({ xCountsTicker: null, xCounts: null, xCountsError: '', xCountsArchiveNeeded: false }),
 
   send: async (textArg) => {
     const text = (textArg ?? get().input).trim()

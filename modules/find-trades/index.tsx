@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  BarChart2,
   ExternalLink,
   Flame,
   Loader2,
@@ -11,9 +12,10 @@ import {
   Send,
   Sparkles,
   Trash2,
-  TrendingUp
+  TrendingUp,
+  X as XIcon
 } from 'lucide-react'
-import { useFindTrades, type ChatMsg } from './store'
+import { useFindTrades, type ChatMsg, type MentionBucket } from './store'
 import type { Pick, TrendRow } from './ipc'
 
 /** Time windows for the X trending pull (mirrors ipc/x.ts X_WINDOWS). */
@@ -161,14 +163,93 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
           {r.volume != null && <span className="tabular-nums">Vol {vol(r.volume)}</span>}
         </div>
       </div>
-      <button
-        onClick={() => void s.send(`What's driving $${r.ticker} right now? It's trending on X (${r.mentions} mentions, ${r.label.toLowerCase()}). Is it worth a trade?`)}
-        disabled={!canAsk}
-        title={canAsk ? 'Ask the AI screener about this ticker' : 'Add an AI key to ask the screener'}
-        className="flex items-center gap-1 rounded-lg border border-edge bg-surface px-2 py-1 text-[11px] font-medium hover:border-accent/60 disabled:opacity-40"
-      >
-        <Sparkles size={11} className="text-accent" /> Ask AI
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => (s.xCountsTicker === r.ticker ? s.closeMentions() : void s.loadMentions(r.ticker))}
+          title="Exact mention history for this ticker"
+          className={`flex items-center rounded-lg border px-2 py-1 hover:border-accent/60 ${s.xCountsTicker === r.ticker ? 'border-accent/60 bg-accent/10' : 'border-edge bg-surface'}`}
+        >
+          <BarChart2 size={12} className={s.xCountsTicker === r.ticker ? 'text-accent' : 'text-muted'} />
+        </button>
+        <button
+          onClick={() => void s.send(`What's driving $${r.ticker} right now? It's trending on X (${r.mentions} mentions, ${r.label.toLowerCase()}). Is it worth a trade?`)}
+          disabled={!canAsk}
+          title={canAsk ? 'Ask the AI screener about this ticker' : 'Add an AI key to ask the screener'}
+          className="flex items-center gap-1 rounded-lg border border-edge bg-surface px-2 py-1 text-[11px] font-medium hover:border-accent/60 disabled:opacity-40"
+        >
+          <Sparkles size={11} className="text-accent" /> Ask AI
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MentionsChart({ buckets, granularity }: { buckets: MentionBucket[]; granularity: string }): React.JSX.Element {
+  if (buckets.length === 0) return <div className="text-xs text-muted">No mentions found in this window.</div>
+  const max = Math.max(1, ...buckets.map((b) => b.count))
+  const fmt = (iso: string): string => {
+    const d = new Date(iso)
+    return granularity === 'hour'
+      ? d.toLocaleTimeString('en-US', { hour: 'numeric' })
+      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+  return (
+    <div>
+      <div className="flex h-16 items-end gap-px">
+        {buckets.map((b, i) => (
+          <div key={i} className="min-w-0 flex-1" title={`${fmt(b.start)}: ${b.count} mention${b.count === 1 ? '' : 's'}`}>
+            <div className="w-full rounded-t bg-accent/70 hover:bg-accent" style={{ height: `${Math.max(2, (b.count / max) * 100)}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-muted">
+        <span>{fmt(buckets[0].start)}</span>
+        <span>{fmt(buckets[buckets.length - 1].start)}</span>
+      </div>
+    </div>
+  )
+}
+
+function MentionsCard(): React.JSX.Element | null {
+  const s = useFindTrades()
+  if (!s.xCountsTicker) return null
+  return (
+    <div className="border-b border-edge bg-raised/30 px-4 py-3">
+      <div className="flex items-center gap-2">
+        <BarChart2 size={14} className="text-accent" />
+        <span className="text-sm font-bold">${s.xCountsTicker}</span>
+        <span className="text-xs text-muted">mention history</span>
+        {s.xCounts && !s.xCountsBusy && (
+          <span className="ml-auto text-xs font-semibold text-ink">{s.xCounts.total.toLocaleString('en-US')} total</span>
+        )}
+        <button onClick={s.closeMentions} className={`rounded p-1 text-muted hover:bg-raised hover:text-ink ${s.xCounts && !s.xCountsBusy ? '' : 'ml-auto'}`}>
+          <XIcon size={14} />
+        </button>
+      </div>
+      {s.xCountsBusy ? (
+        <div className="mt-2 flex items-center gap-2 text-xs text-muted">
+          <Loader2 size={13} className="animate-spin text-accent" /> Counting exact mentions…
+        </div>
+      ) : s.xCountsArchiveNeeded ? (
+        <div className="mt-2 flex items-start gap-2 text-xs text-warn">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {s.xCountsError} Windows beyond 7 days need X API Pro.
+        </div>
+      ) : s.xCountsError ? (
+        <div className="mt-2 flex items-start gap-2 text-xs text-danger">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {s.xCountsError}
+        </div>
+      ) : s.xCounts ? (
+        <div className="mt-2">
+          <MentionsChart buckets={s.xCounts.buckets} granularity={s.xCounts.granularity} />
+          <div className="mt-1 text-[10px] text-muted">
+            Exact {s.xCounts.granularity === 'hour' ? 'hourly' : 'daily'} counts from X ·{' '}
+            {X_WINDOWS.find((w) => w.id === s.xCounts?.window)?.label ?? s.xCounts.window}
+            {s.xCounts.note ? <span className="text-warn"> · {s.xCounts.note}</span> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -210,6 +291,34 @@ function TrendingPanel(): React.JSX.Element | null {
           </>
         )}
       </div>
+
+      {s.status.hasX && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+          <span className="text-[11px] text-muted">Exact mention history:</span>
+          <div className="flex items-center overflow-hidden rounded-lg border border-edge bg-raised">
+            <span className="pl-2 text-xs text-muted">$</span>
+            <input
+              value={s.xLookup}
+              onChange={(e) => s.setXLookup(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && s.xLookup) void s.loadMentions(s.xLookup)
+              }}
+              placeholder="NVDA"
+              className="w-20 bg-transparent px-1 py-1 text-xs uppercase outline-none"
+            />
+          </div>
+          <button
+            onClick={() => s.xLookup && void s.loadMentions(s.xLookup)}
+            disabled={!s.xLookup || s.xCountsBusy}
+            className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-[11px] font-medium hover:bg-edge/60 disabled:opacity-40"
+          >
+            <BarChart2 size={12} /> Chart it
+          </button>
+          <span className="text-[10px] text-muted">counts per {s.xWindow === '24h' ? 'hour' : 'day'} · doesn&apos;t use your tweet quota</span>
+        </div>
+      )}
+
+      <MentionsCard />
 
       {!s.status.hasX ? (
         <div className="px-4 pb-3 text-xs text-muted">

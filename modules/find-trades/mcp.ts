@@ -50,6 +50,20 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         force: z.boolean().optional().describe('Bypass the 30-minute cache and re-pull from X.')
       },
       handler: (args) => ctx.invoke(`${ID}:x-trending`, { window: args.window ?? '24h', force: args.force === true })
+    },
+    {
+      name: `${ID}__mentions`,
+      description:
+        'Exact X (Twitter) mention COUNTS for ONE ticker over time, bucketed per hour (24h window) or per day (longer). Read-only. Uses X\'s counts endpoint — precise and cheap (does not draw down the tweet-pull quota). Needs the X Bearer Token. Windows are 24h | 7d | 14d | 30d | 90d | 180d; over 7 days needs X API Pro. Returns per-bucket counts, the total, granularity, and endpoint.',
+      inputSchema: {
+        ticker: z.string().describe('Ticker symbol, e.g. "NVDA" (the $ is optional).'),
+        window: z
+          .enum(['24h', '7d', '14d', '30d', '90d', '180d'])
+          .optional()
+          .describe('Look-back window (default 24h). Over 7 days requires X API Pro.'),
+        force: z.boolean().optional().describe('Bypass the 30-minute cache and re-pull from X.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:x-mentions`, { ticker: args.ticker, window: args.window ?? '24h', force: args.force === true })
     }
   ]
 }

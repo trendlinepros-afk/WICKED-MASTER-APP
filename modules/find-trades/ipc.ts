@@ -20,7 +20,7 @@ import {
   type Candidate,
   type ScreenPlan
 } from './lib/plan'
-import { fetchTrending, rateTicker, tallyMentions } from './ipc/x'
+import { fetchMentionCounts, fetchTrending, rateTicker, tallyMentions, validTicker } from './ipc/x'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -301,6 +301,47 @@ export default function register(ctx: ModuleIpcContext): void {
         cached: false
       }
       xCache.set(windowId, { at: now, payload: { ...payload, cached: true } })
+      return payload
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // Exact per-bucket mention history for ONE ticker (counts endpoint — cheap,
+  // separate quota). Cached per ticker+window.
+  const xCountsCache = new Map<string, { at: number; payload: Record<string, unknown> }>()
+
+  ctx.ipcMain.handle(`${ID}:x-mentions`, async (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const ticker = String(r.ticker ?? '').trim().toUpperCase().replace(/^\$/, '')
+    const windowId = typeof r.window === 'string' ? r.window : '24h'
+    const force = r.force === true
+    if (!validTicker(ticker)) return { ok: false, error: 'Enter a valid ticker symbol (1–6 letters).' }
+    const bearer = ctx.getApiKey('x')
+    if (!bearer) return { ok: false, error: 'Add your X (Twitter) Bearer Token in Settings → API Keys.' }
+
+    const cacheKey = `${ticker}|${windowId}`
+    const cached = xCountsCache.get(cacheKey)
+    if (!force && cached && Date.now() - cached.at < X_TTL_MS) return cached.payload
+
+    try {
+      const now = Date.now()
+      const res = await fetchMentionCounts(bearer, ticker, windowId, now)
+      if (!res.ok && res.buckets.length === 0)
+        return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
+      const payload: Record<string, unknown> = {
+        ok: true,
+        ticker,
+        window: windowId,
+        buckets: res.buckets.map((b) => ({ start: b.start, count: b.count })),
+        total: res.total,
+        granularity: res.granularity,
+        endpoint: res.endpoint,
+        generatedAt: now,
+        note: res.error ?? '',
+        cached: false
+      }
+      xCountsCache.set(cacheKey, { at: now, payload: { ...payload, cached: true } })
       return payload
     } catch (err) {
       return { ok: false, error: errMsg(err) }

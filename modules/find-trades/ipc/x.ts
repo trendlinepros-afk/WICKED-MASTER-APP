@@ -293,3 +293,101 @@ export async function fetchTrending(bearer: string, windowId: string, nowMs: num
   }
   return { ok: true, tweets, endpoint }
 }
+
+/* --------------------------- mention COUNTS (precise) -------------------- *
+ * The counts endpoints return an exact per-bucket mention tally for ONE query
+ * — e.g. "$NVDA per day over 30 days" — and are a separate, cheaper resource
+ * that does NOT draw down the monthly tweet-pull cap. Recent counts cover 7
+ * days; longer needs the full-archive counts endpoint (X API Pro).
+ * ------------------------------------------------------------------------ */
+
+/** Exact-count query for one ticker (original posts, not retweets). */
+export function countsQuery(ticker: string): string {
+  return `$${ticker.toUpperCase()} -is:retweet`
+}
+
+/** Hourly buckets for short windows, daily for long ones. */
+export function pickGranularity(window: XWindow): 'hour' | 'day' {
+  return window.hours <= 48 ? 'hour' : 'day'
+}
+
+export interface CountBucket {
+  start: string
+  end: string
+  count: number
+}
+
+interface RawCount {
+  start?: string
+  end?: string
+  tweet_count?: number
+}
+
+export function parseCountsPage(json: unknown): { buckets: CountBucket[]; nextToken: string | null } {
+  const j = (json ?? {}) as { data?: RawCount[]; meta?: { next_token?: string } }
+  const data = Array.isArray(j.data) ? j.data : []
+  const buckets = data.map((d): CountBucket => ({ start: String(d.start ?? ''), end: String(d.end ?? ''), count: Number(d.tweet_count ?? 0) }))
+  const nextToken = j.meta?.next_token ? String(j.meta.next_token) : null
+  return { buckets, nextToken }
+}
+
+export function countsParams(
+  query: string,
+  window: XWindow,
+  nowMs: number,
+  useArchive: boolean,
+  granularity: 'hour' | 'day',
+  nextToken: string | null
+): Record<string, string> {
+  let startMs = nowMs - window.hours * 3_600_000
+  if (!useArchive) {
+    const floor = nowMs - RECENT_MAX_HOURS * 3_600_000 + 60_000
+    if (startMs < floor) startMs = floor
+  }
+  const p: Record<string, string> = { query, granularity, start_time: new Date(startMs).toISOString() }
+  if (nextToken) p.next_token = nextToken
+  return p
+}
+
+export interface MentionCountsFetch {
+  ok: boolean
+  ticker: string
+  buckets: CountBucket[]
+  total: number
+  endpoint: 'recent' | 'all'
+  granularity: 'hour' | 'day'
+  error?: string
+  archiveNeeded?: boolean
+}
+
+const sumCounts = (b: CountBucket[]): number => b.reduce((n, x) => n + x.count, 0)
+
+/** Exact per-bucket mention counts for one ticker over a window. */
+export async function fetchMentionCounts(bearer: string, ticker: string, windowId: string, nowMs: number, maxPages = 8): Promise<MentionCountsFetch> {
+  const w = windowById(windowId)
+  const useArchive = w.hours > RECENT_MAX_HOURS
+  const path = useArchive ? '/tweets/counts/all' : '/tweets/counts/recent'
+  const endpoint: 'recent' | 'all' = useArchive ? 'all' : 'recent'
+  const granularity = pickGranularity(w)
+  const query = countsQuery(ticker)
+  const all: CountBucket[] = []
+  let next: string | null = null
+
+  for (let page = 0; page < maxPages; page++) {
+    const r = await xFetch(bearer, path, countsParams(query, w, nowMs, useArchive, granularity, next))
+    if (!r.ok) {
+      const base = { ok: all.length > 0, ticker, buckets: all, total: sumCounts(all), endpoint, granularity }
+      if (r.status === 403 && useArchive)
+        return { ...base, ok: false, archiveNeeded: true, error: 'Windows longer than 7 days need X API Pro (full-archive access). Try 24h or 7d.' }
+      if (r.status === 401) return { ok: false, ticker, buckets: [], total: 0, endpoint, granularity, error: 'X rejected the Bearer Token (401). Check it in Settings → API Keys.' }
+      if (r.status === 429) return { ...base, error: 'X rate limit hit — showing partial counts. Try again shortly.' }
+      return { ...base, error: r.error }
+    }
+    const parsed = parseCountsPage(r.json)
+    all.push(...parsed.buckets)
+    next = parsed.nextToken
+    if (!next) break
+  }
+  all.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+  return { ok: true, ticker, buckets: all, total: sumCounts(all), endpoint, granularity }
+}

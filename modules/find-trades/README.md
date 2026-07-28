@@ -44,6 +44,16 @@ tickers **mentioned most on X (Twitter)** over a chosen window — **24h, 7d, 2w
   min**; opening the tool repeatedly won't re-spend it. Manual **Refresh** bypasses
   the cache. **Ask AI** on any row hands the ticker to the screener chat below.
 
+### Exact mention history (counts)
+
+The trending tally is a *sample*; for a **precise** read, the chart button on any
+row (or the "Exact mention history" lookup box — works for any ticker) uses X's
+**counts endpoint** to show mentions of one ticker **per hour** (24h window) or
+**per day** (longer), with the exact total. Counts are a **separate, cheaper
+resource that does NOT draw down the tweet-pull cap**, so it's cheap to run.
+Recent counts cover 7 days; longer windows use full-archive counts (X API Pro).
+Cached per ticker+window ~30 min.
+
 ## Keys
 
 - **Massive / Polygon** — required (market snapshot, details).
@@ -60,9 +70,10 @@ Keys come from the shell vault; none are sent to the renderer.
 
 ## MCP
 
-Two **deterministic** read-only tools are exposed to agents: `find-trades__screen`
-(explicit numeric criteria in, matching tickers out) and `find-trades__trending`
-(most-mentioned tickers on X over a window, rated). The AI chat consumes vault AI
+Three **deterministic** read-only tools are exposed to agents: `find-trades__screen`
+(explicit numeric criteria in, matching tickers out), `find-trades__trending`
+(most-mentioned tickers on X over a window, rated), and `find-trades__mentions`
+(exact per-hour/day mention counts for one ticker). The AI chat consumes vault AI
 keys, so it stays off MCP per the module contract.
 
 Educational screening for ideas to research — not financial advice.
