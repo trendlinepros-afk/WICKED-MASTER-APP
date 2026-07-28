@@ -93,6 +93,10 @@ export interface Candidate {
   sector?: string
   marketCap?: number | null
   news?: { title: string; url: string; source: string; publishedAt: string }[]
+  /** news velocity — headline counts in 24h/72h (catalyst intensity) */
+  newsCount24h?: number
+  newsCount72h?: number
+  newsHot?: boolean
   /** Tier 1 technical signals + unified Trade Score (attached at enrichment) */
   signals?: Signals
   score?: ScoreResult

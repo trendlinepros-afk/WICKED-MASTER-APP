@@ -126,6 +126,12 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
                 StockTwits {p.stBullPct}% bull
               </span>
             )}
+            {p.newsCount24h != null && p.newsCount24h > 0 && (
+              <span className={p.newsHot ? 'font-medium text-warn' : ''} title="Headlines in the last 24 hours (catalyst intensity)">
+                {p.newsHot ? '🔥 ' : ''}
+                {p.newsCount24h} news/24h
+              </span>
+            )}
             {p.sector && p.sector !== '—' && <span>{p.sector}</span>}
             {p.marketCap != null && <span className="tabular-nums">Cap {cap(p.marketCap)}</span>}
           </div>
@@ -247,6 +253,14 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
             </span>
           )}
           <span className="tabular-nums text-muted">{r.mentions} mention{r.mentions === 1 ? '' : 's'}</span>
+          {r.velocity === 'accelerating' && (
+            <span className="font-semibold text-warn" title={`Chatter accelerating — ${r.accel}× more mentions in the recent half of the sample`}>
+              🔥 accelerating
+            </span>
+          )}
+          {r.velocity === 'fading' && (
+            <span className="text-muted" title={`Chatter fading — ${r.accel}× (recent vs earlier)`}>↓ fading</span>
+          )}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
           <ToneBar r={r} />
@@ -310,6 +324,16 @@ function MentionsChart({ buckets, granularity }: { buckets: MentionBucket[]; gra
 function MentionsCard(): React.JSX.Element | null {
   const s = useFindTrades()
   if (!s.xCountsTicker) return null
+  const buckets = s.xCounts?.buckets ?? []
+  const velLabel = ((): string => {
+    if (buckets.length < 3) return ''
+    const last = buckets[buckets.length - 1].count
+    const prior = buckets.slice(0, -1)
+    const avg = prior.reduce((a, b) => a + b.count, 0) / prior.length
+    if (avg <= 0) return last > 0 ? 'rising' : ''
+    const r = last / avg
+    return r >= 1.5 ? 'rising' : r <= 0.6 ? 'cooling' : ''
+  })()
   return (
     <div className="border-b border-edge bg-raised/30 px-4 py-3">
       <div className="flex items-center gap-2">
@@ -343,6 +367,9 @@ function MentionsCard(): React.JSX.Element | null {
           <div className="mt-1 text-[10px] text-muted">
             Exact {s.xCounts.granularity === 'hour' ? 'hourly' : 'daily'} counts from X ·{' '}
             {X_WINDOWS.find((w) => w.id === s.xCounts?.window)?.label ?? s.xCounts.window}
+            {velLabel && (
+              <span className={velLabel === 'rising' ? 'text-warn' : ''}> · {velLabel === 'rising' ? '🔥 rising' : 'cooling'} (latest {s.xCounts.granularity === 'hour' ? 'hour' : 'day'} vs avg)</span>
+            )}
             {s.xCounts.note ? <span className="text-warn"> · {s.xCounts.note}</span> : null}
           </div>
         </div>

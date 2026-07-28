@@ -213,12 +213,15 @@ export interface XTweet {
   text: string
   cashtags: string[]
   engagement: number
+  /** post time (epoch ms), 0 if unknown — used for velocity/acceleration */
+  createdAt: number
 }
 
 interface RawTweet {
   id?: string | number
   text?: string
   entities?: XEntities
+  created_at?: string
   public_metrics?: { like_count?: number; retweet_count?: number; reply_count?: number; quote_count?: number }
 }
 
@@ -229,11 +232,13 @@ export function parseSearchPage(json: unknown): { tweets: XTweet[]; nextToken: s
   const tweets = data.map((d): XTweet => {
     const text = String(d.text ?? '')
     const pm = d.public_metrics ?? {}
+    const t = d.created_at ? Date.parse(d.created_at) : NaN
     return {
       id: String(d.id ?? ''),
       text,
       cashtags: extractCashtags(d.entities, text),
-      engagement: Number(pm.like_count ?? 0) + Number(pm.retweet_count ?? 0) + Number(pm.quote_count ?? 0)
+      engagement: Number(pm.like_count ?? 0) + Number(pm.retweet_count ?? 0) + Number(pm.quote_count ?? 0),
+      createdAt: Number.isNaN(t) ? 0 : t
     }
   })
   const nextToken = j.meta?.next_token ? String(j.meta.next_token) : null
@@ -254,6 +259,20 @@ export interface Tally {
   hopeful: number
   negative: number
   neutral: number
+  /** mentions in the recent vs older half of the sampled window */
+  recentMentions: number
+  olderMentions: number
+  /** recent/older ratio (~1 = steady) and a label */
+  accel: number
+  velocity: 'accelerating' | 'steady' | 'fading' | '—'
+}
+
+/** Acceleration label from a ticker's recent-vs-older mention split. */
+export function classifyVelocity(recent: number, older: number, total: number, spanOk: boolean): { accel: number; velocity: Tally['velocity'] } {
+  if (!spanOk || total < 4) return { accel: 1, velocity: '—' }
+  const accel = recent / Math.max(1, older)
+  const velocity = accel >= 1.8 ? 'accelerating' : accel <= 0.55 ? 'fading' : 'steady'
+  return { accel: Math.round(accel * 100) / 100, velocity }
 }
 
 /**
@@ -262,16 +281,25 @@ export interface Tally {
  * lexicon classification; otherwise the lexicon `analyzePost` is used.
  */
 export function tallyMentions(tweets: XTweet[], tones?: Tone[]): Tally[] {
+  // Split the sampled window in half by time so we can measure per-ticker
+  // acceleration (chatter growing = more mentions in the recent half). Only
+  // meaningful when we have real timestamps spanning a decent range.
+  const times = tweets.map((t) => t.createdAt).filter((t) => t > 0)
+  const minT = times.length ? Math.min(...times) : 0
+  const maxT = times.length ? Math.max(...times) : 0
+  const midT = (minT + maxT) / 2
+  const spanOk = times.length >= 4 && maxT - minT >= 20 * 60 * 1000
+
   const map = new Map<
     string,
-    { mentions: number; engagement: number; sSum: number; gSum: number; positive: number; hopeful: number; negative: number; neutral: number }
+    { mentions: number; engagement: number; sSum: number; gSum: number; positive: number; hopeful: number; negative: number; neutral: number; recent: number; older: number }
   >()
   for (let i = 0; i < tweets.length; i++) {
     const tw = tweets[i]
-    const a =
-      tones && tones[i] ? { tone: tones[i], ...toneScores(tones[i]) } : analyzePost(tw.text)
+    const a = tones && tones[i] ? { tone: tones[i], ...toneScores(tones[i]) } : analyzePost(tw.text)
+    const isRecent = tw.createdAt > 0 && tw.createdAt >= midT
     for (const tag of tw.cashtags) {
-      const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, gSum: 0, positive: 0, hopeful: 0, negative: 0, neutral: 0 }
+      const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, gSum: 0, positive: 0, hopeful: 0, negative: 0, neutral: 0, recent: 0, older: 0 }
       e.mentions++
       e.engagement += tw.engagement
       e.sSum += a.sentiment
@@ -280,21 +308,32 @@ export function tallyMentions(tweets: XTweet[], tones?: Tone[]): Tally[] {
       else if (a.tone === 'hopeful') e.hopeful++
       else if (a.tone === 'negative') e.negative++
       else e.neutral++
+      if (tw.createdAt > 0) {
+        if (isRecent) e.recent++
+        else e.older++
+      }
       map.set(tag, e)
     }
   }
   return [...map.entries()]
-    .map(([ticker, e]) => ({
-      ticker,
-      mentions: e.mentions,
-      engagement: e.engagement,
-      sentiment: e.mentions ? e.sSum / e.mentions : 0,
-      growthScore: e.mentions ? e.gSum / e.mentions : 0,
-      positive: e.positive,
-      hopeful: e.hopeful,
-      negative: e.negative,
-      neutral: e.neutral
-    }))
+    .map(([ticker, e]) => {
+      const v = classifyVelocity(e.recent, e.older, e.mentions, spanOk)
+      return {
+        ticker,
+        mentions: e.mentions,
+        engagement: e.engagement,
+        sentiment: e.mentions ? e.sSum / e.mentions : 0,
+        growthScore: e.mentions ? e.gSum / e.mentions : 0,
+        positive: e.positive,
+        hopeful: e.hopeful,
+        negative: e.negative,
+        neutral: e.neutral,
+        recentMentions: e.recent,
+        olderMentions: e.older,
+        accel: v.accel,
+        velocity: v.velocity
+      }
+    })
     .sort((a, b) => b.mentions - a.mentions || b.engagement - a.engagement)
 }
 

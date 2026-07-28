@@ -42,3 +42,22 @@ export function classifyCatalyst(titles: string[]): Catalyst | null {
   }
   return { type: 'News', avoid: false, label: 'News' }
 }
+
+/**
+ * News VELOCITY — how many headlines landed in the last 24h / 72h (catalyst
+ * intensity). `hot` = a heavy recent news flow. Pure; publishedAt is an ISO
+ * string (a tiny future skew is tolerated for feed clock drift).
+ */
+export function newsVelocity(news: { publishedAt: string }[], nowMs: number): { count24h: number; count72h: number; hot: boolean } {
+  let count24h = 0
+  let count72h = 0
+  for (const n of news) {
+    const t = Date.parse(n?.publishedAt || '')
+    if (Number.isNaN(t)) continue
+    const age = nowMs - t
+    if (age < -3_600_000) continue // more than 1h in the future = bad timestamp
+    if (age <= 24 * 3_600_000) count24h++
+    if (age <= 72 * 3_600_000) count72h++
+  }
+  return { count24h, count72h, hot: count24h >= 3 }
+}

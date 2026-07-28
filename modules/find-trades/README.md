@@ -48,6 +48,8 @@ Each pick also carries:
 - **Trade plan** (`tradePlan`) — an ATR-based entry / stop (1.5×ATR) / target
   (2R, or the 52-week high if it's just overhead) / risk-reward. Educational
   scaffolding, **not advice**.
+- **News velocity** (`catalyst.ts newsVelocity`) — headline count in the last
+  24h/72h as catalyst intensity, with a 🔥 hot flag at 3+/24h.
 - **Catalyst classification** (`ipc/market/catalyst.ts`) from the news headlines —
   FDA / M&A / Earnings / Upgrade / Guidance… and critically a **⚠ Dilution /
   Offering** (or downgrade) AVOID flag, checked first so a dilution headline is
@@ -136,6 +138,11 @@ bull/bear sentiment read and a **heat rating** (`ipc/x.ts`).
   sentiment. No AI tokens are spent — the rating is deterministic.
 - **Heat rating** = buzz (mentions vs the hottest ticker) 50% + price momentum
   (today's move) 25% + tweet sentiment 25%, bucketed **Hot / Warm / Watch / Cool**.
+- **Social velocity** — from each scanned tweet's timestamp (free, no extra
+  calls) the tool measures per-ticker acceleration: **🔥 accelerating** when a
+  ticker's mentions cluster in the recent half of the sample, **↓ fading** when
+  they don't (`classifyVelocity`). The mention-history chart also flags the
+  latest bucket **rising / cooling** vs its average.
 - **Proposed Growth** — a second, tone-driven grade. Each post is classified
   **positive** (confirmed good news), **hopeful** (forward-looking optimism that
   hasn't happened yet), or **negative**; the per-ticker average tone becomes a

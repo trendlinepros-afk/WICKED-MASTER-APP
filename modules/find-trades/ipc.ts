@@ -17,7 +17,7 @@ import { preMarketGainers, afterHoursGainers } from '../stock-planner/ipc/market
 import { getCompanyNews, getFinnhubEarnings, getFinnhubExtras, type FinnhubExtras } from '../stock-planner/ipc/market/finnhub'
 import { etTodayYmd } from '../stock-planner/ipc/market/sessions'
 import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
-import { classifyCatalyst } from '../stock-planner/ipc/market/catalyst'
+import { classifyCatalyst, newsVelocity } from '../stock-planner/ipc/market/catalyst'
 import { getEdgarSummary } from '../stock-planner/ipc/market/edgar'
 import { getStockTwits } from '../stock-planner/ipc/market/stocktwits'
 import { classifySector } from '../trade-analytics/lib/sector'
@@ -103,6 +103,9 @@ export interface Pick {
   /** StockTwits social read */
   stMessages: number | null
   stBullPct: number | null
+  /** news velocity — headlines in 24h + hot flag */
+  newsCount24h: number | null
+  newsHot: boolean
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -117,6 +120,9 @@ export interface TrendRow {
   negative: number
   neutral: number
   sentiment: number
+  /** mention acceleration within the sampled window */
+  velocity: string
+  accel: number
   /** PROPOSED GROWTH — a sentiment lean from post tone (not a forecast) */
   growthScore: number
   growthPct: number
@@ -186,7 +192,9 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
     stBullPct:
       c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
         ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)
-        : null
+        : null,
+    newsCount24h: c.newsCount24h ?? null,
+    newsHot: c.newsHot ?? false
   }
 }
 
@@ -275,6 +283,15 @@ async function tickerExtras(finnhubKey: string, ticker: string): Promise<Finnhub
   return extras
 }
 
+/** Attach news-velocity counts (24h/72h + hot) from a candidate's headlines. */
+function attachNewsVel(c: Candidate): void {
+  if (!c.news) return
+  const v = newsVelocity(c.news, Date.now())
+  c.newsCount24h = v.count24h
+  c.newsCount72h = v.count72h
+  c.newsHot = v.hot
+}
+
 /** Days from ET-today to a YYYY-MM-DD earnings date (null if unparseable). */
 function daysToYmd(dateStr: string): number | null {
   const a = Date.parse(etTodayYmd() + 'T00:00:00Z')
@@ -312,8 +329,16 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
       } catch {
         /* no earnings date */
       }
-      // SEC EDGAR + StockTwits (top few only).
+      // SEC EDGAR + StockTwits + news velocity (top few only).
       if (edgarSet.has(c.ticker)) {
+        if (!c.news || c.news.length === 0) {
+          try {
+            c.news = finnhubKey ? await getCompanyNews(finnhubKey, c.ticker) : await getMassiveNews(massiveKey, c.ticker)
+          } catch {
+            c.news = []
+          }
+        }
+        attachNewsVel(c)
         try {
           c.edgar = await getEdgarSummary(c.ticker)
           // A recent registration/offering filing is a strong AVOID — it beats
@@ -364,6 +389,7 @@ async function enrich(
         } catch {
           c.news = []
         }
+        attachNewsVel(c)
       }
       // Tier 1: technical signals + unified Trade Score.
       try {
@@ -429,7 +455,8 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (c.edgar?.recentOffering ? ' | ⚠RECENT SEC OFFERING FILING (dilution risk)' : '') +
       (c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish >= 3
         ? ` | StockTwits ${Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)}% bull`
-        : '')
+        : '') +
+      (c.newsCount24h != null && c.newsCount24h > 0 ? ` | ${c.newsCount24h} headline(s)/24h${c.newsHot ? ' (heavy news flow)' : ''}` : '')
     return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
       tech +
@@ -636,6 +663,8 @@ export default function register(ctx: ModuleIpcContext): void {
           negative: t.negative,
           neutral: t.neutral,
           sentiment: t.sentiment,
+          velocity: t.velocity,
+          accel: t.accel,
           growthScore: t.growthScore,
           growthPct: growth.pct,
           growthGrade: growth.grade,
@@ -851,7 +880,9 @@ export default function register(ctx: ModuleIpcContext): void {
           stBullPct:
             c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
               ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)
-              : null
+              : null,
+          newsCount24h: c.newsCount24h ?? null,
+          newsHot: c.newsHot ?? false
         }))
       }
     } catch (err) {
