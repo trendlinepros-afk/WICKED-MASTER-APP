@@ -121,6 +121,11 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
                 Earnings {p.daysToEarnings === 0 ? 'today' : `in ${p.daysToEarnings}d`}
               </span>
             )}
+            {p.stBullPct != null && (
+              <span className={p.stBullPct >= 60 ? 'text-ok' : p.stBullPct <= 40 ? 'text-danger' : ''} title="StockTwits community sentiment (% bullish of tagged messages)">
+                StockTwits {p.stBullPct}% bull
+              </span>
+            )}
             {p.sector && p.sector !== '—' && <span>{p.sector}</span>}
             {p.marketCap != null && <span className="tabular-nums">Cap {cap(p.marketCap)}</span>}
           </div>

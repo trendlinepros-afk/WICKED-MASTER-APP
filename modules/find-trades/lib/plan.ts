@@ -3,6 +3,7 @@ import type { ScoreResult, Signals, TradePlan } from '../../stock-planner/ipc/ma
 import type { Catalyst } from '../../stock-planner/ipc/market/catalyst'
 import type { FinnhubExtras } from '../../stock-planner/ipc/market/finnhub'
 import type { EdgarSummary } from '../../stock-planner/ipc/market/edgar'
+import type { StockTwitsRead } from '../../stock-planner/ipc/market/stocktwits'
 
 /**
  * FIND TRADES — the AI turns a plain-English request ("low-priced stocks up big
@@ -103,6 +104,8 @@ export interface Candidate {
   extras?: FinnhubExtras
   /** SEC EDGAR recent-filing summary (offering/8-K/Form 4) */
   edgar?: EdgarSummary | null
+  /** StockTwits social read (second social source) */
+  stocktwits?: StockTwitsRead | null
   /** next earnings date + days away (negative/undefined = unknown) */
   earningsDate?: string | null
   daysToEarnings?: number | null

@@ -19,6 +19,7 @@ import { etTodayYmd } from '../stock-planner/ipc/market/sessions'
 import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
 import { classifyCatalyst } from '../stock-planner/ipc/market/catalyst'
 import { getEdgarSummary } from '../stock-planner/ipc/market/edgar'
+import { getStockTwits } from '../stock-planner/ipc/market/stocktwits'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
@@ -99,6 +100,9 @@ export interface Pick {
   /** SEC EDGAR recent-filing flags */
   secOffering: boolean
   sec8K: boolean
+  /** StockTwits social read */
+  stMessages: number | null
+  stBullPct: number | null
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -177,7 +181,12 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
     daysToEarnings: c.daysToEarnings ?? null,
     earningsHour: c.earningsHour ?? null,
     secOffering: c.edgar?.recentOffering ?? false,
-    sec8K: c.edgar?.recent8K ?? false
+    sec8K: c.edgar?.recent8K ?? false,
+    stMessages: c.stocktwits?.messages ?? null,
+    stBullPct:
+      c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
+        ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)
+        : null
   }
 }
 
@@ -239,6 +248,23 @@ async function dailyBars(massiveKey: string, ticker: string): Promise<Bar[]> {
   return bars
 }
 
+/** Build the Trade Score for a candidate (hasSocial adds the small social bonus). */
+function scoreFor(c: Candidate, hasSocial: boolean): ReturnType<typeof tradeScore> {
+  return tradeScore({
+    changePct: c.changePct,
+    rvol: c.signals?.rvol ?? null,
+    gapPct: c.signals?.gapPct ?? null,
+    atrPct: c.signals?.atrPct ?? null,
+    pctFrom52High: c.signals?.pctFrom52High ?? null,
+    rsi14: c.signals?.rsi14 ?? null,
+    aboveSma20: c.signals?.aboveSma20 ?? false,
+    aboveSma50: c.signals?.aboveSma50 ?? false,
+    trendUp: c.signals?.trendUp ?? false,
+    hasNews: (c.news?.length ?? 0) > 0,
+    hasSocial
+  })
+}
+
 const extrasCache = new Map<string, { at: number; extras: FinnhubExtras }>()
 
 async function tickerExtras(finnhubKey: string, ticker: string): Promise<FinnhubExtras> {
@@ -286,7 +312,7 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
       } catch {
         /* no earnings date */
       }
-      // SEC EDGAR (top few only) — catches a dilution/offering from the source.
+      // SEC EDGAR + StockTwits (top few only).
       if (edgarSet.has(c.ticker)) {
         try {
           c.edgar = await getEdgarSummary(c.ticker)
@@ -295,6 +321,13 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
           if (c.edgar?.recentOffering) c.catalyst = { type: 'Offering', avoid: true, label: 'Recent SEC offering filing' }
         } catch {
           /* no filings */
+        }
+        try {
+          c.stocktwits = await getStockTwits(c.ticker)
+          // Meaningful bullish StockTwits chatter lights the social bonus.
+          if (c.stocktwits && c.stocktwits.messages >= 5 && c.stocktwits.sentiment > 0.2) c.score = scoreFor(c, true)
+        } catch {
+          /* no StockTwits */
         }
       }
     }
@@ -344,18 +377,7 @@ async function enrich(
       } catch {
         /* no signals — score falls back to what we have */
       }
-      c.score = tradeScore({
-        changePct: c.changePct,
-        rvol: c.signals?.rvol ?? null,
-        gapPct: c.signals?.gapPct ?? null,
-        atrPct: c.signals?.atrPct ?? null,
-        pctFrom52High: c.signals?.pctFrom52High ?? null,
-        rsi14: c.signals?.rsi14 ?? null,
-        aboveSma20: c.signals?.aboveSma20 ?? false,
-        aboveSma50: c.signals?.aboveSma50 ?? false,
-        trendUp: c.signals?.trendUp ?? false,
-        hasNews: (c.news?.length ?? 0) > 0
-      })
+      c.score = scoreFor(c, false)
       c.setup = classifySetup(c.signals, c.changePct)
       c.plan = tradePlan(c.price, c.signals)
       c.catalyst = classifyCatalyst((c.news ?? []).map((n) => n.title))
@@ -404,7 +426,10 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (c.extras?.insiderBuying ? ' | insider buying' : '') +
       (c.extras?.shortPctFloat != null ? ` | short ${c.extras.shortPctFloat}% float` : '') +
       (c.daysToEarnings != null && c.daysToEarnings >= 0 && c.daysToEarnings <= 21 ? ` | earnings in ${c.daysToEarnings}d` : '') +
-      (c.edgar?.recentOffering ? ' | ⚠RECENT SEC OFFERING FILING (dilution risk)' : '')
+      (c.edgar?.recentOffering ? ' | ⚠RECENT SEC OFFERING FILING (dilution risk)' : '') +
+      (c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish >= 3
+        ? ` | StockTwits ${Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)}% bull`
+        : '')
     return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
       tech +
@@ -822,7 +847,11 @@ export default function register(ctx: ModuleIpcContext): void {
           insiderBuying: c.extras?.insiderBuying ?? false,
           shortPctFloat: c.extras?.shortPctFloat ?? null,
           daysToEarnings: c.daysToEarnings ?? null,
-          secOffering: c.edgar?.recentOffering ?? false
+          secOffering: c.edgar?.recentOffering ?? false,
+          stBullPct:
+            c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
+              ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)
+              : null
         }))
       }
     } catch (err) {

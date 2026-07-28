@@ -84,6 +84,13 @@ the last ~30 days — a **dilution risk straight from the source**, shown as a r
 hasn't caught it. Also notes recent 8-K / Form 4. Pure `classifyFilings` is
 unit-tested; ticker→CIK map + submissions are cached.
 
+## Second social source (StockTwits)
+
+For the top few candidates the tool also reads **StockTwits** (free, finance-
+specific) and shows the community **% bullish** on the recent message stream —
+a cross-check on the X signal — and meaningful bullish chatter lights the Trade
+Score's social bonus. Fail-soft; `classifyStream` is unit-tested.
+
 ## Watchlist &amp; alerts
 
 Star any result (or add a ticker in the **Watchlist** dialog) to track it, then set
