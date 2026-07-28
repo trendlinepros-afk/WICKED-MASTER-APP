@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Pick, TrendRow } from './ipc'
+import type { Pick, ScanRecord, TrendRow } from './ipc'
 import type { ScreenPlan } from './lib/plan'
 
 export const ID = 'find-trades'
@@ -18,6 +18,7 @@ interface Status {
   hasFinnhub: boolean
   hasAi: boolean
   hasX: boolean
+  scanSize?: number
   session: string
 }
 
@@ -34,13 +35,16 @@ interface TrendingRes {
   ok: boolean
   error?: string
   archiveNeeded?: boolean
+  id?: string
   window?: string
+  scanSize?: number
   rows?: TrendRow[]
   sampled?: number
   endpoint?: string
   marketValidated?: boolean
   generatedAt?: number
   note?: string
+  history?: ScanRecord[]
 }
 
 export interface MentionBucket {
@@ -76,6 +80,22 @@ interface CountsRes {
 const invoke = <T = Res>(channel: string, ...args: unknown[]): Promise<T> =>
   window.wicked.invoke(`${ID}:${channel}`, ...args) as Promise<T>
 
+/** Show a saved/fresh scan in the panel (no API call). */
+function showRecord(set: (p: Partial<State>) => void, rec: ScanRecord): void {
+  set({
+    xShownId: rec.id,
+    xRows: rec.rows,
+    xShownWindow: rec.window,
+    xSampled: rec.sampled,
+    xEndpoint: rec.endpoint,
+    xMarketValidated: rec.marketValidated,
+    xGeneratedAt: rec.generatedAt,
+    xNote: rec.note,
+    xError: '',
+    xArchiveNeeded: false
+  })
+}
+
 interface State {
   status: Status | null
   chat: ChatMsg[]
@@ -83,9 +103,12 @@ interface State {
   busy: boolean
   error: string
 
-  // "Trending on X" panel
-  xWindow: string
-  xRows: TrendRow[]
+  // "Trending on X" panel — scans are user-triggered, saved to history
+  xWindow: string // the window the NEXT scan will use
+  xScanSize: number // tweets per scan (100 | 200 | 300)
+  xRows: TrendRow[] // currently displayed scan
+  xShownId: string | null // id of the displayed scan (null = none yet)
+  xShownWindow: string // window of the displayed scan
   xBusy: boolean
   xError: string
   xNote: string
@@ -94,7 +117,8 @@ interface State {
   xGeneratedAt: number | null
   xArchiveNeeded: boolean
   xMarketValidated: boolean
-  xLoaded: boolean
+  xHistory: ScanRecord[]
+  xHistoryLoaded: boolean
 
   // per-ticker mention history (counts endpoint)
   xCountsTicker: string | null
@@ -110,7 +134,10 @@ interface State {
   send: (text?: string) => Promise<void>
   clear: () => void
   setXWindow: (id: string) => void
-  loadTrending: (force?: boolean) => Promise<void>
+  setScanSize: (n: number) => Promise<void>
+  loadHistory: () => Promise<void>
+  scanTweets: () => Promise<void>
+  selectScan: (id: string) => void
   setXLookup: (v: string) => void
   loadMentions: (ticker: string, force?: boolean) => Promise<void>
   closeMentions: () => void
@@ -124,7 +151,10 @@ export const useFindTrades = create<State>((set, get) => ({
   error: '',
 
   xWindow: '24h',
+  xScanSize: 100,
   xRows: [],
+  xShownId: null,
+  xShownWindow: '24h',
   xBusy: false,
   xError: '',
   xNote: '',
@@ -133,7 +163,8 @@ export const useFindTrades = create<State>((set, get) => ({
   xGeneratedAt: null,
   xArchiveNeeded: false,
   xMarketValidated: false,
-  xLoaded: false,
+  xHistory: [],
+  xHistoryLoaded: false,
 
   xCountsTicker: null,
   xCounts: null,
@@ -148,43 +179,67 @@ export const useFindTrades = create<State>((set, get) => ({
   loadStatus: async () => {
     const res = await invoke<Res & Status>('status')
     if (res.ok) {
-      set({ status: res as unknown as Status })
-      if ((res as unknown as Status).hasX) void get().loadTrending(false)
+      const st = res as unknown as Status
+      set({ status: st })
+      if (typeof st.scanSize === 'number') set({ xScanSize: st.scanSize })
+      // Reading saved history is FREE (no API call) — populate the dropdown and
+      // show the most recent past scan. Scanning itself is user-triggered.
+      if (st.hasX) void get().loadHistory()
     }
   },
 
   setXWindow: (id) => {
-    if (id === get().xWindow) return
-    set({ xWindow: id })
-    void get().loadTrending(false)
-    // keep an open mention-history chart in sync with the new window
-    if (get().xCountsTicker) void get().loadMentions(get().xCountsTicker as string)
+    // Selecting a window only sets the target for the NEXT scan — no API call.
+    if (id !== get().xWindow) set({ xWindow: id })
   },
 
-  loadTrending: async (force = false) => {
+  setScanSize: async (n) => {
+    const size = n === 200 ? 200 : n === 300 ? 300 : 100
+    set({ xScanSize: size })
+    await invoke('x-set-scan-size', { size })
+  },
+
+  loadHistory: async () => {
+    const res = await invoke<{ ok: boolean; history?: ScanRecord[] }>('x-history')
+    if (!res.ok) return
+    const history = res.history ?? []
+    set({ xHistory: history, xHistoryLoaded: true })
+    // show the newest saved scan by default (free) if nothing is displayed yet
+    if (history.length > 0 && !get().xShownId) showRecord(set, history[0])
+  },
+
+  // The ONLY thing that spends X read credits for trends — user-triggered.
+  scanTweets: async () => {
     if (get().xBusy) return
-    set({ xBusy: true, xError: '' })
+    set({ xBusy: true, xError: '', xArchiveNeeded: false })
     try {
-      const res = await invoke<TrendingRes>('x-trending', { window: get().xWindow, force })
+      const res = await invoke<TrendingRes>('x-trending', { window: get().xWindow, force: false })
       if (!res.ok) {
-        set({ xError: res.error ?? 'Could not load trending tickers.', xArchiveNeeded: res.archiveNeeded === true, xRows: [], xLoaded: true })
+        set({ xError: res.error ?? 'Could not scan X.', xArchiveNeeded: res.archiveNeeded === true })
         return
       }
-      set({
-        xRows: res.rows ?? [],
-        xSampled: res.sampled ?? 0,
-        xEndpoint: res.endpoint ?? '',
-        xMarketValidated: res.marketValidated === true,
-        xGeneratedAt: res.generatedAt ?? null,
-        xNote: res.note ?? '',
-        xArchiveNeeded: false,
-        xLoaded: true
+      if (res.history) set({ xHistory: res.history })
+      showRecord(set, {
+        id: res.id ?? '',
+        window: res.window ?? get().xWindow,
+        scanSize: res.scanSize ?? get().xScanSize,
+        generatedAt: res.generatedAt ?? Date.now(),
+        sampled: res.sampled ?? 0,
+        endpoint: res.endpoint ?? '',
+        marketValidated: res.marketValidated === true,
+        note: res.note ?? '',
+        rows: res.rows ?? []
       })
     } catch (err) {
-      set({ xError: err instanceof Error ? err.message : String(err), xLoaded: true })
+      set({ xError: err instanceof Error ? err.message : String(err) })
     } finally {
       set({ xBusy: false })
     }
+  },
+
+  selectScan: (id) => {
+    const rec = get().xHistory.find((h) => h.id === id)
+    if (rec) showRecord(set, rec)
   },
 
   setXLookup: (v) => set({ xLookup: v.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6) }),

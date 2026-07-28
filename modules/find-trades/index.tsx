@@ -257,41 +257,81 @@ function MentionsCard(): React.JSX.Element | null {
 function TrendingPanel(): React.JSX.Element | null {
   const s = useFindTrades()
   if (!s.status) return null
+  const cost = (s.xScanSize * 0.005).toFixed(2)
+  const shownWinLabel = X_WINDOWS.find((w) => w.id === s.xShownWindow)?.label ?? s.xShownWindow
+  const windowDiffers = s.xRows.length > 0 && s.xWindow !== s.xShownWindow
 
   return (
     <div className="border-b border-edge bg-surface/50">
+      {/* title + window (target for next scan) */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
         <span className="flex items-center gap-1.5 text-sm font-bold">
           <Flame size={15} className="text-danger" /> Trending on X
         </span>
         {s.status.hasX && (
-          <>
-            <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised p-0.5">
-              {X_WINDOWS.map((w) => (
-                <button
-                  key={w.id}
-                  onClick={() => s.setXWindow(w.id)}
-                  disabled={s.xBusy}
-                  className={`rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${s.xWindow === w.id ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
-                >
-                  {w.label}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => void s.loadTrending(true)}
-              disabled={s.xBusy}
-              title="Refresh (uses your X API quota)"
-              className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-[11px] font-medium hover:bg-edge/60 disabled:opacity-50"
-            >
-              {s.xBusy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              Refresh
-            </button>
-            {s.xGeneratedAt && !s.xBusy && <span className="text-[10px] text-muted">as of {agoLabel(s.xGeneratedAt)}</span>}
-          </>
+          <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised p-0.5">
+            {X_WINDOWS.map((w) => (
+              <button
+                key={w.id}
+                onClick={() => s.setXWindow(w.id)}
+                disabled={s.xBusy}
+                className={`rounded px-2 py-0.5 text-[11px] font-medium disabled:opacity-50 ${s.xWindow === w.id ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
         )}
       </div>
 
+      {/* scan controls */}
+      {s.status.hasX && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
+          <button
+            onClick={() => void s.scanTweets()}
+            disabled={s.xBusy}
+            title={`Read ${s.xScanSize} tweets and rank the most-mentioned tickers (~$${cost})`}
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-ink hover:opacity-90 disabled:opacity-50"
+          >
+            {s.xBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            Scan Tweets
+          </button>
+          <label className="flex items-center gap-1 text-[11px] text-muted">
+            Size
+            <select
+              value={s.xScanSize}
+              onChange={(e) => void s.setScanSize(Number(e.target.value))}
+              disabled={s.xBusy}
+              className="rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none disabled:opacity-50"
+            >
+              <option value={100}>100 tweets (≈$0.50)</option>
+              <option value={200}>200 tweets (≈$1.00)</option>
+              <option value={300}>300 tweets (≈$1.50)</option>
+            </select>
+          </label>
+          {s.xHistory.length > 0 && (
+            <label className="flex items-center gap-1 text-[11px] text-muted">
+              Past scans
+              <select
+                value={s.xShownId ?? ''}
+                onChange={(e) => e.target.value && s.selectScan(e.target.value)}
+                className="max-w-[210px] rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none"
+              >
+                {!s.xShownId && <option value="">Select…</option>}
+                {s.xHistory.map((rec) => (
+                  <option key={rec.id} value={rec.id}>
+                    {(X_WINDOWS.find((w) => w.id === rec.window)?.label ?? rec.window)} · {rec.rows.length} tickers ·{' '}
+                    {new Date(rec.generatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <span className="text-[10px] text-muted">≈ ${cost}/scan</span>
+        </div>
+      )}
+
+      {/* exact mention-history lookup (counts endpoint) */}
       {s.status.hasX && (
         <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
           <span className="text-[11px] text-muted">Exact mention history:</span>
@@ -314,7 +354,7 @@ function TrendingPanel(): React.JSX.Element | null {
           >
             <BarChart2 size={12} /> Chart it
           </button>
-          <span className="text-[10px] text-muted">counts per {s.xWindow === '24h' ? 'hour' : 'day'} · doesn&apos;t use your tweet quota</span>
+          <span className="text-[10px] text-muted">counts per {s.xWindow === '24h' ? 'hour' : 'day'} · separate, cheaper endpoint</span>
         </div>
       )}
 
@@ -322,8 +362,9 @@ function TrendingPanel(): React.JSX.Element | null {
 
       {!s.status.hasX ? (
         <div className="px-4 pb-3 text-xs text-muted">
-          Add your <strong>X (Twitter) Bearer Token</strong> in Settings → API Keys to see the tickers
-          mentioned most on X — with a bull/bear read and a heat rating — over 24h to 6 months.
+          Add your <strong>X (Twitter) Bearer Token</strong> in Settings → API Keys, then hit{' '}
+          <strong>Scan Tweets</strong> to see the tickers mentioned most on X — with a bull/bear read and a heat
+          rating — over 24h to 6 months.
         </div>
       ) : s.xArchiveNeeded ? (
         <div className="flex items-start gap-2 px-4 pb-3 text-xs text-warn">
@@ -339,10 +380,19 @@ function TrendingPanel(): React.JSX.Element | null {
         <div className="flex items-center gap-2 px-4 pb-3 text-xs text-muted">
           <Loader2 size={13} className="animate-spin text-accent" /> Scanning X for the most-mentioned tickers…
         </div>
-      ) : s.xRows.length === 0 && s.xLoaded ? (
-        <div className="px-4 pb-3 text-xs text-muted">No cashtags found in that window — try a longer window or refresh.</div>
+      ) : s.xRows.length === 0 ? (
+        <div className="px-4 pb-3 text-xs text-muted">
+          Pick a window and hit <strong>Scan Tweets</strong> to pull the most-mentioned tickers on X. Each scan
+          reads {s.xScanSize} tweets (≈&nbsp;${cost}) and is saved so you can revisit it for free.
+        </div>
       ) : (
         <>
+          {windowDiffers && (
+            <div className="px-4 pb-1 text-[10px] text-muted">
+              Showing your <strong>{shownWinLabel}</strong> scan — hit <strong>Scan Tweets</strong> to pull{' '}
+              {X_WINDOWS.find((w) => w.id === s.xWindow)?.label}.
+            </div>
+          )}
           <div className="max-h-[300px] overflow-y-auto">
             {s.xRows.map((r, i) => (
               <TrendRowItem key={r.ticker} r={r} rank={i + 1} />
@@ -351,10 +401,11 @@ function TrendingPanel(): React.JSX.Element | null {
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 py-2 text-[10px] text-muted">
             <TrendingUp size={11} />
             <span>
-              {s.xSampled} tweets sampled{s.xMarketValidated ? ' · validated against live market data' : ''} · rating = buzz + momentum + sentiment.
+              {shownWinLabel} scan · {s.xSampled} tweets{s.xMarketValidated ? ' · validated against live market data' : ''} ·{' '}
+              {agoLabel(s.xGeneratedAt)}
             </span>
             {s.xNote && <span className="text-warn">{s.xNote}</span>}
-            <span>Uses your X API quota — cached ~30&nbsp;min.</span>
+            <span>rating = buzz + momentum + sentiment</span>
           </div>
         </>
       )}

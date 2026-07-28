@@ -23,15 +23,23 @@ tickers and a one-line thesis for each.
 
 ## Trending on X (social)
 
-A section at the top of the tool that **auto-loads on open** and shows the stock
-tickers **mentioned most on X (Twitter)** over a chosen window — **24h, 7d, 2wk,
-1mo, 90d, 6mo** — each with a bull/bear sentiment read and a **heat rating**
-(`ipc/x.ts`).
+A section at the top of the tool that shows the stock tickers **mentioned most on
+X (Twitter)** over a chosen window — **24h, 7d, 2wk, 1mo, 90d, 6mo** — each with a
+bull/bear sentiment read and a **heat rating** (`ipc/x.ts`).
 
+- **Nothing runs automatically.** X reads cost money (per‑post billing), so a scan
+  only happens when you press **Scan Tweets**. Opening the tool is free.
+- **You control the cost.** A **Scan size** setting (100 / 200 / 300 tweets, at
+  ~$0.005/tweet ≈ $0.50 / $1.00 / $1.50 per scan) is persisted
+  (`find-trades.xScanSize`) and read in main to bound `maxPages`.
+- **Past scans are saved.** Every fresh scan is written to a capped history
+  (`find-trades.xScanHistory`, last 20) and offered in a **Past scans** dropdown —
+  re‑viewing an old scan is free (no API call). The newest saved scan is shown on
+  open (also free).
 - **How.** App-only Bearer auth searches finance tweets (`has:cashtags`, with a
   broad-finance fallback if that operator isn't on your access tier), pulls the
-  `$CASHTAG` entities, and tallies mentions + engagement + a lightweight
-  lexicon sentiment. No AI tokens are spent — the rating is deterministic.
+  `$CASHTAG` entities, and tallies mentions + engagement + a lightweight lexicon
+  sentiment. No AI tokens are spent — the rating is deterministic.
 - **Rating** = buzz (mentions vs the hottest ticker) 50% + price momentum (today's
   move) 25% + tweet sentiment 25%, bucketed **Hot / Warm / Watch / Cool**.
 - **Validated against the market.** When a Massive key is present, tickers are
@@ -40,9 +48,9 @@ tickers **mentioned most on X (Twitter)** over a chosen window — **24h, 7d, 2w
 - **Window reality.** Recent-search covers the **last 7 days**; **windows over 7
   days need X API Pro** (full-archive access) — the tool says so and still serves
   24h/7d on Basic.
-- **Quota-aware.** X's monthly tweet cap is small, so each window is **cached ~30
-  min**; opening the tool repeatedly won't re-spend it. Manual **Refresh** bypasses
-  the cache. **Ask AI** on any row hands the ticker to the screener chat below.
+- A short **30‑min cache** per window+size guards against an accidental
+  double‑click charging twice. **Ask AI** on any row hands the ticker to the
+  screener chat below.
 
 ### Exact mention history (counts)
 

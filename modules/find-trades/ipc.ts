@@ -73,6 +73,19 @@ export interface TrendRow {
   label: string
 }
 
+/** A saved trending scan, kept in history for later viewing (no re-charge). */
+export interface ScanRecord {
+  id: string
+  window: string
+  scanSize: number
+  generatedAt: number
+  sampled: number
+  endpoint: string
+  marketValidated: boolean
+  note: string
+  rows: TrendRow[]
+}
+
 const fmtCap = (v: number | null): string =>
   v == null ? 'n/a' : v >= 1e12 ? `$${(v / 1e12).toFixed(2)}T` : v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(0)}M` : `$${v.toFixed(0)}`
 
@@ -224,12 +237,38 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* ---------------------------- X (social) trends ----------------------- */
 
-  // Trending pulls are cached per window (X's monthly tweet quota is small, so
-  // opening the tool repeatedly must not re-spend it). Manual refresh bypasses.
+  // Scans are USER-TRIGGERED (each costs X read credits), so nothing runs on
+  // load. A short cache still guards against an accidental double-click charging
+  // twice for the same window+size. Every fresh scan is saved to history so past
+  // pulls can be re-viewed for free.
+  const SCAN_KEY = `${ID}.xScanSize`
+  const HISTORY_KEY = `${ID}.xScanHistory`
+  const HISTORY_CAP = 20
   const xCache = new Map<string, { at: number; payload: Record<string, unknown> }>()
   const X_TTL_MS = 30 * 60 * 1000
 
-  ctx.ipcMain.handle(`${ID}:x-status`, () => ({ ok: true, hasX: !!ctx.getApiKey('x'), hasMassive: !!ctx.getApiKey('massive') }))
+  const clampScanSize = (n: number): number => (n === 200 ? 200 : n === 300 ? 300 : 100)
+  const getScanSize = (): number => clampScanSize(Number(ctx.storeGet<number>(SCAN_KEY, 100)))
+  const readHistory = (): ScanRecord[] => {
+    const v = ctx.storeGet<ScanRecord[]>(HISTORY_KEY, [])
+    return Array.isArray(v) ? v : []
+  }
+
+  ctx.ipcMain.handle(`${ID}:x-status`, () => ({
+    ok: true,
+    hasX: !!ctx.getApiKey('x'),
+    hasMassive: !!ctx.getApiKey('massive'),
+    scanSize: getScanSize()
+  }))
+
+  ctx.ipcMain.handle(`${ID}:x-set-scan-size`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const size = clampScanSize(Number(r.size))
+    ctx.storeSet(SCAN_KEY, size)
+    return { ok: true, scanSize: size }
+  })
+
+  ctx.ipcMain.handle(`${ID}:x-history`, () => ({ ok: true, history: readHistory() }))
 
   ctx.ipcMain.handle(`${ID}:x-trending`, async (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
@@ -238,12 +277,15 @@ export default function register(ctx: ModuleIpcContext): void {
     const bearer = ctx.getApiKey('x')
     if (!bearer) return { ok: false, error: 'Add your X (Twitter) Bearer Token in Settings → API Keys to see trending tickers.' }
 
-    const cached = xCache.get(windowId)
-    if (!force && cached && Date.now() - cached.at < X_TTL_MS) return cached.payload
+    const scanSize = getScanSize()
+    const maxPages = Math.max(1, Math.min(5, Math.round(scanSize / 100)))
+    const cacheKey = `${windowId}|${scanSize}`
+    const cached = xCache.get(cacheKey)
+    if (!force && cached && Date.now() - cached.at < X_TTL_MS) return { ...cached.payload, history: readHistory() }
 
     try {
       const now = Date.now()
-      const res = await fetchTrending(bearer, windowId, now, 3)
+      const res = await fetchTrending(bearer, windowId, now, maxPages)
       if (!res.ok && res.tweets.length === 0)
         return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
 
@@ -289,9 +331,25 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       })
 
+      const record: ScanRecord = {
+        id: `${now}-${windowId}-${scanSize}`,
+        window: windowId,
+        scanSize,
+        generatedAt: now,
+        sampled: res.tweets.length,
+        endpoint: res.endpoint,
+        marketValidated: haveMarket,
+        note: res.error ?? '',
+        rows
+      }
+      const history = [record, ...readHistory().filter((h) => h.id !== record.id)].slice(0, HISTORY_CAP)
+      ctx.storeSet(HISTORY_KEY, history)
+
       const payload: Record<string, unknown> = {
         ok: true,
+        id: record.id,
         window: windowId,
+        scanSize,
         rows,
         sampled: res.tweets.length,
         endpoint: res.endpoint,
@@ -300,8 +358,8 @@ export default function register(ctx: ModuleIpcContext): void {
         note: res.error ?? '',
         cached: false
       }
-      xCache.set(windowId, { at: now, payload: { ...payload, cached: true } })
-      return payload
+      xCache.set(cacheKey, { at: now, payload: { ...payload, cached: true } })
+      return { ...payload, history }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
