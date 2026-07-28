@@ -75,6 +75,15 @@ Filterable via `insiderBuying`, `minAnalystBull`, `minShortPctFloat`,
 and surfaced as row chips + fed to the AI ranker. Extras are cached ~30 min/ticker
 and capped to the top 12 to stay friendly to Finnhub's rate limit.
 
+## Catalyst from the source (SEC EDGAR)
+
+For the top handful of candidates the tool also hits **SEC EDGAR** (free, no key)
+and flags a **recent registration/offering filing** (S-1 / S-3 / 424B / F-1) in
+the last ~30 days — a **dilution risk straight from the source**, shown as a red
+**⚠ SEC offering** chip and promoted to the AVOID catalyst even if the news
+hasn't caught it. Also notes recent 8-K / Form 4. Pure `classifyFilings` is
+unit-tested; ticker→CIK map + submissions are cached.
+
 ## Watchlist &amp; alerts
 
 Star any result (or add a ticker in the **Watchlist** dialog) to track it, then set

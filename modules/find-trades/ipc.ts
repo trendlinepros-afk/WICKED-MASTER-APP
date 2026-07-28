@@ -18,6 +18,7 @@ import { getCompanyNews, getFinnhubEarnings, getFinnhubExtras, type FinnhubExtra
 import { etTodayYmd } from '../stock-planner/ipc/market/sessions'
 import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
 import { classifyCatalyst } from '../stock-planner/ipc/market/catalyst'
+import { getEdgarSummary } from '../stock-planner/ipc/market/edgar'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
@@ -51,6 +52,7 @@ const ID = 'find-trades'
 const PRE_ENRICH_CAP = 60 // numeric survivors carried into (rate-limited) enrichment
 const ENRICH_CAP = 18 // how many we fetch sector/news/signals for
 const EXTRAS_CAP = 12 // how many we fetch Finnhub smart-money extras for (rate-limit friendly)
+const EDGAR_CAP = 8 // how many we check SEC EDGAR filings for
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -94,6 +96,9 @@ export interface Pick {
   /** next earnings date + days away */
   daysToEarnings: number | null
   earningsHour: string | null
+  /** SEC EDGAR recent-filing flags */
+  secOffering: boolean
+  sec8K: boolean
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -170,7 +175,9 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
     insiderNet: c.extras?.insiderNet ?? null,
     shortPctFloat: c.extras?.shortPctFloat ?? null,
     daysToEarnings: c.daysToEarnings ?? null,
-    earningsHour: c.earningsHour ?? null
+    earningsHour: c.earningsHour ?? null,
+    secOffering: c.edgar?.recentOffering ?? false,
+    sec8K: c.edgar?.recent8K ?? false
   }
 }
 
@@ -256,6 +263,7 @@ function daysToYmd(dateStr: string): number | null {
  */
 async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows: Candidate[]): Promise<void> {
   const queue = rows.slice(0, EXTRAS_CAP)
+  const edgarSet = new Set(queue.slice(0, EDGAR_CAP).map((c) => c.ticker))
   const today = etTodayYmd()
   const worker = async (): Promise<void> => {
     for (;;) {
@@ -277,6 +285,17 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
         }
       } catch {
         /* no earnings date */
+      }
+      // SEC EDGAR (top few only) — catches a dilution/offering from the source.
+      if (edgarSet.has(c.ticker)) {
+        try {
+          c.edgar = await getEdgarSummary(c.ticker)
+          // A recent registration/offering filing is a strong AVOID — it beats
+          // whatever the news-based catalyst said.
+          if (c.edgar?.recentOffering) c.catalyst = { type: 'Offering', avoid: true, label: 'Recent SEC offering filing' }
+        } catch {
+          /* no filings */
+        }
       }
     }
   }
@@ -384,7 +403,8 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (c.extras?.analystLabel ? ` | analysts ${c.extras.analystLabel} (${c.extras.analystBull}%)` : '') +
       (c.extras?.insiderBuying ? ' | insider buying' : '') +
       (c.extras?.shortPctFloat != null ? ` | short ${c.extras.shortPctFloat}% float` : '') +
-      (c.daysToEarnings != null && c.daysToEarnings >= 0 && c.daysToEarnings <= 21 ? ` | earnings in ${c.daysToEarnings}d` : '')
+      (c.daysToEarnings != null && c.daysToEarnings >= 0 && c.daysToEarnings <= 21 ? ` | earnings in ${c.daysToEarnings}d` : '') +
+      (c.edgar?.recentOffering ? ' | ⚠RECENT SEC OFFERING FILING (dilution risk)' : '')
     return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
       tech +
@@ -801,7 +821,8 @@ export default function register(ctx: ModuleIpcContext): void {
           analystLabel: c.extras?.analystLabel ?? null,
           insiderBuying: c.extras?.insiderBuying ?? false,
           shortPctFloat: c.extras?.shortPctFloat ?? null,
-          daysToEarnings: c.daysToEarnings ?? null
+          daysToEarnings: c.daysToEarnings ?? null,
+          secOffering: c.edgar?.recentOffering ?? false
         }))
       }
     } catch (err) {

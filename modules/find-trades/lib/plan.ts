@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ScoreResult, Signals, TradePlan } from '../../stock-planner/ipc/market/signals'
 import type { Catalyst } from '../../stock-planner/ipc/market/catalyst'
 import type { FinnhubExtras } from '../../stock-planner/ipc/market/finnhub'
+import type { EdgarSummary } from '../../stock-planner/ipc/market/edgar'
 
 /**
  * FIND TRADES — the AI turns a plain-English request ("low-priced stocks up big
@@ -100,6 +101,8 @@ export interface Candidate {
   catalyst?: Catalyst | null
   /** Tier 3 smart-money extras (analyst / insider / short) */
   extras?: FinnhubExtras
+  /** SEC EDGAR recent-filing summary (offering/8-K/Form 4) */
+  edgar?: EdgarSummary | null
   /** next earnings date + days away (negative/undefined = unknown) */
   earningsDate?: string | null
   daysToEarnings?: number | null

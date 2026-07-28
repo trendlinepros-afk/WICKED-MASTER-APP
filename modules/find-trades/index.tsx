@@ -92,6 +92,11 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
               </span>
             )}
             {p.setup && p.setup !== 'Mover' && <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] text-muted">{p.setup}</span>}
+            {p.secOffering && (
+              <span className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger" title="Recent SEC registration/offering filing (S-1/S-3/424B) — dilution risk, straight from EDGAR">
+                ⚠ SEC offering
+              </span>
+            )}
             {p.name && <span className="min-w-0 truncate text-xs text-muted">{p.name}</span>}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
