@@ -220,7 +220,17 @@ bull/bear sentiment read and a **heat rating** (`ipc/x.ts`).
   cost to a scan.
 - **Validated against the market.** When a Massive key is present, tickers are
   filtered to real US equities (drops junk cashtags like `$ROPE`) and decorated
-  with live price/change/volume.
+  with **live price + today's change**, plus the **14-session high / low** range
+  (from cached daily bars, so re-scans don't re-hit the quota).
+- **Click a ticker → TradingView chart.** The `$TICKER` opens a themed
+  TradingView chart popup. It renders inside an Electron `<webview>` guest (its
+  own session, not the shell's strict page CSP), pointed at TradingView's public
+  `widgetembed`. "Open full" hands off to tradingview.com in the system browser.
+- **"Mentions" is a sample count, not total X volume.** The number is how many of
+  the *sampled* tweets (your Scan size — 100 by default) carried that cashtag, so
+  absolute counts are naturally small and bounded by the sample. Raise the Scan
+  size for a broader read, or use **Exact mention history** (below) for the true
+  per-day count of one ticker via X's cheaper counts endpoint.
 - **Window reality.** Recent-search covers the **last 7 days**; **windows over 7
   days need X API Pro** (full-archive access) — the tool says so and still serves
   24h/7d on Basic.

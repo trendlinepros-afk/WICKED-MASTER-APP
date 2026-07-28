@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   BarChart2,
   Bell,
+  CandlestickChart,
   ExternalLink,
   Flame,
   Loader2,
@@ -275,7 +276,25 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
       <span className="text-center text-[10px] font-semibold text-muted">{rank}</span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-bold">${r.ticker}</span>
+          <button
+            onClick={() => s.openChart(r.ticker)}
+            title={`Open the ${r.ticker} TradingView chart`}
+            className="group/tk flex items-center gap-1 font-bold text-ink hover:text-accent"
+          >
+            ${r.ticker}
+            <CandlestickChart size={12} className="text-muted opacity-0 transition-opacity group-hover/tk:opacity-100" />
+          </button>
+          {r.price != null && (
+            <span className="tabular-nums font-semibold text-ink" title="Last price">
+              {money(r.price)}
+            </span>
+          )}
+          {r.changePct != null && (
+            <span className={`flex items-center gap-0.5 tabular-nums text-[11px] ${pctCls(r.changePct)}`} title="Change today">
+              {r.changePct >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+              {pct(r.changePct)}
+            </span>
+          )}
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${scoreCls(r.label)}`} title={`Heat ${r.score}/100 — trending intensity (buzz + momentum + sentiment)`}>
             {r.label} · {r.score}
           </span>
@@ -300,11 +319,12 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
           <ToneBar r={r} />
-          {r.price != null && <span className="tabular-nums text-ink">{money(r.price)}</span>}
-          {r.changePct != null && (
-            <span className={`flex items-center gap-0.5 tabular-nums ${pctCls(r.changePct)}`}>
-              {r.changePct >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
-              {pct(r.changePct)}
+          {(r.high14 != null || r.low14 != null) && (
+            <span className="tabular-nums" title="Highest high / lowest low over the last 14 trading sessions">
+              14d{' '}
+              <span className="text-ok">H {r.high14 != null ? money(r.high14) : '—'}</span>
+              {' · '}
+              <span className="text-danger">L {r.low14 != null ? money(r.low14) : '—'}</span>
             </span>
           )}
           {r.volume != null && <span className="tabular-nums">Vol {vol(r.volume)}</span>}
@@ -692,6 +712,63 @@ function WatchRow({ item }: { item: WatchItem }): React.JSX.Element {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * A ticker's TradingView chart in a popup. Rendered inside an Electron
+ * <webview> guest (its own session/CSP), so it loads TradingView's embed
+ * directly without touching the shell's strict page CSP. Theme follows the app.
+ */
+function TradingViewModal(): React.JSX.Element | null {
+  const ticker = useFindTrades((s) => s.tvTicker)
+  const close = useFindTrades((s) => s.closeChart)
+  useEffect(() => {
+    if (!ticker) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [ticker, close])
+  if (!ticker) return null
+  const dark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  const params = new URLSearchParams({
+    frameElementId: 'wk_tv',
+    symbol: ticker,
+    interval: 'D',
+    theme: dark ? 'dark' : 'light',
+    style: '1',
+    timezone: 'Etc/UTC',
+    withdateranges: '1',
+    hideideas: '1',
+    saveimage: '0',
+    locale: 'en'
+  })
+  const src = `https://s.tradingview.com/widgetembed/?${params.toString()}`
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={close}>
+      <div className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <CandlestickChart size={15} className="text-accent" />
+          <span className="text-sm font-semibold">${ticker} · TradingView</span>
+          <button
+            onClick={() => void window.wicked.invoke('shell:open-external', `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`)}
+            className="ml-2 flex items-center gap-1 text-[11px] text-muted hover:text-accent"
+            title="Open on tradingview.com"
+          >
+            <ExternalLink size={12} /> Open full
+          </button>
+          <button onClick={close} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink" title="Close (Esc)">
+            <XIcon size={15} />
+          </button>
+        </div>
+        <div className="relative min-h-0 flex-1 bg-bg">
+          {/* eslint-disable-next-line react/no-unknown-property */}
+          <webview key={src} src={src} partition="persist:find-trades-tv" className="absolute inset-0 h-full w-full" />
+        </div>
+      </div>
     </div>
   )
 }
@@ -1138,6 +1215,7 @@ export default function FindTrades(): React.JSX.Element {
 
       {s.watchOpen && <WatchlistModal />}
       {s.perfOpen && <PerformanceModal />}
+      <TradingViewModal />
 
       {(noMarket || noAi) && (
         <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-5 py-2 text-sm">

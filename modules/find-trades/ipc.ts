@@ -148,6 +148,9 @@ export interface TrendRow {
   price: number | null
   changePct: number | null
   volume: number | null
+  /** 14-session high / low (from daily bars) for a quick range read */
+  high14: number | null
+  low14: number | null
   /** heat rating (buzz + momentum + sentiment) */
   score: number
   label: string
@@ -834,8 +837,28 @@ export default function register(ctx: ModuleIpcContext): void {
       const top = validated.slice(0, 20)
       const maxMentions = top.length > 0 ? top[0].mentions : 0
 
+      // 14-session high/low for the shown tickers (reuses the cached daily bars,
+      // so re-scans don't re-hit the quota). Gentle concurrency on first fill.
+      const hlByTicker = new Map<string, { high14: number | null; low14: number | null }>()
+      if (massiveKey && top.length > 0) {
+        const queue = top.map((t) => t.ticker)
+        const worker = async (): Promise<void> => {
+          for (let tk = queue.shift(); tk; tk = queue.shift()) {
+            try {
+              const last = (await dailyBars(massiveKey, tk)).slice(-14)
+              if (last.length > 0)
+                hlByTicker.set(tk, { high14: Math.max(...last.map((b) => b.h)), low14: Math.min(...last.map((b) => b.l)) })
+            } catch {
+              /* leave null for this ticker */
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker))
+      }
+
       const rows: TrendRow[] = top.map((t) => {
         const q = quoteByTicker.get(t.ticker)
+        const hl = hlByTicker.get(t.ticker)
         const rating = rateTicker({ mentions: t.mentions, maxMentions, changePct: q?.changePct ?? null, sentiment: t.sentiment })
         const growth = gradeGrowth(t.growthScore, t.mentions)
         return {
@@ -858,6 +881,8 @@ export default function register(ctx: ModuleIpcContext): void {
           price: q?.price ?? null,
           changePct: q?.changePct ?? null,
           volume: q?.volume ?? null,
+          high14: hl?.high14 ?? null,
+          low14: hl?.low14 ?? null,
           score: rating.score,
           label: rating.label
         }

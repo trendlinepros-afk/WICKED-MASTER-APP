@@ -219,6 +219,9 @@ interface State {
   xCountsArchiveNeeded: boolean
   xLookup: string
 
+  // TradingView chart popup — the ticker whose chart is open (null = closed)
+  tvTicker: string | null
+
   // watchlist + alerts
   watchlist: WatchItem[]
   monitorEnabled: boolean
@@ -279,6 +282,8 @@ interface State {
   setXLookup: (v: string) => void
   loadMentions: (ticker: string, force?: boolean) => Promise<void>
   closeMentions: () => void
+  openChart: (ticker: string) => void
+  closeChart: () => void
 }
 
 export const useFindTrades = create<State>((set, get) => ({
@@ -333,6 +338,8 @@ export const useFindTrades = create<State>((set, get) => ({
   xCountsError: '',
   xCountsArchiveNeeded: false,
   xLookup: '',
+
+  tvTicker: null,
 
   setInput: (v) => set({ input: v }),
   dismissError: () => set({ error: '' }),
@@ -601,6 +608,12 @@ export const useFindTrades = create<State>((set, get) => ({
   },
 
   closeMentions: () => set({ xCountsTicker: null, xCounts: null, xCountsError: '', xCountsArchiveNeeded: false }),
+
+  openChart: (ticker) => {
+    const t = ticker.trim().toUpperCase().replace(/^\$/, '')
+    if (t) set({ tvTicker: t })
+  },
+  closeChart: () => set({ tvTicker: null }),
 
   send: async (textArg) => {
     const text = (textArg ?? get().input).trim()
