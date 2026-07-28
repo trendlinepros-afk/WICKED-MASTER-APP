@@ -155,6 +155,29 @@ export async function pushSnapshot(
     return { ok: false, error: refRes.error }
   }
 
+  // 1b) The Git Data object endpoints refuse to run on a repo with ZERO commits
+  // ("Git Repository is empty"). Seed an initial commit via the Contents API —
+  // the one endpoint that works on an empty repo — then build on top of it.
+  if (!parentSha) {
+    const seed = await gh(token, 'PUT', `/repos/${repo}/contents/README.md`, {
+      message: 'Initialize WICKED sync',
+      content: Buffer.from(
+        '# WICKED cloud sync\n\nEncrypted WICKED app snapshots. Managed by the app — do not edit by hand.\n',
+        'utf8'
+      ).toString('base64')
+    })
+    if (!seed.ok) return { ok: false, error: seed.error }
+    const seededSha = (seed.json as { commit?: { sha?: string } }).commit?.sha ?? null
+    if (seededSha) {
+      parentSha = seededSha
+      const c = await gh(token, 'GET', `/repos/${repo}/git/commits/${seededSha}`)
+      if (c.ok) baseTree = (c.json as { tree?: { sha?: string } }).tree?.sha
+    } else {
+      const ref2 = await gh(token, 'GET', refPath)
+      if (ref2.ok) parentSha = (ref2.json as { object?: { sha?: string } }).object?.sha ?? null
+    }
+  }
+
   // 2) blobs
   const b1 = await createBlob(token, repo, blobText)
   if (!b1.ok || !b1.sha) return { ok: false, error: b1.error ?? 'Could not upload the snapshot blob.' }
@@ -183,13 +206,16 @@ export async function pushSnapshot(
   const commitSha = (commitRes.json as { sha?: string }).sha
   if (!commitSha) return { ok: false, error: 'GitHub did not return a commit sha.' }
 
-  // 5) move the branch to the new commit (create it if new)
-  if (parentSha) {
-    const upd = await gh(token, 'PATCH', `/repos/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, { sha: commitSha, force: false })
-    if (!upd.ok) return { ok: false, error: upd.error }
-  } else {
-    const cr = await gh(token, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: commitSha })
-    if (!cr.ok) return { ok: false, error: cr.error }
+  // 5) point the branch at the new commit — update if it exists, else create it
+  // (covers a seeded default branch whose name differs from `branch`).
+  const upd = await gh(token, 'PATCH', `/repos/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, { sha: commitSha, force: false })
+  if (!upd.ok) {
+    if (upd.status === 404 || upd.status === 422) {
+      const cr = await gh(token, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: commitSha })
+      if (!cr.ok) return { ok: false, error: cr.error }
+    } else {
+      return { ok: false, error: upd.error }
+    }
   }
   return { ok: true }
 }
