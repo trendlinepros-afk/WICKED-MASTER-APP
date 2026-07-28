@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import type { ScoreResult, Signals } from '../../stock-planner/ipc/market/signals'
+import type { ScoreResult, Signals, TradePlan } from '../../stock-planner/ipc/market/signals'
+import type { Catalyst } from '../../stock-planner/ipc/market/catalyst'
 
 /**
  * FIND TRADES — the AI turns a plain-English request ("low-priced stocks up big
@@ -81,6 +82,10 @@ export interface Candidate {
   /** Tier 1 technical signals + unified Trade Score (attached at enrichment) */
   signals?: Signals
   score?: ScoreResult
+  /** setup archetype, ATR trade plan, and catalyst classification */
+  setup?: string
+  plan?: TradePlan | null
+  catalyst?: Catalyst | null
 }
 
 /* ------------------------------ plan parsing ----------------------------- */

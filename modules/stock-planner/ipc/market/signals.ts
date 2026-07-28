@@ -193,3 +193,44 @@ export function tradeScore(i: ScoreInput): ScoreResult {
     .map((p) => p.reason)
   return { score, label, reasons }
 }
+
+/* ----------------------------- setup + plan ------------------------------ */
+
+/** Classify the candidate into a recognizable trade setup archetype. */
+export function classifySetup(s: Signals | undefined, changePct: number | null): string {
+  if (!s) return 'Mover'
+  const chg = changePct ?? 0
+  const gap = s.gapPct ?? 0
+  const rvol = s.rvol ?? 0
+  const nearHigh = s.pctFrom52High != null && s.pctFrom52High > -3
+  if (chg <= -3 && s.rsi14 != null && s.rsi14 < 35) return 'Oversold Bounce'
+  if (gap >= 3 && rvol >= 1.5 && chg > 0) return 'Gap & Go'
+  if (nearHigh && s.trendUp && rvol >= 1.2) return 'Momentum Breakout'
+  if (s.trendUp && s.aboveSma20 && chg > 0) return 'Trend Continuation'
+  if (rvol >= 2) return 'High-Volume Mover'
+  return 'Mover'
+}
+
+export interface TradePlan {
+  entry: number
+  stop: number
+  target: number
+  rr: number
+}
+
+/**
+ * A rough long-side trade plan from ATR: stop 1.5×ATR under entry, target the
+ * greater of 2R or (if close overhead) the 52-week high. Educational scaffolding
+ * for a plan — NOT advice.
+ */
+export function tradePlan(price: number | null, s: Signals | undefined): TradePlan | null {
+  if (price == null || price <= 0 || !s || s.atr14 == null || s.atr14 <= 0) return null
+  const atr = s.atr14
+  const entry = round(price, 2)
+  const stop = round(Math.max(0.01, price - 1.5 * atr), 2)
+  const risk = entry - stop
+  if (risk <= 0) return null
+  let target = round(entry + 2 * risk, 2)
+  if (s.high52 != null && s.high52 > entry && s.high52 < entry + 3 * risk) target = round(s.high52, 2)
+  return { entry, stop, target, rr: round((target - entry) / risk, 2) }
+}

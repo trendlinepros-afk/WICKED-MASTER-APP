@@ -96,12 +96,19 @@ function showRecord(set: (p: Partial<State>) => void, rec: ScanRecord): void {
   })
 }
 
+export interface PresetInfo {
+  id: string
+  name: string
+  desc: string
+}
+
 interface State {
   status: Status | null
   chat: ChatMsg[]
   input: string
   busy: boolean
   error: string
+  presets: PresetInfo[]
 
   // "Trending on X" panel — scans are user-triggered, saved to history
   xWindow: string // the window the NEXT scan will use
@@ -133,6 +140,8 @@ interface State {
   loadStatus: () => Promise<void>
   send: (text?: string) => Promise<void>
   clear: () => void
+  loadPresets: () => Promise<void>
+  runPreset: (id: string) => Promise<void>
   setXWindow: (id: string) => void
   setScanSize: (n: number) => Promise<void>
   loadHistory: () => Promise<void>
@@ -149,6 +158,7 @@ export const useFindTrades = create<State>((set, get) => ({
   input: '',
   busy: false,
   error: '',
+  presets: [],
 
   xWindow: '24h',
   xScanSize: 100,
@@ -185,6 +195,45 @@ export const useFindTrades = create<State>((set, get) => ({
       // Reading saved history is FREE (no API call) — populate the dropdown and
       // show the most recent past scan. Scanning itself is user-triggered.
       if (st.hasX) void get().loadHistory()
+    }
+    void get().loadPresets()
+  },
+
+  loadPresets: async () => {
+    const res = await invoke<{ ok: boolean; presets?: PresetInfo[] }>('presets')
+    if (res.ok) set({ presets: res.presets ?? [] })
+  },
+
+  // A one-click deterministic scan (no AI cost) rendered like a chat answer.
+  runPreset: async (id) => {
+    if (get().busy) return
+    const preset = get().presets.find((p) => p.id === id)
+    const label = preset?.name ?? 'Scan'
+    const history = [...get().chat, { role: 'user' as const, text: `Scan: ${label}`, at: Date.now() }]
+    set({ chat: history, busy: true, error: '' })
+    try {
+      const res = (await invoke('preset', id)) as Res & { name?: string; note?: string; picks?: Pick[] }
+      if (!res.ok) {
+        set({ error: res.error ?? 'Scan failed.' })
+        return
+      }
+      const picks = res.picks ?? []
+      set({
+        chat: [
+          ...history,
+          {
+            role: 'assistant',
+            text: picks.length > 0 ? `${res.name ?? label} — ${res.note ?? ''} · ranked by Trade Score.` : `No matches for ${label} right now.`,
+            at: Date.now(),
+            picks,
+            provider: 'Screener (no AI)'
+          }
+        ]
+      })
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      set({ busy: false })
     }
   },
 

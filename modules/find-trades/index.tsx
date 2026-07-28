@@ -76,6 +76,16 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
                 Score {p.score}
               </span>
             )}
+            {p.catalyst && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${p.catalyst.avoid ? 'bg-danger/15 text-danger' : 'bg-accent/15 text-accent'}`}
+                title={p.catalyst.avoid ? 'Caution — dilution/offering-type headline; retail often gets trapped buying these' : `Catalyst type: ${p.catalyst.label}`}
+              >
+                {p.catalyst.avoid ? '⚠ ' : ''}
+                {p.catalyst.label}
+              </span>
+            )}
+            {p.setup && p.setup !== 'Mover' && <span className="rounded bg-raised px-1.5 py-0.5 text-[10px] text-muted">{p.setup}</span>}
             {p.name && <span className="min-w-0 truncate text-xs text-muted">{p.name}</span>}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
@@ -103,6 +113,15 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
         </div>
       </div>
       {p.thesis && <p className="mt-2 text-sm text-ink/90">{p.thesis}</p>}
+      {p.plan && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg bg-raised/40 px-2 py-1.5 text-[11px] text-muted" title="Rough ATR-based plan — educational scaffolding, not advice">
+          <span className="font-semibold text-ink/80">Plan</span>
+          <span>Entry <span className="tabular-nums text-ink">{money(p.plan.entry)}</span></span>
+          <span>Stop <span className="tabular-nums text-danger">{money(p.plan.stop)}</span></span>
+          <span>Target <span className="tabular-nums text-ok">{money(p.plan.target)}</span></span>
+          <span>R:R <span className="tabular-nums text-ink">{p.plan.rr}</span></span>
+        </div>
+      )}
       {p.flags.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {p.flags.map((f, i) => (
@@ -532,8 +551,29 @@ export default function FindTrades(): React.JSX.Element {
                 AI turns it into a live screen and comes back with matching tickers and why they fit.
               </p>
             </div>
+            {s.presets.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">One-click scans (no AI cost)</div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {s.presets.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => void s.runPreset(p.id)}
+                      disabled={!!noMarket || s.busy}
+                      className="flex items-start gap-2 rounded-lg border border-edge bg-surface px-3 py-2 text-left hover:border-accent/60 disabled:opacity-40"
+                    >
+                      <TrendingUp size={14} className="mt-0.5 shrink-0 text-accent" />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium">{p.name}</span>
+                        <span className="block text-xs text-muted">{p.desc}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-4 space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted">Try one</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted">Or ask the AI</div>
               {EXAMPLES.map((ex) => (
                 <button
                   key={ex}

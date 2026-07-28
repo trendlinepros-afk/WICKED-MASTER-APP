@@ -41,6 +41,26 @@ handed to the AI so it ranks with real context. The plan can filter on them:
 "near highs", "in an uptrend", "strongest setups". Daily bars are cached ~30 min
 per ticker to stay light on the Massive quota.
 
+Each pick also carries:
+
+- **Setup tag** (`signals.ts classifySetup`) — Gap & Go / Momentum Breakout /
+  Trend Continuation / Oversold Bounce / High-Volume Mover.
+- **Trade plan** (`tradePlan`) — an ATR-based entry / stop (1.5×ATR) / target
+  (2R, or the 52-week high if it's just overhead) / risk-reward. Educational
+  scaffolding, **not advice**.
+- **Catalyst classification** (`ipc/market/catalyst.ts`) from the news headlines —
+  FDA / M&A / Earnings / Upgrade / Guidance… and critically a **⚠ Dilution /
+  Offering** (or downgrade) AVOID flag, checked first so a dilution headline is
+  never mislabeled. Fed to the AI so it warns on or skips those.
+
+## One-click scans (presets)
+
+Deterministic scanners on the empty screen — **no AI cost** — that map straight to
+`ScreenPlan` fields and render like a chat answer, ranked by Trade Score:
+**Small-cap runners**, **Gap-ups with news**, **Near 52-week highs**, **Unusual
+volume**, **Large-cap momentum**, **Oversold bounce** (`PRESETS` in `ipc.ts`;
+`find-trades:presets` / `:preset`).
+
 ## Trending on X (social)
 
 A section at the top of the tool that shows the stock tickers **mentioned most on

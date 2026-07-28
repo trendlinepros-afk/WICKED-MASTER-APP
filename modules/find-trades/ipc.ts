@@ -13,7 +13,8 @@ import {
 } from '../stock-planner/ipc/market/massive'
 import { preMarketGainers, afterHoursGainers } from '../stock-planner/ipc/market/screeners'
 import { getCompanyNews } from '../stock-planner/ipc/market/finnhub'
-import { computeSignals, tradeScore } from '../stock-planner/ipc/market/signals'
+import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
+import { classifyCatalyst } from '../stock-planner/ipc/market/catalyst'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
@@ -67,6 +68,10 @@ export interface Pick {
   atrPct: number | null
   pctFrom52High: number | null
   rsi: number | null
+  /** setup archetype, catalyst classification, ATR trade plan */
+  setup: string
+  catalyst: { type: string; avoid: boolean; label: string } | null
+  plan: { entry: number; stop: number; target: number; rr: number } | null
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -110,6 +115,33 @@ export interface ScanRecord {
 
 const fmtCap = (v: number | null): string =>
   v == null ? 'n/a' : v >= 1e12 ? `$${(v / 1e12).toFixed(2)}T` : v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(0)}M` : `$${v.toFixed(0)}`
+
+/** Project an enriched candidate to the UI Pick shape (thesis/flags optional). */
+function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
+  return {
+    ticker: c.ticker,
+    name: c.name ?? '',
+    price: c.price,
+    changePct: c.changePct,
+    volume: c.volume,
+    sector: c.sector ?? '—',
+    marketCap: c.marketCap ?? null,
+    thesis,
+    flags,
+    news: c.news ?? [],
+    score: c.score?.score ?? null,
+    scoreLabel: c.score?.label ?? '',
+    reasons: c.score?.reasons ?? [],
+    rvol: c.signals?.rvol ?? null,
+    gapPct: c.signals?.gapPct ?? null,
+    atrPct: c.signals?.atrPct ?? null,
+    pctFrom52High: c.signals?.pctFrom52High ?? null,
+    rsi: c.signals?.rsi14 ?? null,
+    setup: c.setup ?? 'Mover',
+    catalyst: c.catalyst ?? null,
+    plan: c.plan ?? null
+  }
+}
 
 /* --------------------------- candidate universe -------------------------- */
 
@@ -223,6 +255,9 @@ async function enrich(
         trendUp: c.signals?.trendUp ?? false,
         hasNews: (c.news?.length ?? 0) > 0
       })
+      c.setup = classifySetup(c.signals, c.changePct)
+      c.plan = tradePlan(c.price, c.signals)
+      c.catalyst = classifyCatalyst((c.news ?? []).map((n) => n.title))
     }
   }
   await Promise.all(Array.from({ length: Math.min(5, queue.length) }, worker))
@@ -258,7 +293,9 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (s?.atrPct != null ? ` | ATR ${s.atrPct}%` : '') +
       (s?.pctFrom52High != null ? ` | ${s.pctFrom52High}% from 52w-high` : '') +
       (s?.rsi14 != null ? ` | RSI ${s.rsi14}` : '') +
-      (s ? ` | ${s.trendUp && s.aboveSma20 ? 'uptrend' : s.aboveSma50 ? 'above 50d' : 'below MAs'}` : '')
+      (s ? ` | ${s.trendUp && s.aboveSma20 ? 'uptrend' : s.aboveSma50 ? 'above 50d' : 'below MAs'}` : '') +
+      (c.setup ? ` | setup ${c.setup}` : '') +
+      (c.catalyst ? ` | catalyst ${c.catalyst.label}${c.catalyst.avoid ? ' (⚠CAUTION)' : ''}` : '')
     return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
       tech +
@@ -269,11 +306,31 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
     `The trader asked for: "${plan.rationale}". Here are the pre-filtered candidates with live data + technical signals ` +
     `(RVOL = relative volume, higher = a more real move; score = a 0-100 momentum Trade Score):\n\n${lines.join('\n')}\n\n` +
     'Pick the best matches — prefer higher Trade Score, higher relative volume, a real catalyst, and a clean trend; ' +
-    'fewer higher-quality picks beat a long list. Return ONLY JSON: ' +
+    'fewer higher-quality picks beat a long list. If a candidate\'s catalyst is a dilution/offering (marked CAUTION), ' +
+    'either skip it or clearly warn in its flags. Return ONLY JSON: ' +
     '{"summary":"1-2 sentences on what you found","picks":[{"ticker":"","thesis":"one line why it fits (mention RVOL/catalyst/trend)","flags":["short risk/quality notes"]}]}. ' +
     'Base every claim on the data shown — do not invent prices or news. Educational only, not financial advice.'
   )
 }
+
+/* ------------------------------- presets --------------------------------- */
+
+/** One-click deterministic scanners (no AI cost) — map to ScreenPlan fields. */
+export interface Preset {
+  id: string
+  name: string
+  desc: string
+  plan: Record<string, unknown>
+}
+
+export const PRESETS: Preset[] = [
+  { id: 'runners', name: 'Small-cap runners', desc: 'Up 5%+ on 2×+ volume, under $2B', plan: { source: 'movers', direction: 'up', minChangePct: 5, maxMarketCap: 2_000_000_000, minPrice: 1, minRvol: 2, limit: 15, rationale: 'Small-cap runners' } },
+  { id: 'gap-news', name: 'Gap-ups with news', desc: 'Gapped up 3%+ with a fresh catalyst', plan: { source: 'movers', direction: 'up', minGapPct: 3, minRvol: 1.5, needsNews: true, limit: 15, rationale: 'Gap-ups with news' } },
+  { id: 'near-highs', name: 'Near 52-week highs', desc: 'Breakout candidates in an uptrend', plan: { source: 'movers', direction: 'up', nearHigh: true, requireUptrend: true, minRvol: 1.2, limit: 15, rationale: 'Near 52-week highs' } },
+  { id: 'high-rvol', name: 'Unusual volume', desc: 'Trading at 3×+ its normal volume', plan: { source: 'movers', direction: 'any', minRvol: 3, limit: 15, rationale: 'Unusual volume' } },
+  { id: 'large-momentum', name: 'Large-cap momentum', desc: 'Big caps trending up on volume', plan: { source: 'movers', direction: 'up', minMarketCap: 10_000_000_000, minChangePct: 2, requireUptrend: true, minRvol: 1.2, limit: 15, rationale: 'Large-cap momentum' } },
+  { id: 'oversold', name: 'Oversold bounce', desc: 'Down hard, may be due for a bounce', plan: { source: 'movers', direction: 'down', maxChangePct: -5, minRvol: 1.5, limit: 15, rationale: 'Oversold pullbacks' } }
+]
 
 interface RankOut {
   summary: string
@@ -570,26 +627,7 @@ export default function register(ctx: ModuleIpcContext): void {
         const c = byTicker.get(tk)
         if (!c) continue
         const ai = ranked.picks.find((p) => p.ticker === tk)
-        picks.push({
-          ticker: c.ticker,
-          name: c.name ?? '',
-          price: c.price,
-          changePct: c.changePct,
-          volume: c.volume,
-          sector: c.sector ?? '—',
-          marketCap: c.marketCap ?? null,
-          thesis: ai?.thesis ?? '',
-          flags: ai?.flags ?? [],
-          news: c.news ?? [],
-          score: c.score?.score ?? null,
-          scoreLabel: c.score?.label ?? '',
-          reasons: c.score?.reasons ?? [],
-          rvol: c.signals?.rvol ?? null,
-          gapPct: c.signals?.gapPct ?? null,
-          atrPct: c.signals?.atrPct ?? null,
-          pctFrom52High: c.signals?.pctFrom52High ?? null,
-          rsi: c.signals?.rsi14 ?? null
-        })
+        picks.push(toPick(c, ai?.thesis ?? '', ai?.flags ?? []))
       }
 
       return {
@@ -628,9 +666,29 @@ export default function register(ctx: ModuleIpcContext): void {
           atrPct: c.signals?.atrPct ?? null,
           pctFrom52High: c.signals?.pctFrom52High ?? null,
           rsi14: c.signals?.rsi14 ?? null,
-          trendUp: c.signals?.trendUp ?? false
+          trendUp: c.signals?.trendUp ?? false,
+          setup: c.setup ?? 'Mover',
+          catalyst: c.catalyst ?? null,
+          plan: c.plan ?? null
         }))
       }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // One-click deterministic scanner presets (no AI cost).
+  ctx.ipcMain.handle(`${ID}:presets`, () => ({ ok: true, presets: PRESETS.map((p) => ({ id: p.id, name: p.name, desc: p.desc })) }))
+
+  ctx.ipcMain.handle(`${ID}:preset`, async (_e, rawId: unknown) => {
+    const id = typeof rawId === 'string' ? rawId : ''
+    const preset = PRESETS.find((p) => p.id === id)
+    if (!preset) return { ok: false, error: 'Unknown preset.' }
+    if (!ctx.getApiKey('massive')) return { ok: false, error: 'Add your Massive / Polygon key in Settings → API Keys for market data.' }
+    try {
+      const plan = parseScreenPlan(JSON.stringify(preset.plan))
+      const { candidates, note } = await runScreen(plan)
+      return { ok: true, name: preset.name, note, picks: candidates.map((c) => toPick(c)) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
