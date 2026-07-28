@@ -117,6 +117,24 @@ volume**, **Large-cap momentum**, **Oversold bounce**, **Squeeze candidates**
 (needs Finnhub short data), **Smart-money picks** (analyst + insider) — `PRESETS`
 in `ipc.ts`; `find-trades:presets` / `:preset`.
 
+## Performance & validation (Wall St #1 — the proof loop)
+
+The **Performance** button opens the validation panel:
+
+- **Trade Score backtest** — replays the score across ~6 months of whole-market
+  daily history (`lib/backtest.ts`, pure + unit-tested): per-ticker series from
+  Polygon grouped-daily, the SAME `tradeScore` recomputed point-in-time (no
+  lookahead; news/social inputs excluded as unknowable historically), forward
+  1/5/20-day returns pooled per grade A–F vs the whole-universe baseline —
+  **edge = grade avg − universe avg**. ~145 market-data calls per run; last
+  result persisted. Survivorship handled naturally (grouped-daily includes
+  everything that traded that day).
+- **Tracked picks** — every pick surfaced (AI searches + presets) is auto-logged
+  (capped 400) and graded later against real forward closes: overall + by grade
+  / setup / source, win rate and average returns. The tool now measures itself.
+
+MCP: read-only `find-trades__backtest` (last result) + `find-trades__outcomes`.
+
 ## Trending on X (social)
 
 A section at the top of the tool that shows the stock tickers **mentioned most on
@@ -125,8 +143,9 @@ bull/bear sentiment read and a **heat rating** (`ipc/x.ts`).
 
 - **Nothing runs automatically.** X reads cost money (per‑post billing), so a scan
   only happens when you press **Scan Tweets**. Opening the tool is free.
-- **You control the cost.** A **Scan size** setting (100 / 200 / 300 tweets, at
-  ~$0.005/tweet ≈ $0.50 / $1.00 / $1.50 per scan) is persisted
+- **You control the cost.** A **Scan size** setting (100 / 200 / 300 or a typed **Custom** count,
+  10–500, at ~$0.005/tweet; page sizes adapt so you're charged exactly what you
+  asked) is persisted
   (`find-trades.xScanSize`) and read in main to bound `maxPages`.
 - **Past scans are saved.** Every fresh scan is written to a capped history
   (`find-trades.xScanHistory`, last 20) and offered in a **Past scans** dropdown —

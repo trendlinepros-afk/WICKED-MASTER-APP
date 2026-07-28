@@ -80,6 +80,30 @@ export async function getPrevClose(key: string, sym: string): Promise<{ c?: numb
   return { c, v: Number.isFinite(v) ? v : undefined }
 }
 
+/**
+ * Whole-market OHLCV for one date — UNCACHED lean fetch for the backtester,
+ * which walks ~140 days and must not fill the grouped cache with millions of
+ * rows. Returns [] on holidays.
+ */
+export interface GroupedOHLC {
+  T: string
+  o: number
+  h: number
+  l: number
+  c: number
+  v: number
+}
+
+export async function getGroupedOHLC(key: string, ymd: string): Promise<GroupedOHLC[]> {
+  const j = await massiveFetch(key, `/v2/aggs/grouped/locale/us/market/stocks/${ymd}?adjusted=true&include_otc=false`)
+  return arr(rec(j).results)
+    .map((r) => {
+      const b = rec(r)
+      return { T: String(b.T ?? ''), o: Number(b.o), h: Number(b.h), l: Number(b.l), c: Number(b.c), v: Number(b.v) }
+    })
+    .filter((r) => r.T && Number.isFinite(r.c) && r.c > 0 && Number.isFinite(r.v))
+}
+
 /** Whole-market daily closes for one date (period gainers). 5-min cache/date. */
 const groupedCache = new Map<string, { at: number; rows: { T: string; c: number; v: number }[] }>()
 

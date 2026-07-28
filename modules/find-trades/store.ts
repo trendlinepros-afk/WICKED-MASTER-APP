@@ -10,6 +10,65 @@ export interface FiredAlert {
   at: number
 }
 
+export interface BtBucketRow {
+  label: string
+  n: number
+  avgR1: number | null
+  avgR5: number | null
+  avgR20: number | null
+  winRate5: number | null
+  edge5: number | null
+}
+
+export interface BtResultData {
+  buckets: BtBucketRow[]
+  all: BtBucketRow
+  points: number
+  tickers: number
+  from: string
+  to: string
+  generatedAt: number
+  daysFetched: number
+  failedFetches: number
+}
+
+export interface OutcomeStats {
+  n: number
+  graded: number
+  avg1: number | null
+  avg5: number | null
+  avg20: number | null
+  win5: number | null
+}
+
+export interface OutcomeGroup {
+  key: string
+  stats: OutcomeStats
+}
+
+export interface OutcomeEntry {
+  ticker: string
+  ymd: string
+  price: number
+  score: number | null
+  scoreLabel: string
+  setup: string
+  source: string
+  r1: number | null
+  r5: number | null
+  r20: number | null
+  status: string
+}
+
+export interface OutcomesData {
+  summary: OutcomeStats | null
+  byGrade?: OutcomeGroup[]
+  bySetup?: OutcomeGroup[]
+  bySource?: OutcomeGroup[]
+  entries: OutcomeEntry[]
+  note?: string
+}
+
 export const ID = 'find-trades'
 
 export interface ChatMsg {
@@ -154,6 +213,16 @@ interface State {
   alerts: FiredAlert[]
   watchOpen: boolean
 
+  // performance (validation loop)
+  perfOpen: boolean
+  btBusy: boolean
+  btProgress: { done: number; total: number } | null
+  btResult: BtResultData | null
+  btError: string
+  outBusy: boolean
+  outcomes: OutcomesData | null
+  outError: string
+
   setInput: (v: string) => void
   dismissError: () => void
   loadStatus: () => Promise<void>
@@ -171,6 +240,11 @@ interface State {
   dismissAlert: (i: number) => void
   clearAlerts: () => void
   _onAlerts: (fired: unknown) => void
+  setPerfOpen: (v: boolean) => void
+  runBacktest: () => Promise<void>
+  loadLastBacktest: () => Promise<void>
+  loadOutcomes: () => Promise<void>
+  _onBtProgress: (p: unknown) => void
   setXWindow: (id: string) => void
   setScanSize: (n: number) => Promise<void>
   setAiTone: (on: boolean) => Promise<void>
@@ -194,6 +268,15 @@ export const useFindTrades = create<State>((set, get) => ({
   monitorEnabled: true,
   alerts: [],
   watchOpen: false,
+
+  perfOpen: false,
+  btBusy: false,
+  btProgress: null,
+  btResult: null,
+  btError: '',
+  outBusy: false,
+  outcomes: null,
+  outError: '',
 
   xWindow: '24h',
   xScanSize: 100,
@@ -281,6 +364,52 @@ export const useFindTrades = create<State>((set, get) => ({
 
   clearAlerts: () => set({ alerts: [] }),
 
+  setPerfOpen: (v) => {
+    set({ perfOpen: v })
+    if (v) {
+      if (!get().btResult) void get().loadLastBacktest()
+      void get().loadOutcomes()
+    }
+  },
+
+  runBacktest: async () => {
+    if (get().btBusy) return
+    set({ btBusy: true, btError: '', btProgress: null })
+    try {
+      const res = (await invoke('backtest')) as Res & { result?: BtResultData }
+      if (!res.ok) set({ btError: res.error ?? 'Backtest failed.' })
+      else set({ btResult: res.result ?? null })
+    } catch (err) {
+      set({ btError: err instanceof Error ? err.message : String(err) })
+    } finally {
+      set({ btBusy: false, btProgress: null })
+    }
+  },
+
+  loadLastBacktest: async () => {
+    const res = (await invoke('backtest-last')) as Res & { result?: BtResultData | null }
+    if (res.ok && res.result) set({ btResult: res.result })
+  },
+
+  loadOutcomes: async () => {
+    if (get().outBusy) return
+    set({ outBusy: true, outError: '' })
+    try {
+      const res = (await invoke('outcomes')) as Res & OutcomesData
+      if (!res.ok) set({ outError: res.error ?? 'Could not grade outcomes.' })
+      else set({ outcomes: { summary: res.summary ?? null, byGrade: res.byGrade, bySetup: res.bySetup, bySource: res.bySource, entries: res.entries ?? [], note: res.note } })
+    } catch (err) {
+      set({ outError: err instanceof Error ? err.message : String(err) })
+    } finally {
+      set({ outBusy: false })
+    }
+  },
+
+  _onBtProgress: (p) => {
+    const r = (typeof p === 'object' && p !== null ? p : {}) as { done?: number; total?: number }
+    if (typeof r.done === 'number' && typeof r.total === 'number') set({ btProgress: { done: r.done, total: r.total } })
+  },
+
   _onAlerts: (raw) => {
     const list = Array.isArray(raw) ? (raw as FiredAlert[]) : []
     if (list.length > 0) set({ alerts: [...list, ...get().alerts].slice(0, 20) })
@@ -325,7 +454,8 @@ export const useFindTrades = create<State>((set, get) => ({
   },
 
   setScanSize: async (n) => {
-    const size = n === 200 ? 200 : n === 300 ? 300 : 100
+    // presets or any CUSTOM count, clamped to X's practical range (10..500)
+    const size = Number.isFinite(n) ? Math.min(500, Math.max(10, Math.round(n))) : 100
     set({ xScanSize: size })
     await invoke('x-set-scan-size', { size })
   },

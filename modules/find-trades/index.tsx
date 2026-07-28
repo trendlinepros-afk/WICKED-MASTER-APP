@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Activity,
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
@@ -378,6 +379,61 @@ function MentionsCard(): React.JSX.Element | null {
   )
 }
 
+const SIZE_PRESETS = [100, 200, 300]
+
+function SizePicker(): React.JSX.Element {
+  const s = useFindTrades()
+  const isPreset = SIZE_PRESETS.includes(s.xScanSize)
+  const [customOpen, setCustomOpen] = useState(!isPreset)
+  const [draft, setDraft] = useState(String(s.xScanSize))
+  const commit = (): void => {
+    const n = Number(draft)
+    if (Number.isFinite(n) && n > 0) void s.setScanSize(n)
+    else setDraft(String(s.xScanSize))
+  }
+  return (
+    <label className="flex items-center gap-1 text-[11px] text-muted">
+      Size
+      <select
+        value={isPreset && !customOpen ? String(s.xScanSize) : 'custom'}
+        onChange={(e) => {
+          if (e.target.value === 'custom') {
+            setCustomOpen(true)
+            setDraft(String(s.xScanSize))
+          } else {
+            setCustomOpen(false)
+            void s.setScanSize(Number(e.target.value))
+          }
+        }}
+        disabled={s.xBusy}
+        className="rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none disabled:opacity-50"
+      >
+        <option value="100">100 tweets (≈$0.50)</option>
+        <option value="200">200 tweets (≈$1.00)</option>
+        <option value="300">300 tweets (≈$1.50)</option>
+        <option value="custom">{customOpen || !isPreset ? `Custom: ${s.xScanSize}` : 'Custom…'}</option>
+      </select>
+      {(customOpen || !isPreset) && (
+        <span className="flex items-center gap-1">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            inputMode="numeric"
+            disabled={s.xBusy}
+            title="Custom tweets per scan (10–500) — saved until you change it"
+            className="w-14 rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none focus:border-accent disabled:opacity-50"
+          />
+          <span className="text-[10px]">tweets</span>
+        </span>
+      )}
+    </label>
+  )
+}
+
 function TrendingPanel(): React.JSX.Element | null {
   const s = useFindTrades()
   if (!s.status) return null
@@ -420,19 +476,7 @@ function TrendingPanel(): React.JSX.Element | null {
             {s.xBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
             Scan Tweets
           </button>
-          <label className="flex items-center gap-1 text-[11px] text-muted">
-            Size
-            <select
-              value={s.xScanSize}
-              onChange={(e) => void s.setScanSize(Number(e.target.value))}
-              disabled={s.xBusy}
-              className="rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none disabled:opacity-50"
-            >
-              <option value={100}>100 tweets (≈$0.50)</option>
-              <option value={200}>200 tweets (≈$1.00)</option>
-              <option value={300}>300 tweets (≈$1.50)</option>
-            </select>
-          </label>
+          <SizePicker />
           {s.xHistory.length > 0 && (
             <label className="flex items-center gap-1 text-[11px] text-muted">
               Past scans
@@ -715,6 +759,164 @@ function WatchlistModal(): React.JSX.Element {
   )
 }
 
+const fmtRet = (v: number | null): string => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
+const retCls = (v: number | null): string => (v == null ? 'text-muted' : v > 0 ? 'text-ok' : v < 0 ? 'text-danger' : 'text-muted')
+
+function StatCells({ st }: { st: { n: number; graded?: number; avg1: number | null; avg5: number | null; avg20: number | null; win5: number | null } }): React.JSX.Element {
+  return (
+    <>
+      <td className="px-2 py-1 text-right tabular-nums">{st.n}</td>
+      <td className={`px-2 py-1 text-right tabular-nums ${retCls(st.avg1)}`}>{fmtRet(st.avg1)}</td>
+      <td className={`px-2 py-1 text-right tabular-nums ${retCls(st.avg5)}`}>{fmtRet(st.avg5)}</td>
+      <td className={`px-2 py-1 text-right tabular-nums ${retCls(st.avg20)}`}>{fmtRet(st.avg20)}</td>
+      <td className="px-2 py-1 text-right tabular-nums">{st.win5 == null ? '—' : `${st.win5}%`}</td>
+    </>
+  )
+}
+
+function PerformanceModal(): React.JSX.Element {
+  const s = useFindTrades()
+  const bt = s.btResult
+  const out = s.outcomes
+  const th = 'px-2 py-1 text-right font-semibold uppercase tracking-wide text-muted'
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={() => s.setPerfOpen(false)}>
+      <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <Activity size={15} className="text-accent" />
+          <span className="text-sm font-semibold">Performance &amp; validation</span>
+          <button onClick={() => s.setPerfOpen(false)} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <XIcon size={15} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+          {/* score backtest */}
+          <div className="rounded-xl border border-edge bg-raised/30 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold">Trade Score backtest</span>
+              <button
+                onClick={() => void s.runBacktest()}
+                disabled={s.btBusy}
+                className="ml-auto flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90 disabled:opacity-50"
+              >
+                {s.btBusy ? <Loader2 size={13} className="animate-spin" /> : <Activity size={13} />}
+                {bt ? 'Re-run' : 'Run backtest'}
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              Replays the Trade Score across ~6 months of whole-market history (same math, point-in-time, no
+              lookahead) and measures what each grade actually returned over the next 1 / 5 / 20 trading days
+              vs the whole universe. ~145 market-data calls per run.
+            </p>
+            {s.btBusy && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-muted">
+                <Loader2 size={13} className="animate-spin text-accent" />
+                {s.btProgress ? `Fetching market history… ${s.btProgress.done}/${s.btProgress.total} days` : 'Starting…'}
+              </div>
+            )}
+            {s.btError && <p className="mt-2 text-xs text-danger">{s.btError}</p>}
+            {bt && !s.btBusy && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-edge text-[10px]">
+                      <th className="px-2 py-1 text-left font-semibold uppercase tracking-wide text-muted">Grade</th>
+                      <th className={th}>Points</th>
+                      <th className={th}>Avg 1d</th>
+                      <th className={th}>Avg 5d</th>
+                      <th className={th}>Avg 20d</th>
+                      <th className={th}>Win% 5d</th>
+                      <th className={th}>Edge 5d</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bt.buckets.map((b) => (
+                      <tr key={b.label} className="border-b border-edge/40">
+                        <td className={`px-2 py-1 font-bold ${growthCls(b.label)}`}>{b.label}</td>
+                        <StatCells st={{ n: b.n, avg1: b.avgR1, avg5: b.avgR5, avg20: b.avgR20, win5: b.winRate5 }} />
+                        <td className={`px-2 py-1 text-right font-semibold tabular-nums ${retCls(b.edge5)}`}>{fmtRet(b.edge5)}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td className="px-2 py-1 font-semibold text-muted">ALL</td>
+                      <StatCells st={{ n: bt.all.n, avg1: bt.all.avgR1, avg5: bt.all.avgR5, avg20: bt.all.avgR20, win5: bt.all.winRate5 }} />
+                      <td className="px-2 py-1 text-right text-muted">—</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[10px] text-muted">
+                  {bt.points.toLocaleString('en-US')} evaluations · {bt.tickers.toLocaleString('en-US')} tickers · {bt.from} → {bt.to} ·{' '}
+                  {agoLabel(bt.generatedAt)}. Backtest scores exclude news/social inputs (not knowable historically). Past
+                  performance ≠ future results.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* tracked pick outcomes */}
+          <div className="rounded-xl border border-edge bg-raised/30 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold">Tracked picks</span>
+              <button
+                onClick={() => void s.loadOutcomes()}
+                disabled={s.outBusy}
+                className="ml-auto flex items-center gap-1.5 rounded-lg bg-raised px-3 py-1.5 text-xs font-medium hover:bg-edge/60 disabled:opacity-50"
+              >
+                {s.outBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                Refresh
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              Every pick the tool surfaces (AI searches + one-click scans) is logged automatically and graded
+              against real forward prices.
+            </p>
+            {s.outError && <p className="mt-2 text-xs text-danger">{s.outError}</p>}
+            {out?.note && <p className="mt-2 text-xs text-muted">{out.note}</p>}
+            {out?.summary && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-edge text-[10px]">
+                      <th className="px-2 py-1 text-left font-semibold uppercase tracking-wide text-muted">Group</th>
+                      <th className={th}>Picks</th>
+                      <th className={th}>Avg 1d</th>
+                      <th className={th}>Avg 5d</th>
+                      <th className={th}>Avg 20d</th>
+                      <th className={th}>Win% 5d</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-edge/40 font-semibold">
+                      <td className="px-2 py-1">All picks</td>
+                      <StatCells st={out.summary} />
+                    </tr>
+                    {(out.byGrade ?? []).map((g) => (
+                      <tr key={`g${g.key}`} className="border-b border-edge/40">
+                        <td className="px-2 py-1">Grade {g.key || '—'}</td>
+                        <StatCells st={g.stats} />
+                      </tr>
+                    ))}
+                    {(out.bySetup ?? []).slice(0, 5).map((g) => (
+                      <tr key={`s${g.key}`} className="border-b border-edge/40">
+                        <td className="px-2 py-1 text-muted">{g.key}</td>
+                        <StatCells st={g.stats} />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-1 text-[10px] text-muted">
+                  {out.summary.graded} of {out.summary.n} graded (the rest are pending — returns need days to develop).
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function FindTrades(): React.JSX.Element {
   const s = useFindTrades()
   const endRef = useRef<HTMLDivElement>(null)
@@ -722,7 +924,11 @@ export default function FindTrades(): React.JSX.Element {
   useEffect(() => {
     void s.loadStatus()
     const off = window.wicked.on(`${ID}:alerts`, (p) => s._onAlerts(p))
-    return () => off()
+    const offBt = window.wicked.on(`${ID}:bt-progress`, (p) => s._onBtProgress(p))
+    return () => {
+      off()
+      offBt()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
@@ -744,6 +950,13 @@ export default function FindTrades(): React.JSX.Element {
             Describe what you&apos;re hunting — the AI screens the live market {s.status ? `· market ${s.status.session}` : ''}
           </p>
         </div>
+        <button
+          onClick={() => s.setPerfOpen(true)}
+          className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60"
+          title="Performance & validation — backtest the Trade Score and see how past picks actually did"
+        >
+          <Activity size={14} className="text-accent" /> Performance
+        </button>
         <button
           onClick={() => s.setWatchOpen(true)}
           className="relative flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60"
@@ -776,6 +989,7 @@ export default function FindTrades(): React.JSX.Element {
       )}
 
       {s.watchOpen && <WatchlistModal />}
+      {s.perfOpen && <PerformanceModal />}
 
       {(noMarket || noAi) && (
         <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-5 py-2 text-sm">

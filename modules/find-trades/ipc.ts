@@ -7,6 +7,7 @@ import {
   getAggregates,
   getBenzingaEarnings,
   getFullSnapshot,
+  getGroupedOHLC,
   getTickerDetails,
   getIpos,
   getMassiveNews,
@@ -40,6 +41,7 @@ import {
   pickNewlyFired,
   type WatchItem
 } from './lib/watch'
+import { buildSeries, runBacktest, type DayRows } from './lib/backtest'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -555,7 +557,8 @@ export default function register(ctx: ModuleIpcContext): void {
   const xCache = new Map<string, { at: number; payload: Record<string, unknown> }>()
   const X_TTL_MS = 30 * 60 * 1000
 
-  const clampScanSize = (n: number): number => (n === 200 ? 200 : n === 300 ? 300 : 100)
+  // presets or a user-typed CUSTOM count; clamped to X's practical range
+  const clampScanSize = (n: number): number => (Number.isFinite(n) ? Math.min(500, Math.max(10, Math.round(n))) : 100)
   const getScanSize = (): number => clampScanSize(Number(ctx.storeGet<number>(SCAN_KEY, 100)))
   const hasAiKey = (): boolean => !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai'))
   // AI tone read defaults ON (a single cheap batched call per scan).
@@ -597,14 +600,13 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!bearer) return { ok: false, error: 'Add your X (Twitter) Bearer Token in Settings → API Keys to see trending tickers.' }
 
     const scanSize = getScanSize()
-    const maxPages = Math.max(1, Math.min(5, Math.round(scanSize / 100)))
     const cacheKey = `${windowId}|${scanSize}`
     const cached = xCache.get(cacheKey)
     if (!force && cached && Date.now() - cached.at < X_TTL_MS) return { ...cached.payload, history: readHistory() }
 
     try {
       const now = Date.now()
-      const res = await fetchTrending(bearer, windowId, now, maxPages)
+      const res = await fetchTrending(bearer, windowId, now, scanSize)
       if (!res.ok && res.tweets.length === 0)
         return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
 
@@ -831,6 +833,7 @@ export default function register(ctx: ModuleIpcContext): void {
         picks.push(toPick(c, ai?.thesis ?? '', ai?.flags ?? []))
       }
 
+      logPicks('ai', picks)
       return {
         ok: true,
         plan,
@@ -901,9 +904,186 @@ export default function register(ctx: ModuleIpcContext): void {
     try {
       const plan = parseScreenPlan(JSON.stringify(preset.plan))
       const { candidates, note } = await runScreen(plan)
-      return { ok: true, name: preset.name, note, picks: candidates.map((c) => toPick(c)) }
+      const picks = candidates.map((c) => toPick(c))
+      logPicks(preset.id, picks)
+      return { ok: true, name: preset.name, note, picks }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  /* ------------------------ validation loop (Wall St #1) ----------------- *
+   * 1) Every pick the tool surfaces is logged; outcomes are graded later
+   *    against real forward prices (hit rate by grade/setup/source).
+   * 2) A backtest replays the Trade Score over ~6 months of whole-market
+   *    history and measures per-grade forward returns vs the universe.
+   * ----------------------------------------------------------------------- */
+
+  const PICKLOG_KEY = `${ID}.pickLog`
+  const PICKLOG_CAP = 400
+  const LASTBT_KEY = `${ID}.lastBacktest`
+
+  interface PickLogEntry {
+    ticker: string
+    at: number
+    ymd: string
+    price: number
+    score: number | null
+    scoreLabel: string
+    setup: string
+    source: string
+  }
+
+  const readPickLog = (): PickLogEntry[] => {
+    const v = ctx.storeGet<PickLogEntry[]>(PICKLOG_KEY, [])
+    return Array.isArray(v) ? v : []
+  }
+
+  function logPicks(source: string, picks: Pick[]): void {
+    if (picks.length === 0) return
+    const log = readPickLog()
+    const ymd = etTodayYmd()
+    for (const p of picks) {
+      if (p.price == null || p.price <= 0) continue
+      if (log.some((e) => e.ticker === p.ticker && e.ymd === ymd && e.source === source)) continue
+      log.unshift({ ticker: p.ticker, at: Date.now(), ymd, price: p.price, score: p.score, scoreLabel: p.scoreLabel, setup: p.setup, source })
+    }
+    ctx.storeSet(PICKLOG_KEY, log.slice(0, PICKLOG_CAP))
+  }
+
+  // ---- backtest: fetch ~140 trading days of whole-market OHLCV, replay ----
+  let btRunning = false
+
+  ctx.ipcMain.handle(`${ID}:backtest`, async () => {
+    if (btRunning) return { ok: false, error: 'A backtest is already running.' }
+    const massiveKey = ctx.getApiKey('massive')
+    if (!massiveKey) return { ok: false, error: 'Add your Massive / Polygon key in Settings → API Keys to run a backtest.' }
+    btRunning = true
+    try {
+      // candidate trading days: walk back ~210 calendar days, skip weekends,
+      // stop at YESTERDAY (only complete sessions; holidays return empty)
+      const dates: string[] = []
+      for (let d = 1; d <= 210; d++) {
+        const dt = new Date(Date.now() - d * 86_400_000)
+        const dow = dt.getUTCDay()
+        if (dow === 0 || dow === 6) continue
+        dates.push(dt.toISOString().slice(0, 10))
+      }
+      const days: DayRows[] = []
+      let done = 0
+      let failed = 0
+      const queue = [...dates]
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const ymd = queue.shift()
+          if (!ymd) return
+          try {
+            const rows = await getGroupedOHLC(massiveKey, ymd)
+            // prefilter junk to keep memory sane (~3-4k tickers/day survive)
+            const lean = rows.filter((r) => r.c >= 0.5 && r.c * r.v >= 300_000)
+            if (lean.length > 0) days.push({ ymd, rows: lean })
+          } catch {
+            failed++
+          }
+          done++
+          if (done % 5 === 0 || done === dates.length)
+            ctx.getMainWindow()?.webContents.send(`${ID}:bt-progress`, { done, total: dates.length })
+        }
+      }
+      await Promise.all(Array.from({ length: 3 }, worker))
+      if (days.length < 60)
+        return { ok: false, error: `Not enough market history fetched (${days.length} days${failed ? `, ${failed} failed` : ''}). Check your Massive plan/limits and try again.` }
+
+      const result = {
+        ...runBacktest(buildSeries(days), { evalWindow: 60 }),
+        generatedAt: Date.now(),
+        daysFetched: days.length,
+        failedFetches: failed
+      }
+      ctx.storeSet(LASTBT_KEY, result)
+      return { ok: true, result }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    } finally {
+      btRunning = false
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:backtest-last`, () => ({ ok: true, result: ctx.storeGet<unknown>(LASTBT_KEY, null) }))
+
+  // ---- outcomes: grade every logged pick against real forward closes -----
+  ctx.ipcMain.handle(`${ID}:outcomes`, async () => {
+    const log = readPickLog()
+    if (log.length === 0) return { ok: true, summary: null, entries: [], note: 'No picks logged yet — run a search or a one-click scan.' }
+    const massiveKey = ctx.getApiKey('massive')
+    if (!massiveKey) return { ok: false, error: 'Add your Massive / Polygon key in Settings → API Keys to grade outcomes.' }
+
+    const isoYmd = (t: number): string => new Date(t).toISOString().slice(0, 10)
+    const uniq = [...new Set(log.map((e) => e.ticker))].slice(0, 80)
+    const barsBy = new Map<string, Bar[]>()
+    {
+      const queue = [...uniq]
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const t = queue.shift()
+          if (!t) return
+          try {
+            barsBy.set(t, await dailyBars(massiveKey, t))
+          } catch {
+            /* ungraded */
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: 4 }, worker))
+    }
+
+    interface Graded extends PickLogEntry {
+      r1: number | null
+      r5: number | null
+      r20: number | null
+      status: 'graded' | 'pending' | 'unknown'
+    }
+    const graded: Graded[] = log.map((e) => {
+      const bars = barsBy.get(e.ticker)
+      if (!bars || bars.length === 0) return { ...e, r1: null, r5: null, r20: null, status: 'unknown' }
+      const idx = bars.findIndex((b) => isoYmd(b.t) >= e.ymd)
+      if (idx < 0) return { ...e, r1: null, r5: null, r20: null, status: 'pending' }
+      const base = bars[idx].c
+      const r = (k: number): number | null => (idx + k < bars.length && base > 0 ? Math.round((bars[idx + k].c / base - 1) * 10000) / 100 : null)
+      const r1 = r(1)
+      return { ...e, r1, r5: r(5), r20: r(20), status: r1 == null ? 'pending' : 'graded' }
+    })
+
+    const agg = (rows: Graded[]): { n: number; graded: number; avg1: number | null; avg5: number | null; avg20: number | null; win5: number | null } => {
+      const g1 = rows.filter((x) => x.r1 != null)
+      const g5 = rows.filter((x) => x.r5 != null)
+      const g20 = rows.filter((x) => x.r20 != null)
+      const mean = (xs: number[]): number | null => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null)
+      return {
+        n: rows.length,
+        graded: g1.length,
+        avg1: mean(g1.map((x) => x.r1 as number)),
+        avg5: mean(g5.map((x) => x.r5 as number)),
+        avg20: mean(g20.map((x) => x.r20 as number)),
+        win5: g5.length ? Math.round((g5.filter((x) => (x.r5 as number) > 0).length / g5.length) * 100) : null
+      }
+    }
+    const groupBy = (key: (e: Graded) => string): { key: string; stats: ReturnType<typeof agg> }[] => {
+      const m = new Map<string, Graded[]>()
+      for (const e of graded) {
+        const k = key(e) || '—'
+        m.set(k, [...(m.get(k) ?? []), e])
+      }
+      return [...m.entries()].map(([k, rows]) => ({ key: k, stats: agg(rows) })).sort((a, b) => b.stats.n - a.stats.n)
+    }
+
+    return {
+      ok: true,
+      summary: agg(graded),
+      byGrade: groupBy((e) => e.scoreLabel),
+      bySetup: groupBy((e) => e.setup),
+      bySource: groupBy((e) => e.source),
+      entries: graded.slice(0, 60)
     }
   })
 

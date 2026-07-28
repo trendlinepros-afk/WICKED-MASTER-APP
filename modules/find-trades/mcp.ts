@@ -76,6 +76,20 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         force: z.boolean().optional().describe('Bypass the 30-minute cache and re-pull from X.')
       },
       handler: (args) => ctx.invoke(`${ID}:x-mentions`, { ticker: args.ticker, window: args.window ?? '24h', force: args.force === true })
+    },
+    {
+      name: `${ID}__backtest`,
+      description:
+        'The last Trade Score backtest result: forward 1/5/20-day returns and win rate per score grade (A-F) vs the whole-universe baseline, measured over ~6 months of point-in-time market history. Read-only (returns the stored result; a fresh run is started from the app UI because it makes ~145 market-data calls). null if never run.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:backtest-last`)
+    },
+    {
+      name: `${ID}__outcomes`,
+      description:
+        'How the picks this tool actually surfaced performed: every AI-search and preset pick is auto-logged, then graded against real forward closes (1/5/20 trading days). Returns overall stats plus breakdowns by score grade, setup, and source, and recent graded entries. Read-only; needs the Massive key.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:outcomes`)
     }
   ]
 }

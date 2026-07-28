@@ -430,22 +430,29 @@ export interface TrendingFetch {
 }
 
 /**
- * Fetch and accumulate tweets for a window (paginated up to maxPages). Falls back
- * from `has:cashtags` to a broad finance query if the operator is rejected, and
+ * Fetch and accumulate tweets for a window up to an EXACT tweet budget
+ * (maxTweets, 10..500 — supports custom scan sizes; page sizes adapt so the
+ * user is charged for what they asked, not a page multiple). Falls back from
+ * `has:cashtags` to a broad finance query if the operator is rejected, and
  * returns partial results on a rate-limit rather than failing outright.
  */
-export async function fetchTrending(bearer: string, windowId: string, nowMs: number, maxPages = 3): Promise<TrendingFetch> {
+export async function fetchTrending(bearer: string, windowId: string, nowMs: number, maxTweets = 100): Promise<TrendingFetch> {
   const w = windowById(windowId)
   const useArchive = w.hours > RECENT_MAX_HOURS
   const path = useArchive ? '/tweets/search/all' : '/tweets/search/recent'
   const endpoint = useArchive ? 'all' : 'recent'
+  const cap = Math.max(10, Math.min(500, Math.round(maxTweets)))
   let query = buildQuery()
   let triedFallback = false
   const tweets: XTweet[] = []
   let next: string | null = null
 
-  for (let page = 0; page < maxPages; page++) {
-    const r = await xFetch(bearer, path, searchParams(query, w, nowMs, useArchive, next))
+  for (let page = 0; page < 6; page++) {
+    const remaining = cap - tweets.length
+    if (remaining <= 0) break
+    // X requires max_results between 10 and 100; overshoot is trimmed below.
+    const pageSize = Math.max(10, Math.min(100, remaining))
+    const r = await xFetch(bearer, path, searchParams(query, w, nowMs, useArchive, next, pageSize))
     if (!r.ok) {
       if (r.status === 400 && !triedFallback) {
         // operator/query not allowed on this tier — retry the same page broadly
@@ -459,15 +466,15 @@ export async function fetchTrending(bearer: string, windowId: string, nowMs: num
       if (r.status === 401)
         return { ok: false, tweets: [], endpoint, error: 'X rejected the Bearer Token (401). Check it in Settings → API Keys.' }
       if (r.status === 429)
-        return { ok: tweets.length > 0, tweets, endpoint, error: 'X rate limit hit — showing partial results. Try again shortly.' }
-      return { ok: tweets.length > 0, tweets, endpoint, error: r.error }
+        return { ok: tweets.length > 0, tweets: tweets.slice(0, cap), endpoint, error: 'X rate limit hit — showing partial results. Try again shortly.' }
+      return { ok: tweets.length > 0, tweets: tweets.slice(0, cap), endpoint, error: r.error }
     }
     const parsed = parseSearchPage(r.json)
     tweets.push(...parsed.tweets)
     next = parsed.nextToken
     if (!next) break
   }
-  return { ok: true, tweets, endpoint }
+  return { ok: true, tweets: tweets.slice(0, cap), endpoint }
 }
 
 /* --------------------------- mention COUNTS (precise) -------------------- *
