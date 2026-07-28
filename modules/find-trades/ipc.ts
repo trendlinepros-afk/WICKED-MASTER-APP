@@ -3,18 +3,22 @@ import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
 import { marketSession } from '../stock-planner/ipc/market/sessions'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import {
+  getAggregates,
   getFullSnapshot,
   getTickerDetails,
   getIpos,
   getMassiveNews,
+  type Bar,
   type FullSnapshotRow
 } from '../stock-planner/ipc/market/massive'
 import { preMarketGainers, afterHoursGainers } from '../stock-planner/ipc/market/screeners'
 import { getCompanyNews } from '../stock-planner/ipc/market/finnhub'
+import { computeSignals, tradeScore } from '../stock-planner/ipc/market/signals'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
   applyNumericFilters,
+  applySignalFilters,
   parseScreenPlan,
   rankRows,
   type Candidate,
@@ -54,6 +58,15 @@ export interface Pick {
   thesis: string
   flags: string[]
   news: { title: string; url: string; source: string; publishedAt: string }[]
+  /** Tier 1 Trade Score + key technical signals */
+  score: number | null
+  scoreLabel: string
+  reasons: string[]
+  rvol: number | null
+  gapPct: number | null
+  atrPct: number | null
+  pctFrom52High: number | null
+  rsi: number | null
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -103,7 +116,14 @@ const fmtCap = (v: number | null): string =>
 /** Resolve a snapshot row to the numbers the screen needs. */
 function rowToCandidate(r: FullSnapshotRow): Candidate {
   const q = resolveQuote(r, r.prevDay ?? null)
-  return { ticker: r.ticker, price: q.price, changePct: q.changePct, volume: q.volume }
+  return {
+    ticker: r.ticker,
+    price: q.price,
+    changePct: q.changePct,
+    volume: q.volume,
+    dayOpen: typeof r.day?.o === 'number' ? r.day.o : null,
+    prevClose: typeof r.prevDay?.c === 'number' ? r.prevDay.c : null
+  }
 }
 
 async function buildUniverse(
@@ -133,6 +153,21 @@ async function buildUniverse(
 }
 
 /* ------------------------------ enrichment ------------------------------- */
+
+// Daily bars are stable within a session, so cache them per ticker to keep
+// re-scans cheap on the Massive/Polygon quota.
+const barsCache = new Map<string, { at: number; bars: Bar[] }>()
+const BARS_TTL_MS = 30 * 60 * 1000
+const DAY_MS = 86_400_000
+
+async function dailyBars(massiveKey: string, ticker: string): Promise<Bar[]> {
+  const hit = barsCache.get(ticker)
+  if (hit && Date.now() - hit.at < BARS_TTL_MS) return hit.bars
+  const now = Date.now()
+  const bars = await getAggregates(massiveKey, ticker, 1, 'day', now - 400 * DAY_MS, now)
+  if (bars.length > 0) barsCache.set(ticker, { at: now, bars })
+  return bars
+}
 
 async function enrich(
   massiveKey: string,
@@ -164,6 +199,30 @@ async function enrich(
           c.news = []
         }
       }
+      // Tier 1: technical signals + unified Trade Score.
+      try {
+        const bars = await dailyBars(massiveKey, c.ticker)
+        c.signals = computeSignals(bars, {
+          price: c.price,
+          todayVolume: c.volume,
+          dayOpen: c.dayOpen ?? null,
+          prevClose: c.prevClose ?? null
+        })
+      } catch {
+        /* no signals — score falls back to what we have */
+      }
+      c.score = tradeScore({
+        changePct: c.changePct,
+        rvol: c.signals?.rvol ?? null,
+        gapPct: c.signals?.gapPct ?? null,
+        atrPct: c.signals?.atrPct ?? null,
+        pctFrom52High: c.signals?.pctFrom52High ?? null,
+        rsi14: c.signals?.rsi14 ?? null,
+        aboveSma20: c.signals?.aboveSma20 ?? false,
+        aboveSma50: c.signals?.aboveSma50 ?? false,
+        trendUp: c.signals?.trendUp ?? false,
+        hasNews: (c.news?.length ?? 0) > 0
+      })
     }
   }
   await Promise.all(Array.from({ length: Math.min(5, queue.length) }, worker))
@@ -182,18 +241,36 @@ const PLAN_RULES =
   'Use source "premarket"/"afterhours" only if the user says so; otherwise "movers". Use sectors from this set when relevant: ' +
   'Technology, Healthcare, Financials, Energy, Utilities, Real Estate, Communication Services, Consumer Staples, ' +
   'Consumer Discretionary, Materials, Industrials. Set needsNews true when the user wants a catalyst/news. ' +
-  'Put news/theme words (FDA, earnings, AI, buyout, guidance) in keywords. Keep limit <= 20. rationale = one sentence.'
+  'Put news/theme words (FDA, earnings, AI, buyout, guidance) in keywords. ' +
+  'You may ALSO set technical fields: minRvol (relative volume, e.g. "high/unusual/heavy volume"=>2, "3x volume"=>3), ' +
+  'minGapPct/maxGapPct ("gapping up 5%"=>minGapPct 5), nearHigh (true for "near/at 52-week highs, breakout"), ' +
+  'minAtrPct (true movers/"volatile"=>3-5), requireUptrend (true for "uptrend, above moving averages, strong trend"), ' +
+  'minScore (0-100, use 60+ only for "best/highest-quality/strongest setups"). Leave any unused field null/false. ' +
+  'Keep limit <= 20. rationale = one sentence.'
 
 function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
-  const lines = cands.map(
-    (c) =>
+  const lines = cands.map((c) => {
+    const s = c.signals
+    const tech =
+      ` | score ${c.score?.score ?? 'n/a'}${c.score?.label ? `(${c.score.label})` : ''}` +
+      (s?.rvol != null ? ` | RVOL ${s.rvol}x` : '') +
+      (s?.gapPct != null ? ` | gap ${s.gapPct}%` : '') +
+      (s?.atrPct != null ? ` | ATR ${s.atrPct}%` : '') +
+      (s?.pctFrom52High != null ? ` | ${s.pctFrom52High}% from 52w-high` : '') +
+      (s?.rsi14 != null ? ` | RSI ${s.rsi14}` : '') +
+      (s ? ` | ${s.trendUp && s.aboveSma20 ? 'uptrend' : s.aboveSma50 ? 'above 50d' : 'below MAs'}` : '')
+    return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
+      tech +
       (c.news && c.news.length ? ` | news: ${c.news.slice(0, 2).map((n) => n.title).join(' /// ')}` : '')
-  )
+    )
+  })
   return (
-    `The trader asked for: "${plan.rationale}". Here are the pre-filtered candidates (live data):\n\n${lines.join('\n')}\n\n` +
-    'Pick the best matches (fewer, higher-quality is better) and return ONLY JSON: ' +
-    '{"summary":"1-2 sentences on what you found","picks":[{"ticker":"","thesis":"one line why it fits","flags":["short risk/quality notes"]}]}. ' +
+    `The trader asked for: "${plan.rationale}". Here are the pre-filtered candidates with live data + technical signals ` +
+    `(RVOL = relative volume, higher = a more real move; score = a 0-100 momentum Trade Score):\n\n${lines.join('\n')}\n\n` +
+    'Pick the best matches — prefer higher Trade Score, higher relative volume, a real catalyst, and a clean trend; ' +
+    'fewer higher-quality picks beat a long list. Return ONLY JSON: ' +
+    '{"summary":"1-2 sentences on what you found","picks":[{"ticker":"","thesis":"one line why it fits (mention RVOL/catalyst/trend)","flags":["short risk/quality notes"]}]}. ' +
     'Base every claim on the data shown — do not invent prices or news. Educational only, not financial advice.'
   )
 }
@@ -432,10 +509,12 @@ export default function register(ctx: ModuleIpcContext): void {
     const finnhubKey = ctx.getApiKey('finnhub')
     const { rows, note } = await buildUniverse(massiveKey, plan)
     const numeric = rankRows(applyNumericFilters(rows, plan), plan).slice(0, PRE_ENRICH_CAP)
-    const needsEnrich =
-      plan.sectors.length > 0 || plan.needsNews || plan.keywords.length > 0 || plan.minMarketCap != null || plan.maxMarketCap != null
-    const enriched = needsEnrich ? await enrich(massiveKey, finnhubKey, numeric, plan) : numeric.slice(0, ENRICH_CAP)
-    const final = (needsEnrich ? applyEnrichedFilters(enriched, plan) : enriched).slice(0, plan.limit)
+    // Always enrich the top survivors with details + Tier 1 technical signals +
+    // a Trade Score (the accuracy layer); news is fetched only when the plan
+    // needs it. Then apply sector/cap/news + signal filters and rank by score.
+    const enriched = await enrich(massiveKey, finnhubKey, numeric, plan)
+    const filtered = applySignalFilters(applyEnrichedFilters(enriched, plan), plan)
+    const final = [...filtered].sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0)).slice(0, plan.limit)
     return { candidates: final, note }
   }
 
@@ -501,7 +580,15 @@ export default function register(ctx: ModuleIpcContext): void {
           marketCap: c.marketCap ?? null,
           thesis: ai?.thesis ?? '',
           flags: ai?.flags ?? [],
-          news: c.news ?? []
+          news: c.news ?? [],
+          score: c.score?.score ?? null,
+          scoreLabel: c.score?.label ?? '',
+          reasons: c.score?.reasons ?? [],
+          rvol: c.signals?.rvol ?? null,
+          gapPct: c.signals?.gapPct ?? null,
+          atrPct: c.signals?.atrPct ?? null,
+          pctFrom52High: c.signals?.pctFrom52High ?? null,
+          rsi: c.signals?.rsi14 ?? null
         })
       }
 
@@ -532,7 +619,16 @@ export default function register(ctx: ModuleIpcContext): void {
           changePct: c.changePct,
           volume: c.volume,
           sector: c.sector ?? '',
-          marketCap: c.marketCap ?? null
+          marketCap: c.marketCap ?? null,
+          score: c.score?.score ?? null,
+          scoreLabel: c.score?.label ?? '',
+          reasons: c.score?.reasons ?? [],
+          rvol: c.signals?.rvol ?? null,
+          gapPct: c.signals?.gapPct ?? null,
+          atrPct: c.signals?.atrPct ?? null,
+          pctFrom52High: c.signals?.pctFrom52High ?? null,
+          rsi14: c.signals?.rsi14 ?? null,
+          trendUp: c.signals?.trendUp ?? false
         }))
       }
     } catch (err) {

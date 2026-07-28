@@ -34,6 +34,13 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         sectors: z.array(z.string()).optional().describe('Broad sectors to keep, e.g. ["Technology","Healthcare"].'),
         needsNews: z.boolean().optional().describe('Require recent company news.'),
         keywords: z.array(z.string()).optional().describe('Name/news keywords to match, e.g. ["FDA","earnings"].'),
+        minRvol: z.number().optional().describe('Minimum relative volume (2 = twice the 20-day average). Filters real moves from noise.'),
+        minGapPct: z.number().optional().describe('Minimum open-vs-prev-close gap %.'),
+        maxGapPct: z.number().optional().describe('Maximum gap %.'),
+        nearHigh: z.boolean().optional().describe('Keep only stocks within ~5% of their 52-week high (breakout candidates).'),
+        minAtrPct: z.number().optional().describe('Minimum ATR as % of price (true movers).'),
+        requireUptrend: z.boolean().optional().describe('Require a short-term uptrend (above 20-day SMA and 20 > 50).'),
+        minScore: z.number().optional().describe('Minimum unified Trade Score 0-100 (use 60+ for only the strongest setups).'),
         limit: z.number().int().optional().describe('Max results (default 12, cap 30).')
       },
       handler: (args) => ctx.invoke(`${ID}:screen`, args)

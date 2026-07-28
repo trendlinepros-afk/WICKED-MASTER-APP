@@ -15,11 +15,31 @@ tickers and a one-line thesis for each.
    (`stock-planner/ipc/market`): the full US snapshot (or premarket/afterhours
    movers, or IPOs, or explicit tickers) → numeric filters → rank → enrich the
    top survivors with sector (classified via the Trade Journal's SIC mapper),
-   market cap, and news (Finnhub, else Massive) → sector/cap/keyword/news
-   filters. **No numbers are invented — the data is the source of truth.**
-3. **Rank + explain.** The surviving candidates (with their real data) go back
-   to the AI, which picks the best fits and writes a short thesis + risk flags.
-   The thesis is joined back onto the real rows.
+   market cap, news (Finnhub, else Massive), and **technical signals** (below) →
+   sector/cap/keyword/news + signal filters. **No numbers are invented — the data
+   is the source of truth.**
+3. **Rank + explain.** The surviving candidates (with their real data + signals)
+   go back to the AI, which picks the best fits and writes a short thesis + risk
+   flags. The thesis is joined back onto the real rows.
+
+## Trade Score & technical signals (the "is this move real?" layer)
+
+Movement alone (price/%/volume) doesn't say a move is *tradable*. At enrichment,
+the top survivors get **daily-bar signals** (`ipc/market/signals.ts`, pure +
+unit-tested) computed from ~400 days of Polygon aggregates:
+
+- **RVOL** — today's volume ÷ 20-day average (the #1 "is this real?" filter)
+- **Gap %** (open vs prior close), **ATR %** (typical daily range / mover check)
+- **52-week-high proximity** (breakout candidates), **SMA 20/50 trend**, **RSI 14**
+
+These fuse into a **unified Trade Score (0–100, A–F)** — a momentum-biased setup
+grade (RVOL 30 · momentum 20 · trend 15 · breakout 12 · volatility 8 · RSI 5 ·
+news 10 · social 5) — shown as a badge with the top contributing **reasons**, and
+handed to the AI so it ranks with real context. The plan can filter on them:
+`minRvol`, `minGapPct`/`maxGapPct`, `nearHigh`, `minAtrPct`, `requireUptrend`,
+`minScore` — the AI sets these from phrases like "unusual volume", "gapping up",
+"near highs", "in an uptrend", "strongest setups". Daily bars are cached ~30 min
+per ticker to stay light on the Massive quota.
 
 ## Trending on X (social)
 

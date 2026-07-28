@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ScoreResult, Signals } from '../../stock-planner/ipc/market/signals'
 
 /**
  * FIND TRADES — the AI turns a plain-English request ("low-priced stocks up big
@@ -39,6 +40,20 @@ export const ScreenPlanSchema = z.object({
   needsNews: z.boolean().catch(false),
   /** name/news keywords to match (e.g. "FDA", "earnings", "AI") */
   keywords: strArr,
+  /* ---- technical (Tier 1) signal criteria ---- */
+  /** minimum relative volume (2 = twice the 20-day average) */
+  minRvol: numOrNull,
+  /** minimum / maximum open-vs-prev-close gap % */
+  minGapPct: numOrNull,
+  maxGapPct: numOrNull,
+  /** within ~5% of the 52-week high */
+  nearHigh: z.boolean().catch(false),
+  /** minimum ATR as % of price (a "mover") */
+  minAtrPct: numOrNull,
+  /** require a short-term uptrend (above 20-day, 20 > 50) */
+  requireUptrend: z.boolean().catch(false),
+  /** minimum unified Trade Score (0-100) */
+  minScore: numOrNull,
   /** how many final picks to return (clamped 1..30) */
   limit: z
     .number()
@@ -57,9 +72,15 @@ export interface Candidate {
   price: number | null
   changePct: number | null
   volume: number | null
+  /** today's open + prior close, for the gap % signal */
+  dayOpen?: number | null
+  prevClose?: number | null
   sector?: string
   marketCap?: number | null
   news?: { title: string; url: string; source: string; publishedAt: string }[]
+  /** Tier 1 technical signals + unified Trade Score (attached at enrichment) */
+  signals?: Signals
+  score?: ScoreResult
 }
 
 /* ------------------------------ plan parsing ----------------------------- */
@@ -135,6 +156,21 @@ export function applyEnrichedFilters(rows: Candidate[], plan: ScreenPlan): Candi
       const hay = `${r.name ?? ''} ${(r.news ?? []).map((n) => n.title).join(' ')}`.toLowerCase()
       if (!kw.some((k) => hay.includes(k))) return false
     }
+    return true
+  })
+}
+
+/** Filters that need the Tier 1 technical signals (attached at enrichment). */
+export function applySignalFilters(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+  return rows.filter((r) => {
+    const s = r.signals
+    if (plan.minRvol != null && !(s && s.rvol != null && s.rvol >= plan.minRvol)) return false
+    if (plan.minGapPct != null && !(s && s.gapPct != null && s.gapPct >= plan.minGapPct)) return false
+    if (plan.maxGapPct != null && !(s && s.gapPct != null && s.gapPct <= plan.maxGapPct)) return false
+    if (plan.minAtrPct != null && !(s && s.atrPct != null && s.atrPct >= plan.minAtrPct)) return false
+    if (plan.nearHigh && !(s && s.pctFrom52High != null && s.pctFrom52High >= -5)) return false
+    if (plan.requireUptrend && !(s && s.trendUp && s.aboveSma20)) return false
+    if (plan.minScore != null && !(r.score && r.score.score >= plan.minScore)) return false
     return true
   })
 }

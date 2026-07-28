@@ -66,8 +66,16 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
     <div className="rounded-xl border border-edge bg-surface p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-bold">{p.ticker}</span>
+            {p.score != null && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${growthCls(p.scoreLabel)}`}
+                title={`Trade Score ${p.score}/100 (${p.scoreLabel}) — momentum setup quality: RVOL + trend + breakout + catalyst`}
+              >
+                Score {p.score}
+              </span>
+            )}
             {p.name && <span className="min-w-0 truncate text-xs text-muted">{p.name}</span>}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
@@ -77,9 +85,21 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
               {pct(p.changePct)}
             </span>
             <span className="tabular-nums">Vol {vol(p.volume)}</span>
+            {p.rvol != null && <span className={`tabular-nums font-medium ${p.rvol >= 1.5 ? 'text-accent' : ''}`} title="Relative volume vs 20-day average">RVOL {p.rvol}×</span>}
+            {p.gapPct != null && Math.abs(p.gapPct) >= 1 && <span className="tabular-nums" title="Gap from prior close">Gap {p.gapPct > 0 ? '+' : ''}{p.gapPct}%</span>}
+            {p.pctFrom52High != null && p.pctFrom52High > -5 && <span className="text-ok" title="Near its 52-week high">52w-high</span>}
             {p.sector && p.sector !== '—' && <span>{p.sector}</span>}
             {p.marketCap != null && <span className="tabular-nums">Cap {cap(p.marketCap)}</span>}
           </div>
+          {p.reasons && p.reasons.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {p.reasons.map((rsn, i) => (
+                <span key={i} className="rounded bg-ok/10 px-1.5 py-0.5 text-[10px] text-ok">
+                  {rsn}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       {p.thesis && <p className="mt-2 text-sm text-ink/90">{p.thesis}</p>}
