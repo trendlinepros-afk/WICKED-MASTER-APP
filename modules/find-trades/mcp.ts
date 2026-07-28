@@ -41,6 +41,9 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         minAtrPct: z.number().optional().describe('Minimum ATR as % of price (true movers).'),
         requireUptrend: z.boolean().optional().describe('Require a short-term uptrend (above 20-day SMA and 20 > 50).'),
         minScore: z.number().optional().describe('Minimum unified Trade Score 0-100 (use 60+ for only the strongest setups).'),
+        insiderBuying: z.boolean().optional().describe('Require net insider buying over ~90 days (needs Finnhub).'),
+        minAnalystBull: z.number().optional().describe('Minimum % of bullish analysts, 0-100 (needs Finnhub).'),
+        minShortPctFloat: z.number().optional().describe('Minimum short interest as % of float — squeeze candidates (needs Finnhub plan with short data).'),
         limit: z.number().int().optional().describe('Max results (default 12, cap 30).')
       },
       handler: (args) => ctx.invoke(`${ID}:screen`, args)

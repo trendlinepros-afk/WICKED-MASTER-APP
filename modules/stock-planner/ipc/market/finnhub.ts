@@ -6,6 +6,8 @@
 import { etTodayYmd, etYmdDaysAgo, etParts } from './sessions'
 import type { NewsItem } from './massive'
 
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+
 const BASE = 'https://finnhub.io/api/v1'
 const TIMEOUT_MS = 12_000
 
@@ -71,6 +73,99 @@ export async function getCompanyNews(key: string, sym: string): Promise<NewsItem
     })
     .filter((n) => n.title)
     .slice(0, 12)
+}
+
+/* --------------------------- smart-money extras -------------------------- *
+ *  Tier 3: analyst consensus, insider activity, and short/float where the plan
+ *  provides them. All fail-soft — a missing/premium field is simply null.
+ * ------------------------------------------------------------------------ */
+
+export interface FinnhubExtras {
+  /** % bullish analysts (strongBuy+buy of total) */
+  analystBull: number | null
+  analystLabel: string | null
+  analystTotal: number | null
+  /** net insider shares bought(+)/sold(−) over ~90 days */
+  insiderNet: number | null
+  insiderBuying: boolean
+  /** short interest as % of float (only when the plan exposes it) */
+  shortPctFloat: number | null
+  floatShares: number | null
+  beta: number | null
+}
+
+function pickNum(obj: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = numOrNull(obj[k])
+    if (v != null) return v
+  }
+  return null
+}
+
+/** Analyst trend + insider flow + (plan-permitting) short/float + beta. */
+export async function getFinnhubExtras(key: string, sym: string): Promise<FinnhubExtras> {
+  const out: FinnhubExtras = {
+    analystBull: null,
+    analystLabel: null,
+    analystTotal: null,
+    insiderNet: null,
+    insiderBuying: false,
+    shortPctFloat: null,
+    floatShares: null,
+    beta: null
+  }
+
+  // Analyst recommendation trend (latest period)
+  const recJson = await finnhubFetch(key, `/stock/recommendation?symbol=${encodeURIComponent(sym)}`)
+  const recRows = arr(recJson).map(rec)
+  if (recRows.length > 0) {
+    const r = recRows.sort((a, b) => String(b.period ?? '').localeCompare(String(a.period ?? '')))[0]
+    const sb = numOrNull(r.strongBuy) ?? 0
+    const b = numOrNull(r.buy) ?? 0
+    const h = numOrNull(r.hold) ?? 0
+    const s = numOrNull(r.sell) ?? 0
+    const ss = numOrNull(r.strongSell) ?? 0
+    const total = sb + b + h + s + ss
+    if (total > 0) {
+      const bull = (sb + b) / total
+      const bear = (s + ss) / total
+      out.analystTotal = total
+      out.analystBull = Math.round(bull * 100)
+      out.analystLabel = bull >= 0.75 ? 'Strong Buy' : bull >= 0.5 ? 'Buy' : bear >= 0.5 ? 'Sell' : 'Hold'
+    }
+  }
+
+  // Insider transactions — net share change over ~90 days (Form 4)
+  const insJson = await finnhubFetch(key, `/stock/insider-transactions?symbol=${encodeURIComponent(sym)}`)
+  const insData = arr(rec(insJson).data).map(rec)
+  if (insData.length > 0) {
+    const since = etYmdDaysAgo(90)
+    let net = 0
+    let counted = 0
+    for (const t of insData) {
+      if (String(t.transactionDate ?? '') < since) continue
+      const change = numOrNull(t.change)
+      if (change != null) {
+        net += change
+        counted++
+      }
+    }
+    if (counted > 0) {
+      out.insiderNet = net
+      out.insiderBuying = net > 0
+    }
+  }
+
+  // Basic financials — beta always; short/float only if the plan includes them
+  const metricJson = await finnhubFetch(key, `/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all`)
+  const metric = rec(rec(metricJson).metric)
+  if (Object.keys(metric).length > 0) {
+    out.beta = pickNum(metric, ['beta'])
+    out.shortPctFloat = pickNum(metric, ['shortInterestSharePercentOfFloat', 'shortPercentFloat', 'shortInterestPercentFloat'])
+    out.floatShares = pickNum(metric, ['floatShares', 'shareFloat', 'freeFloat'])
+  }
+
+  return out
 }
 
 /* Market-wide headlines, cached until the 6:00 AM ET rollover. */

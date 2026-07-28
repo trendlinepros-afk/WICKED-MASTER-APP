@@ -98,6 +98,13 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
             {p.rvol != null && <span className={`tabular-nums font-medium ${p.rvol >= 1.5 ? 'text-accent' : ''}`} title="Relative volume vs 20-day average">RVOL {p.rvol}×</span>}
             {p.gapPct != null && Math.abs(p.gapPct) >= 1 && <span className="tabular-nums" title="Gap from prior close">Gap {p.gapPct > 0 ? '+' : ''}{p.gapPct}%</span>}
             {p.pctFrom52High != null && p.pctFrom52High > -5 && <span className="text-ok" title="Near its 52-week high">52w-high</span>}
+            {p.analystLabel && (
+              <span className={p.analystBull != null && p.analystBull >= 60 ? 'text-ok' : ''} title={`${p.analystBull}% of analysts rate it buy`}>
+                Analysts {p.analystLabel}
+              </span>
+            )}
+            {p.insiderBuying && <span className="text-ok" title="Net insider buying over ~90 days">Insider buys</span>}
+            {p.shortPctFloat != null && <span className={p.shortPctFloat >= 20 ? 'text-warn' : ''} title="Short interest as % of float — high = squeeze potential">Short {p.shortPctFloat}%</span>}
             {p.sector && p.sector !== '—' && <span>{p.sector}</span>}
             {p.marketCap != null && <span className="tabular-nums">Cap {cap(p.marketCap)}</span>}
           </div>

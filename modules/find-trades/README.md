@@ -53,13 +53,31 @@ Each pick also carries:
   Offering** (or downgrade) AVOID flag, checked first so a dilution headline is
   never mislabeled. Fed to the AI so it warns on or skips those.
 
+## Smart-money extras (Tier 3, Finnhub)
+
+The top ~12 candidates are decorated (when a Finnhub key is present) with
+`getFinnhubExtras` — all **fail-soft**, so a premium/absent field just shows
+nothing:
+
+- **Analyst consensus** — % bullish from the recommendation trend (Strong Buy /
+  Buy / Hold / Sell).
+- **Insider activity** — net Form-4 share change over ~90 days ("Insider buys").
+- **Short interest % of float** — squeeze potential (only when your Finnhub plan
+  exposes it), plus beta.
+
+Filterable via `insiderBuying`, `minAnalystBull`, `minShortPctFloat` (the AI sets
+them from "insider buying", "analyst favorite", "high short interest / squeeze"),
+and surfaced as row chips + fed to the AI ranker. Extras are cached ~30 min/ticker
+and capped to the top 12 to stay friendly to Finnhub's rate limit.
+
 ## One-click scans (presets)
 
 Deterministic scanners on the empty screen — **no AI cost** — that map straight to
 `ScreenPlan` fields and render like a chat answer, ranked by Trade Score:
 **Small-cap runners**, **Gap-ups with news**, **Near 52-week highs**, **Unusual
-volume**, **Large-cap momentum**, **Oversold bounce** (`PRESETS` in `ipc.ts`;
-`find-trades:presets` / `:preset`).
+volume**, **Large-cap momentum**, **Oversold bounce**, **Squeeze candidates**
+(needs Finnhub short data), **Smart-money picks** (analyst + insider) — `PRESETS`
+in `ipc.ts`; `find-trades:presets` / `:preset`.
 
 ## Trending on X (social)
 

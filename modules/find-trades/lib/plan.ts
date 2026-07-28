@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ScoreResult, Signals, TradePlan } from '../../stock-planner/ipc/market/signals'
 import type { Catalyst } from '../../stock-planner/ipc/market/catalyst'
+import type { FinnhubExtras } from '../../stock-planner/ipc/market/finnhub'
 
 /**
  * FIND TRADES — the AI turns a plain-English request ("low-priced stocks up big
@@ -55,6 +56,13 @@ export const ScreenPlanSchema = z.object({
   requireUptrend: z.boolean().catch(false),
   /** minimum unified Trade Score (0-100) */
   minScore: numOrNull,
+  /* ---- Tier 3 smart-money criteria ---- */
+  /** require net insider buying (last ~90 days) */
+  insiderBuying: z.boolean().catch(false),
+  /** minimum % bullish analysts */
+  minAnalystBull: numOrNull,
+  /** minimum short interest as % of float (squeeze candidates) */
+  minShortPctFloat: numOrNull,
   /** how many final picks to return (clamped 1..30) */
   limit: z
     .number()
@@ -86,6 +94,8 @@ export interface Candidate {
   setup?: string
   plan?: TradePlan | null
   catalyst?: Catalyst | null
+  /** Tier 3 smart-money extras (analyst / insider / short) */
+  extras?: FinnhubExtras
 }
 
 /* ------------------------------ plan parsing ----------------------------- */
@@ -176,6 +186,17 @@ export function applySignalFilters(rows: Candidate[], plan: ScreenPlan): Candida
     if (plan.nearHigh && !(s && s.pctFrom52High != null && s.pctFrom52High >= -5)) return false
     if (plan.requireUptrend && !(s && s.trendUp && s.aboveSma20)) return false
     if (plan.minScore != null && !(r.score && r.score.score >= plan.minScore)) return false
+    return true
+  })
+}
+
+/** Filters that need the Tier 3 smart-money extras (analyst / insider / short). */
+export function applyExtrasFilters(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+  return rows.filter((r) => {
+    const e = r.extras
+    if (plan.insiderBuying && !(e && e.insiderBuying)) return false
+    if (plan.minAnalystBull != null && !(e && e.analystBull != null && e.analystBull >= plan.minAnalystBull)) return false
+    if (plan.minShortPctFloat != null && !(e && e.shortPctFloat != null && e.shortPctFloat >= plan.minShortPctFloat)) return false
     return true
   })
 }
