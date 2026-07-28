@@ -15,6 +15,7 @@ import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
 import { BrandLogo, BrandMark } from './BrandLogo'
 import ModuleIcon from './ModuleIcon'
+import SyncBadge from './SyncBadge'
 import { effectiveName, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
@@ -212,6 +213,9 @@ export default function ActivityBar(): React.JSX.Element {
       </div>
 
       <div className="my-1 h-px shrink-0 bg-edge" />
+
+      {/* Cloud Sync status (hidden until sync is set up) */}
+      <SyncBadge expanded={expanded} />
 
       {/* Check for Updates */}
       <button
