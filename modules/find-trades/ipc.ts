@@ -22,6 +22,8 @@ import { classifyCatalyst, newsVelocity } from '../stock-planner/ipc/market/cata
 import { getEdgarSummary } from '../stock-planner/ipc/market/edgar'
 import { getStockTwits } from '../stock-planner/ipc/market/stocktwits'
 import { getRegime, type Regime } from '../stock-planner/ipc/market/regime'
+import { getShortVolRatio } from '../stock-planner/ipc/market/finra'
+import { nextMacroEvent } from '../stock-planner/ipc/market/macro'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
@@ -105,6 +107,10 @@ export interface Pick {
   /** SEC EDGAR recent-filing flags */
   secOffering: boolean
   sec8K: boolean
+  /** SC 13D/13G in ~30 days — a 5%+ stake was disclosed */
+  stakeBuilding: boolean
+  /** FINRA short-sale volume as % of the day's tape */
+  shortVolRatio: number | null
   /** StockTwits social read */
   stMessages: number | null
   stBullPct: number | null
@@ -197,6 +203,8 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
     earningsHour: c.earningsHour ?? null,
     secOffering: c.edgar?.recentOffering ?? false,
     sec8K: c.edgar?.recent8K ?? false,
+    stakeBuilding: c.edgar?.stakeBuilding ?? false,
+    shortVolRatio: c.shortVolRatio ?? null,
     stMessages: c.stocktwits?.messages ?? null,
     stBullPct:
       c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
@@ -308,7 +316,11 @@ function scoreFor(c: Candidate, hasSocial: boolean): ReturnType<typeof tradeScor
 }
 
 function regimeLine(r: Regime | null): string {
-  if (!r) return ''
+  const macro = nextMacroEvent(etTodayYmd())
+  const macroTxt = macro
+    ? `MACRO: ${macro.name} ${macro.daysAway === 0 ? 'TODAY' : `in ${macro.daysAway} day(s)`} (${macro.date}) — expect volatility around it; be wary of holding leveraged momentum through the print.\n`
+    : ''
+  if (!r) return macroTxt ? macroTxt + '\n' : ''
   const bits = [
     r.spyAbove50 ? 'SPY above its 50-day' : 'SPY below its 50-day',
     r.breadthPct != null ? `breadth ${r.breadthPct}% advancers` : null,
@@ -320,7 +332,7 @@ function regimeLine(r: Regime | null): string {
       : r.label === 'risk-on'
         ? 'Trend-following and breakout setups have the wind at their back.'
         : 'Mixed tape — take setups on their individual merits.'
-  return `MARKET REGIME: ${r.label.toUpperCase()} (${bits.join(', ')}). ${advice}\n\n`
+  return `${macroTxt}MARKET REGIME: ${r.label.toUpperCase()} (${bits.join(', ')}). ${advice}\n\n`
 }
 
 const extrasCache = new Map<string, { at: number; extras: FinnhubExtras }>()
@@ -403,6 +415,11 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
           if (c.stocktwits && c.stocktwits.messages >= 5 && c.stocktwits.sentiment > 0.2) c.score = scoreFor(c, true)
         } catch {
           /* no StockTwits */
+        }
+        try {
+          c.shortVolRatio = await getShortVolRatio(c.ticker)
+        } catch {
+          /* no FINRA data */
         }
       }
     }
@@ -511,6 +528,8 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (c.extras?.shortPctFloat != null ? ` | short ${c.extras.shortPctFloat}% float` : '') +
       (c.daysToEarnings != null && c.daysToEarnings >= 0 && c.daysToEarnings <= 21 ? ` | earnings in ${c.daysToEarnings}d` : '') +
       (c.edgar?.recentOffering ? ' | ⚠RECENT SEC OFFERING FILING (dilution risk)' : '') +
+      (c.edgar?.stakeBuilding ? ' | 5%+ stake disclosed (SC 13D/G)' : '') +
+      (c.shortVolRatio != null ? ` | short-vol ${c.shortVolRatio}% of tape` : '') +
       (c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish >= 3
         ? ` | StockTwits ${Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)}% bull`
         : '') +
@@ -627,6 +646,7 @@ export default function register(ctx: ModuleIpcContext): void {
       hasX: !!ctx.getApiKey('x'),
       session: marketSession(),
       regime,
+      macro: nextMacroEvent(etTodayYmd()),
       riskDollars: getRisk(),
       aiDebate: getDebate(),
       // persisted X prefs, so the UI reflects saved values after a restart
@@ -1020,6 +1040,8 @@ export default function register(ctx: ModuleIpcContext): void {
           shortPctFloat: c.extras?.shortPctFloat ?? null,
           daysToEarnings: c.daysToEarnings ?? null,
           secOffering: c.edgar?.recentOffering ?? false,
+          stakeBuilding: c.edgar?.stakeBuilding ?? false,
+          shortVolRatio: c.shortVolRatio ?? null,
           stBullPct:
             c.stocktwits && c.stocktwits.bullish + c.stocktwits.bearish > 0
               ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)

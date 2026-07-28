@@ -114,6 +114,8 @@ export interface Candidate {
   stocktwits?: StockTwitsRead | null
   /** tradability annotation from the liquidity gate */
   liquidity?: 'ok' | 'thin'
+  /** FINRA short-sale volume as % of the day's tape */
+  shortVolRatio?: number | null
   /** next earnings date + days away (negative/undefined = unknown) */
   earningsDate?: string | null
   daysToEarnings?: number | null

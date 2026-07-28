@@ -137,6 +137,16 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
                 StockTwits {p.stBullPct}% bull
               </span>
             )}
+            {p.stakeBuilding && (
+              <span className="text-ok" title="An SC 13D/13G was filed in the last ~30 days — someone disclosed a 5%+ stake (from SEC EDGAR)">
+                5% stake filed
+              </span>
+            )}
+            {p.shortVolRatio != null && (
+              <span className={p.shortVolRatio >= 60 ? 'font-medium text-warn' : ''} title="FINRA daily short-sale volume as % of the tape — 60%+ = heavy shorting pressure / squeeze fuel">
+                Short-vol {p.shortVolRatio}%
+              </span>
+            )}
             {p.newsCount24h != null && p.newsCount24h > 0 && (
               <span className={p.newsHot ? 'font-medium text-warn' : ''} title="Headlines in the last 24 hours (catalyst intensity)">
                 {p.newsHot ? '🔥 ' : ''}
@@ -1019,6 +1029,14 @@ export default function FindTrades(): React.JSX.Element {
                 }${s.status.regime.spyR5 != null ? ` · SPY ${s.status.regime.spyR5 > 0 ? '+' : ''}${s.status.regime.spyR5}% over 5d` : ''}. The Trade Score damps momentum-chasing in risk-off tape.`}
               >
                 {s.status.regime.label === 'risk-on' ? '🟢 Risk-on' : s.status.regime.label === 'risk-off' ? '🔴 Risk-off' : '⚪ Neutral'}
+              </span>
+            )}
+            {s.status?.macro && (
+              <span
+                className="rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-semibold text-warn"
+                title={`${s.status.macro.name} on ${s.status.macro.date} — expect market-wide volatility around it`}
+              >
+                ⚠ {s.status.macro.name} {s.status.macro.daysAway === 0 ? 'today' : `in ${s.status.macro.daysAway}d`}
               </span>
             )}
           </h1>

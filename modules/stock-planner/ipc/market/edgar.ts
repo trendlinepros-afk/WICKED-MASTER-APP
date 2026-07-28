@@ -63,29 +63,34 @@ export interface EdgarSummary {
   recentOffering: boolean
   recent8K: boolean
   insiderForm4: boolean
+  /** SC 13D/13G in the last ~30 days = a 5%+ stake was disclosed (smart money) */
+  stakeBuilding: boolean
   latest: Filing | null
 }
 
 const OFFERING_RE = /^(S-1|S-3|424B|F-1|F-3)/i
+const STAKE_RE = /^SC ?13[DG]/i
 
 function ymdDaysAgo(days: number): string {
   const d = new Date(Date.now() - days * 86_400_000)
   return d.toISOString().slice(0, 10)
 }
 
-/** Classify a recent-filing list (pure). Windows: offering/8-K 30d, Form 4 14d. */
+/** Classify a recent-filing list (pure). Windows: offering/8-K/13D 30d, Form 4 14d. */
 export function classifyFilings(filings: Filing[], since30 = ymdDaysAgo(30), since14 = ymdDaysAgo(14)): EdgarSummary {
   let recentOffering = false
   let recent8K = false
   let insiderForm4 = false
+  let stakeBuilding = false
   let latest: Filing | null = null
   for (const f of filings) {
     if (!latest || f.date > latest.date) latest = f
     if (f.date >= since30 && OFFERING_RE.test(f.form)) recentOffering = true
     if (f.date >= since30 && f.form === '8-K') recent8K = true
+    if (f.date >= since30 && STAKE_RE.test(f.form)) stakeBuilding = true
     if (f.date >= since14 && (f.form === '4' || f.form === '4/A')) insiderForm4 = true
   }
-  return { recentOffering, recent8K, insiderForm4, latest }
+  return { recentOffering, recent8K, insiderForm4, stakeBuilding, latest }
 }
 
 /** Recent filings for a ticker (last ~40), newest first. Cached per ticker. */

@@ -97,6 +97,7 @@ interface Status {
   aiTone?: boolean
   session: string
   regime?: RegimeInfo | null
+  macro?: { name: string; date: string; daysAway: number } | null
   riskDollars?: number
   aiDebate?: boolean
 }

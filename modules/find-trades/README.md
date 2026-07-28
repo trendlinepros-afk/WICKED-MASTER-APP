@@ -145,6 +145,18 @@ tier) writes the strongest concrete case AGAINST each pick, then a **risk judge*
 the Score; non-Take picks show their bear case under the thesis. Two extra AI
 calls per search; best-effort (a failure never blocks results).
 
+## Free data moat (Wall St #5)
+
+- **5%+ stake filings** — SC 13D/13G within ~30 days (EDGAR, free) shows as a
+  green **"5% stake filed"** chip: someone big disclosed a position.
+- **FINRA short-sale volume** (`market/finra.ts`, free, no key) — what % of the
+  day's tape was sold short, from FINRA's daily CNMS file (cached one fetch/day);
+  **Short-vol 60%+** highlights heavy shorting pressure / squeeze fuel. Fills the
+  gap when Finnhub's short-interest field is premium.
+- **Macro calendar** (`market/macro.ts`, pure) — a header chip warns when an
+  **FOMC decision or CPI print** is within 5 days, and the AI ranker is told to
+  respect it. 2026 schedules hardcoded — verify/extend annually.
+
 ## Performance & validation (Wall St #1 — the proof loop)
 
 The **Performance** button opens the validation panel:
