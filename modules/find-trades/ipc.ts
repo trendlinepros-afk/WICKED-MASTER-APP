@@ -1,3 +1,4 @@
+import { Notification } from 'electron'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
 import { marketSession } from '../stock-planner/ipc/market/sessions'
@@ -29,6 +30,14 @@ import {
   type ScreenPlan
 } from './lib/plan'
 import { buildTonePrompt, fetchMentionCounts, fetchTrending, gradeGrowth, parseTones, rateTicker, tallyMentions, validTicker, type Tone } from './ipc/x'
+import {
+  emptyAlerts,
+  evalAlerts,
+  hasAnyAlert,
+  normalizeItem,
+  pickNewlyFired,
+  type WatchItem
+} from './lib/watch'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -816,4 +825,146 @@ export default function register(ctx: ModuleIpcContext): void {
       return { ok: false, error: errMsg(err) }
     }
   })
+
+  /* ---------------------------- watchlist + alerts ---------------------- */
+
+  const WATCH_KEY = `${ID}.watchlist`
+  const MONITOR_KEY = `${ID}.monitorEnabled`
+  const ALERT_COOLDOWN_MS = 4 * 60 * 60 * 1000
+  const MONITOR_INTERVAL_MS = 120_000
+  const asObj = (raw: unknown): Record<string, unknown> => (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+
+  const readWatch = (): WatchItem[] =>
+    (ctx.storeGet<unknown[]>(WATCH_KEY, []) || []).map(normalizeItem).filter((x): x is WatchItem => x !== null)
+  const writeWatch = (items: WatchItem[]): void => ctx.storeSet(WATCH_KEY, items)
+  const getMonitor = (): boolean => ctx.storeGet<boolean>(MONITOR_KEY, true) !== false
+
+  ctx.ipcMain.handle(`${ID}:watch-list`, () => ({ ok: true, items: readWatch(), monitor: getMonitor() }))
+
+  ctx.ipcMain.handle(`${ID}:watch-add`, (_e, raw) => {
+    const r = asObj(raw)
+    const ticker = String(r.ticker ?? '').trim().toUpperCase().replace(/^\$/, '')
+    if (!validTicker(ticker)) return { ok: false, error: 'Enter a valid ticker (1–6 letters).' }
+    const items = readWatch()
+    const existing = items.find((i) => i.ticker === ticker)
+    if (existing) {
+      if (r.alerts) existing.alerts = normalizeItem({ ticker, alerts: r.alerts })?.alerts ?? existing.alerts
+    } else {
+      items.unshift({ ticker, addedAt: Date.now(), alerts: r.alerts ? normalizeItem({ ticker, alerts: r.alerts })?.alerts ?? emptyAlerts() : emptyAlerts(), lastFired: {} })
+    }
+    writeWatch(items)
+    return { ok: true, items }
+  })
+
+  ctx.ipcMain.handle(`${ID}:watch-remove`, (_e, raw) => {
+    const ticker = String(asObj(raw).ticker ?? '').trim().toUpperCase()
+    const items = readWatch().filter((i) => i.ticker !== ticker)
+    writeWatch(items)
+    return { ok: true, items }
+  })
+
+  ctx.ipcMain.handle(`${ID}:watch-update`, (_e, raw) => {
+    const r = asObj(raw)
+    const ticker = String(r.ticker ?? '').trim().toUpperCase()
+    const items = readWatch()
+    const it = items.find((i) => i.ticker === ticker)
+    if (!it) return { ok: false, error: 'Not on the watchlist.' }
+    it.alerts = normalizeItem({ ticker, alerts: r.alerts })?.alerts ?? it.alerts
+    it.lastFired = {} // new thresholds should be free to fire
+    writeWatch(items)
+    return { ok: true, items }
+  })
+
+  ctx.ipcMain.handle(`${ID}:watch-clear`, () => {
+    writeWatch([])
+    return { ok: true, items: [] }
+  })
+
+  ctx.ipcMain.handle(`${ID}:monitor-set`, (_e, raw) => {
+    const on = asObj(raw).on
+    if (typeof on === 'boolean') ctx.storeSet(MONITOR_KEY, on)
+    return { ok: true, monitor: getMonitor() }
+  })
+
+  // Background monitor: every 2 min while enabled + market not fully closed,
+  // fetch quotes for watched tickers, fire NEW alerts (edge-triggered, 4h
+  // anti-flap cooldown) as a system notification + an in-app event.
+  let checking = false
+  const checkAlerts = async (): Promise<void> => {
+    if (checking || !getMonitor()) return
+    const withAlerts = readWatch().filter((i) => hasAnyAlert(i.alerts))
+    if (withAlerts.length === 0) return
+    const massiveKey = ctx.getApiKey('massive')
+    if (!massiveKey || marketSession() === 'closed') return
+    checking = true
+    try {
+      const snap = await getFullSnapshot(massiveKey)
+      const byT = new Map(snap.map((r) => [r.ticker, r]))
+      const now = Date.now()
+      const all = readWatch()
+      let changed = false
+      const fired: { ticker: string; condition: string; message: string; at: number }[] = []
+      for (const item of all) {
+        if (!hasAnyAlert(item.alerts)) continue
+        const row = byT.get(item.ticker)
+        if (!row) continue
+        const q = resolveQuote(row, row.prevDay ?? null)
+        let rvol: number | null = null
+        let pct52: number | null = null
+        if (item.alerts.rvolAbove != null || item.alerts.nearHigh) {
+          try {
+            const bars = await dailyBars(massiveKey, item.ticker)
+            const sig = computeSignals(bars, {
+              price: q.price,
+              todayVolume: q.volume,
+              dayOpen: typeof row.day?.o === 'number' ? row.day.o : null,
+              prevClose: typeof row.prevDay?.c === 'number' ? row.prevDay.c : null
+            })
+            rvol = sig.rvol
+            pct52 = sig.pctFrom52High
+          } catch {
+            /* signal-based conditions just won't fire this tick */
+          }
+        }
+        const current = evalAlerts(item, { price: q.price, changePct: q.changePct, rvol, pctFrom52High: pct52 })
+        for (const c of pickNewlyFired(current, item.lastFired, now, ALERT_COOLDOWN_MS)) {
+          item.lastFired[c.condition] = now
+          fired.push({ ticker: item.ticker, condition: c.condition, message: c.message, at: now })
+          changed = true
+        }
+        const trueKeys = new Set(current.map((c) => c.condition))
+        for (const k of Object.keys(item.lastFired)) {
+          if (!trueKeys.has(k)) {
+            delete item.lastFired[k]
+            changed = true
+          }
+        }
+      }
+      if (changed) writeWatch(all)
+      if (fired.length > 0) {
+        try {
+          if (Notification.isSupported()) {
+            const title = fired.length === 1 ? `📈 ${fired[0].ticker} alert` : `📈 ${fired.length} watchlist alerts`
+            const n = new Notification({ title, body: fired.slice(0, 5).map((f) => f.message).join('\n') })
+            n.on('click', () => {
+              const w = ctx.getMainWindow()
+              if (w) {
+                if (w.isMinimized()) w.restore()
+                w.focus()
+              }
+            })
+            n.show()
+          }
+        } catch {
+          /* notifications not available */
+        }
+        ctx.getMainWindow()?.webContents.send(`${ID}:alerts`, fired)
+      }
+    } catch {
+      /* transient — try again next tick */
+    } finally {
+      checking = false
+    }
+  }
+  setInterval(() => void checkAlerts(), MONITOR_INTERVAL_MS)
 }

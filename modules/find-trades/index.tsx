@@ -1,22 +1,26 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   BarChart2,
+  Bell,
   ExternalLink,
   Flame,
   Loader2,
+  Plus,
   Radar,
   RefreshCw,
   Send,
   Sparkles,
+  Star,
   Trash2,
   TrendingUp,
   X as XIcon
 } from 'lucide-react'
-import { useFindTrades, type ChatMsg, type MentionBucket } from './store'
+import { ID, useFindTrades, type ChatMsg, type MentionBucket } from './store'
 import type { Pick, TrendRow } from './ipc'
+import type { WatchAlerts, WatchItem } from './lib/watch'
 
 /** Time windows for the X trending pull (mirrors ipc/x.ts X_WINDOWS). */
 const X_WINDOWS = [
@@ -62,6 +66,8 @@ const EXAMPLES = [
 ]
 
 function PickCard({ p }: { p: Pick }): React.JSX.Element {
+  const s = useFindTrades()
+  const onList = s.watchlist.some((w) => w.ticker === p.ticker)
   return (
     <div className="rounded-xl border border-edge bg-surface p-3">
       <div className="flex items-start justify-between gap-2">
@@ -123,6 +129,13 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
             </div>
           )}
         </div>
+        <button
+          onClick={() => (onList ? void s.watchRemove(p.ticker) : void s.watchAdd(p.ticker))}
+          title={onList ? 'On your watchlist — click to remove' : 'Add to watchlist'}
+          className="shrink-0 rounded p-1 text-muted hover:text-warn"
+        >
+          <Star size={15} className={onList ? 'fill-warn text-warn' : ''} />
+        </button>
       </div>
       {p.thesis && <p className="mt-2 text-sm text-ink/90">{p.thesis}</p>}
       {p.plan && (
@@ -498,12 +511,181 @@ function TrendingPanel(): React.JSX.Element | null {
   )
 }
 
+function numOrEmpty(v: number | null): string {
+  return v == null ? '' : String(v)
+}
+
+function WatchRow({ item }: { item: WatchItem }): React.JSX.Element {
+  const s = useFindTrades()
+  const [open, setOpen] = useState(false)
+  const [a, setA] = useState<WatchAlerts>(item.alerts)
+  const set = (patch: Partial<WatchAlerts>): void => setA({ ...a, ...patch })
+  const numField = (v: string): number | null => {
+    const n = Number(v)
+    return v.trim() === '' || !Number.isFinite(n) ? null : n
+  }
+  const activeCount = [a.priceAbove, a.priceBelow, a.changeAbovePct, a.rvolAbove].filter((x) => x != null).length + (a.nearHigh ? 1 : 0)
+  const inputCls = 'w-20 rounded border border-edge bg-raised px-1.5 py-1 text-xs outline-none focus:border-accent'
+  const lbl = 'flex items-center justify-between gap-2 text-xs'
+  return (
+    <div className="border-b border-edge/50 px-3 py-2 last:border-b-0">
+      <div className="flex items-center gap-2">
+        <span className="font-bold">{item.ticker}</span>
+        <button onClick={() => setOpen(!open)} className="rounded bg-raised px-2 py-0.5 text-[11px] text-muted hover:text-ink">
+          <Bell size={11} className="mr-1 inline" />
+          {activeCount > 0 ? `${activeCount} alert${activeCount === 1 ? '' : 's'}` : 'Add alerts'}
+        </button>
+        <button onClick={() => void s.watchRemove(item.ticker)} className="ml-auto rounded p-1 text-muted hover:text-danger" title="Remove">
+          <Trash2 size={13} />
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2 space-y-1.5 rounded-lg bg-raised/40 p-2.5">
+          <div className={lbl}>
+            <span className="text-muted">Price rises above $</span>
+            <input value={numOrEmpty(a.priceAbove)} onChange={(e) => set({ priceAbove: numField(e.target.value) })} inputMode="decimal" className={inputCls} />
+          </div>
+          <div className={lbl}>
+            <span className="text-muted">Price falls below $</span>
+            <input value={numOrEmpty(a.priceBelow)} onChange={(e) => set({ priceBelow: numField(e.target.value) })} inputMode="decimal" className={inputCls} />
+          </div>
+          <div className={lbl}>
+            <span className="text-muted">Up more than (% today)</span>
+            <input value={numOrEmpty(a.changeAbovePct)} onChange={(e) => set({ changeAbovePct: numField(e.target.value) })} inputMode="decimal" className={inputCls} />
+          </div>
+          <div className={lbl}>
+            <span className="text-muted">Volume spike (RVOL ≥)</span>
+            <input value={numOrEmpty(a.rvolAbove)} onChange={(e) => set({ rvolAbove: numField(e.target.value) })} inputMode="decimal" className={inputCls} />
+          </div>
+          <label className={`${lbl} cursor-pointer`}>
+            <span className="text-muted">At/near 52-week high</span>
+            <input type="checkbox" checked={a.nearHigh} onChange={(e) => set({ nearHigh: e.target.checked })} className="h-4 w-4 accent-[rgb(var(--wk-accent))]" />
+          </label>
+          <button
+            onClick={() => {
+              void s.watchUpdate(item.ticker, a)
+              setOpen(false)
+            }}
+            className="mt-1 w-full rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90"
+          >
+            Save alerts
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WatchlistModal(): React.JSX.Element {
+  const s = useFindTrades()
+  const [add, setAdd] = useState('')
+  const noMarket = s.status && !s.status.hasMassive
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={() => s.setWatchOpen(false)}>
+      <div className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <Star size={15} className="text-warn" />
+          <span className="text-sm font-semibold">Watchlist &amp; alerts</span>
+          <button onClick={() => s.setWatchOpen(false)} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <XIcon size={15} />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <input type="checkbox" checked={s.monitorEnabled} onChange={(e) => void s.setMonitor(e.target.checked)} className="h-4 w-4 accent-[rgb(var(--wk-accent))]" />
+            <span className="font-medium">Background alerts {s.monitorEnabled ? 'on' : 'off'}</span>
+          </label>
+          <span className="ml-auto text-[10px] text-muted">checks every ~2 min</span>
+        </div>
+
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
+          <div className="flex flex-1 items-center overflow-hidden rounded-lg border border-edge bg-raised">
+            <span className="pl-2 text-xs text-muted">$</span>
+            <input
+              value={add}
+              onChange={(e) => setAdd(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && add) {
+                  void s.watchAdd(add)
+                  setAdd('')
+                }
+              }}
+              placeholder="Add a ticker (e.g. NVDA)"
+              className="min-w-0 flex-1 bg-transparent px-1.5 py-2 text-sm uppercase outline-none"
+            />
+          </div>
+          <button
+            onClick={() => {
+              if (add) {
+                void s.watchAdd(add)
+                setAdd('')
+              }
+            }}
+            disabled={!add}
+            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            <Plus size={14} /> Add
+          </button>
+        </div>
+
+        {noMarket && (
+          <div className="flex items-start gap-2 border-b border-edge bg-warn/10 px-4 py-2 text-xs text-warn">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            Add your Massive / Polygon key so alerts can check live prices.
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {s.watchlist.length === 0 ? (
+            <div className="p-6 text-center text-sm text-muted">
+              No tickers yet. Add one above, or tap the ☆ on any result to track it — then set price / % / volume /
+              52-week-high alerts.
+            </div>
+          ) : (
+            s.watchlist.map((it) => <WatchRow key={it.ticker} item={it} />)
+          )}
+        </div>
+
+        {s.alerts.length > 0 && (
+          <div className="border-t border-edge px-4 py-2">
+            <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted">
+              Recent alerts
+              <button onClick={() => s.clearAlerts()} className="text-muted hover:text-ink">
+                clear
+              </button>
+            </div>
+            <div className="max-h-28 space-y-1 overflow-y-auto text-xs text-muted">
+              {s.alerts.slice(0, 10).map((al, i) => (
+                <div key={i} className="flex items-start gap-1.5">
+                  <Bell size={11} className="mt-0.5 shrink-0 text-warn" />
+                  <span>{al.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {s.watchlist.length > 0 && (
+          <div className="border-t border-edge px-4 py-2 text-right">
+            <button onClick={() => void s.watchClear()} className="text-xs text-muted hover:text-danger">
+              Clear watchlist
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function FindTrades(): React.JSX.Element {
   const s = useFindTrades()
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     void s.loadStatus()
+    const off = window.wicked.on(`${ID}:alerts`, (p) => s._onAlerts(p))
+    return () => off()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
@@ -525,12 +707,38 @@ export default function FindTrades(): React.JSX.Element {
             Describe what you&apos;re hunting — the AI screens the live market {s.status ? `· market ${s.status.session}` : ''}
           </p>
         </div>
+        <button
+          onClick={() => s.setWatchOpen(true)}
+          className="relative flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60"
+          title="Watchlist & alerts"
+        >
+          <Star size={14} className={s.watchlist.length > 0 ? 'text-warn' : ''} /> Watchlist
+          {s.watchlist.length > 0 && <span className="text-xs text-muted">({s.watchlist.length})</span>}
+          {s.alerts.length > 0 && <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">{s.alerts.length}</span>}
+        </button>
         {s.chat.length > 0 && (
           <button onClick={s.clear} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
             <Trash2 size={14} /> Clear
           </button>
         )}
       </header>
+
+      {s.alerts.length > 0 && (
+        <div className="border-b border-warn/40 bg-warn/10 px-5 py-2">
+          {s.alerts.slice(0, 3).map((al, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <Bell size={13} className="shrink-0 text-warn" />
+              <span className="min-w-0 flex-1 break-words">{al.message}</span>
+              <button onClick={() => s.dismissAlert(i)} className="rounded p-0.5 text-muted hover:text-ink">
+                <XIcon size={13} />
+              </button>
+            </div>
+          ))}
+          {s.alerts.length > 3 && <div className="pl-5 text-xs text-muted">+{s.alerts.length - 3} more — open Watchlist to see all</div>}
+        </div>
+      )}
+
+      {s.watchOpen && <WatchlistModal />}
 
       {(noMarket || noAi) && (
         <div className="flex items-center gap-2 border-b border-warn/40 bg-warn/10 px-5 py-2 text-sm">

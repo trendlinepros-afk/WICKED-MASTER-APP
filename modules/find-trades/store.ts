@@ -1,6 +1,14 @@
 import { create } from 'zustand'
 import type { Pick, ScanRecord, TrendRow } from './ipc'
 import type { ScreenPlan } from './lib/plan'
+import type { WatchAlerts, WatchItem } from './lib/watch'
+
+export interface FiredAlert {
+  ticker: string
+  condition: string
+  message: string
+  at: number
+}
 
 export const ID = 'find-trades'
 
@@ -140,6 +148,12 @@ interface State {
   xCountsArchiveNeeded: boolean
   xLookup: string
 
+  // watchlist + alerts
+  watchlist: WatchItem[]
+  monitorEnabled: boolean
+  alerts: FiredAlert[]
+  watchOpen: boolean
+
   setInput: (v: string) => void
   dismissError: () => void
   loadStatus: () => Promise<void>
@@ -147,6 +161,16 @@ interface State {
   clear: () => void
   loadPresets: () => Promise<void>
   runPreset: (id: string) => Promise<void>
+  loadWatch: () => Promise<void>
+  watchAdd: (ticker: string, alerts?: WatchAlerts) => Promise<void>
+  watchRemove: (ticker: string) => Promise<void>
+  watchUpdate: (ticker: string, alerts: WatchAlerts) => Promise<void>
+  watchClear: () => Promise<void>
+  setMonitor: (on: boolean) => Promise<void>
+  setWatchOpen: (v: boolean) => void
+  dismissAlert: (i: number) => void
+  clearAlerts: () => void
+  _onAlerts: (fired: unknown) => void
   setXWindow: (id: string) => void
   setScanSize: (n: number) => Promise<void>
   setAiTone: (on: boolean) => Promise<void>
@@ -165,6 +189,11 @@ export const useFindTrades = create<State>((set, get) => ({
   busy: false,
   error: '',
   presets: [],
+
+  watchlist: [],
+  monitorEnabled: true,
+  alerts: [],
+  watchOpen: false,
 
   xWindow: '24h',
   xScanSize: 100,
@@ -206,11 +235,55 @@ export const useFindTrades = create<State>((set, get) => ({
       if (st.hasX) void get().loadHistory()
     }
     void get().loadPresets()
+    void get().loadWatch()
   },
 
   loadPresets: async () => {
     const res = await invoke<{ ok: boolean; presets?: PresetInfo[] }>('presets')
     if (res.ok) set({ presets: res.presets ?? [] })
+  },
+
+  loadWatch: async () => {
+    const res = await invoke<{ ok: boolean; items?: WatchItem[]; monitor?: boolean }>('watch-list')
+    if (res.ok) set({ watchlist: res.items ?? [], monitorEnabled: res.monitor !== false })
+  },
+
+  watchAdd: async (ticker, alerts) => {
+    const res = await invoke<{ ok: boolean; items?: WatchItem[]; error?: string }>('watch-add', { ticker, alerts })
+    if (res.ok) set({ watchlist: res.items ?? get().watchlist })
+    else set({ error: res.error ?? 'Could not add to watchlist.' })
+  },
+
+  watchRemove: async (ticker) => {
+    const res = await invoke<{ ok: boolean; items?: WatchItem[] }>('watch-remove', { ticker })
+    if (res.ok) set({ watchlist: res.items ?? get().watchlist })
+  },
+
+  watchUpdate: async (ticker, alerts) => {
+    const res = await invoke<{ ok: boolean; items?: WatchItem[]; error?: string }>('watch-update', { ticker, alerts })
+    if (res.ok) set({ watchlist: res.items ?? get().watchlist })
+    else set({ error: res.error ?? 'Could not update alerts.' })
+  },
+
+  watchClear: async () => {
+    const res = await invoke<{ ok: boolean; items?: WatchItem[] }>('watch-clear')
+    if (res.ok) set({ watchlist: res.items ?? [] })
+  },
+
+  setMonitor: async (on) => {
+    set({ monitorEnabled: on })
+    await invoke('monitor-set', { on })
+  },
+
+  setWatchOpen: (v) => set({ watchOpen: v }),
+
+  dismissAlert: (i) => set({ alerts: get().alerts.filter((_, idx) => idx !== i) }),
+
+  clearAlerts: () => set({ alerts: [] }),
+
+  _onAlerts: (raw) => {
+    const list = Array.isArray(raw) ? (raw as FiredAlert[]) : []
+    if (list.length > 0) set({ alerts: [...list, ...get().alerts].slice(0, 20) })
   },
 
   // A one-click deterministic scan (no AI cost) rendered like a chat answer.

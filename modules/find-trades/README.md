@@ -75,6 +75,21 @@ Filterable via `insiderBuying`, `minAnalystBull`, `minShortPctFloat`,
 and surfaced as row chips + fed to the AI ranker. Extras are cached ~30 min/ticker
 and capped to the top 12 to stay friendly to Finnhub's rate limit.
 
+## Watchlist &amp; alerts
+
+Star any result (or add a ticker in the **Watchlist** dialog) to track it, then set
+per-ticker alerts: **price above / below**, **up % today**, **volume spike (RVOL
+≥)**, **at/near 52-week high** (`lib/watch.ts`, pure + unit-tested).
+
+A **background monitor** (toggle in the dialog, **on by default**) checks the
+watchlist every ~2 minutes while the market isn't fully closed, and fires **new**
+alerts as a **system notification** + an in-app banner. Alerts are edge-triggered
+with a 4-hour anti-flap cooldown (a price hovering at a threshold won't spam), and
+re-arm once the condition goes false. Everything persists in the shell store
+(`find-trades.watchlist` / `.monitorEnabled`). Price/%/RVOL/52w come from the same
+Massive snapshot + daily-bar signals the screener uses (cached), so monitoring is
+light — but it does poll while enabled, hence the off switch.
+
 ## One-click scans (presets)
 
 Deterministic scanners on the empty screen — **no AI cost** — that map straight to
