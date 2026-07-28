@@ -28,7 +28,7 @@ import {
   type Candidate,
   type ScreenPlan
 } from './lib/plan'
-import { fetchMentionCounts, fetchTrending, gradeGrowth, rateTicker, tallyMentions, validTicker } from './ipc/x'
+import { buildTonePrompt, fetchMentionCounts, fetchTrending, gradeGrowth, parseTones, rateTicker, tallyMentions, validTicker, type Tone } from './ipc/x'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -123,6 +123,8 @@ export interface ScanRecord {
   endpoint: string
   marketValidated: boolean
   note: string
+  /** how post tone was read: 'keywords' or 'AI (provider)' */
+  toneBy?: string
   rows: TrendRow[]
 }
 
@@ -467,12 +469,16 @@ export default function register(ctx: ModuleIpcContext): void {
   // pulls can be re-viewed for free.
   const SCAN_KEY = `${ID}.xScanSize`
   const HISTORY_KEY = `${ID}.xScanHistory`
+  const AITONE_KEY = `${ID}.xAiTone`
   const HISTORY_CAP = 20
   const xCache = new Map<string, { at: number; payload: Record<string, unknown> }>()
   const X_TTL_MS = 30 * 60 * 1000
 
   const clampScanSize = (n: number): number => (n === 200 ? 200 : n === 300 ? 300 : 100)
   const getScanSize = (): number => clampScanSize(Number(ctx.storeGet<number>(SCAN_KEY, 100)))
+  const hasAiKey = (): boolean => !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai'))
+  // AI tone read defaults ON (a single cheap batched call per scan).
+  const getAiTone = (): boolean => ctx.storeGet<boolean>(AITONE_KEY, true) !== false
   const readHistory = (): ScanRecord[] => {
     const v = ctx.storeGet<ScanRecord[]>(HISTORY_KEY, [])
     return Array.isArray(v) ? v : []
@@ -482,7 +488,9 @@ export default function register(ctx: ModuleIpcContext): void {
     ok: true,
     hasX: !!ctx.getApiKey('x'),
     hasMassive: !!ctx.getApiKey('massive'),
-    scanSize: getScanSize()
+    hasAi: hasAiKey(),
+    scanSize: getScanSize(),
+    aiTone: getAiTone()
   }))
 
   ctx.ipcMain.handle(`${ID}:x-set-scan-size`, (_e, raw: unknown) => {
@@ -490,6 +498,12 @@ export default function register(ctx: ModuleIpcContext): void {
     const size = clampScanSize(Number(r.size))
     ctx.storeSet(SCAN_KEY, size)
     return { ok: true, scanSize: size }
+  })
+
+  ctx.ipcMain.handle(`${ID}:x-set-ai-tone`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    if (typeof r.on === 'boolean') ctx.storeSet(AITONE_KEY, r.on)
+    return { ok: true, aiTone: getAiTone() }
   })
 
   ctx.ipcMain.handle(`${ID}:x-history`, () => ({ ok: true, history: readHistory() }))
@@ -513,7 +527,26 @@ export default function register(ctx: ModuleIpcContext): void {
       if (!res.ok && res.tweets.length === 0)
         return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
 
-      const tallies = tallyMentions(res.tweets)
+      // AI tone read (default on): ONE cheap batched call classifies every post's
+      // tone; falls back to the keyword lexicon on any failure or when off.
+      let tones: Tone[] | undefined
+      let toneBy = 'keywords'
+      if (getAiTone() && hasAiKey() && res.tweets.length > 0) {
+        try {
+          const toneRes = await callAi(
+            aiKeys(),
+            [{ role: 'user', text: buildTonePrompt(res.tweets.map((t) => t.text)) }],
+            { json: true, tier: 'lite' }
+          )
+          if (toneRes.ok) {
+            tones = parseTones(toneRes.text, res.tweets.length)
+            toneBy = `AI (${toneRes.provider})`
+          }
+        } catch {
+          /* fall back to lexicon */
+        }
+      }
+      const tallies = tallyMentions(res.tweets, tones)
 
       // Validate + enrich against the live market snapshot: drops junk cashtags
       // ($ROPE, $$$) and attaches price/change/volume for the rating.
@@ -571,6 +604,7 @@ export default function register(ctx: ModuleIpcContext): void {
         endpoint: res.endpoint,
         marketValidated: haveMarket,
         note: res.error ?? '',
+        toneBy,
         rows
       }
       const history = [record, ...readHistory().filter((h) => h.id !== record.id)].slice(0, HISTORY_CAP)
@@ -587,6 +621,7 @@ export default function register(ctx: ModuleIpcContext): void {
         marketValidated: haveMarket,
         generatedAt: now,
         note: res.error ?? '',
+        toneBy,
         cached: false
       }
       xCache.set(cacheKey, { at: now, payload: { ...payload, cached: true } })

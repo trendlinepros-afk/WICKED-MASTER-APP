@@ -401,6 +401,16 @@ function TrendingPanel(): React.JSX.Element | null {
               </select>
             </label>
           )}
+          <label className="flex cursor-pointer items-center gap-1 text-[11px] text-muted" title="Use AI to read each post's tone for the Proposed Growth grade (one cheap batched call per scan). Off = keyword lexicon.">
+            <input
+              type="checkbox"
+              checked={s.xAiTone}
+              onChange={(e) => void s.setAiTone(e.target.checked)}
+              disabled={s.xBusy}
+              className="h-3.5 w-3.5 accent-[rgb(var(--wk-accent))]"
+            />
+            AI tone read
+          </label>
           <span className="text-[10px] text-muted">≈ ${cost}/scan</span>
         </div>
       )}
@@ -478,6 +488,7 @@ function TrendingPanel(): React.JSX.Element | null {
               {shownWinLabel} scan · {s.xSampled} tweets{s.xMarketValidated ? ' · validated against live market data' : ''} ·{' '}
               {agoLabel(s.xGeneratedAt)}
             </span>
+            {s.xToneBy && <span>tone by {s.xToneBy}</span>}
             {s.xNote && <span className="text-warn">{s.xNote}</span>}
             <span>Heat = buzz + momentum + sentiment · Growth = post-tone lean (positive/hopeful/negative), not a forecast.</span>
           </div>

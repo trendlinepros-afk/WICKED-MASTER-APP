@@ -102,6 +102,51 @@ export function scoreSentiment(text: string): number {
   return analyzePost(text).sentiment
 }
 
+/** Sentiment + growth values for an (AI- or lexicon-) assigned tone. */
+export function toneScores(tone: Tone): { sentiment: number; growth: number } {
+  return tone === 'positive'
+    ? { sentiment: 1, growth: 1 }
+    : tone === 'hopeful'
+      ? { sentiment: 0.5, growth: 0.5 }
+      : tone === 'negative'
+        ? { sentiment: -1, growth: -1 }
+        : { sentiment: 0, growth: 0 }
+}
+
+/* ------------------------------ AI tone read ----------------------------- */
+
+/** One batched prompt to tone-classify every post (cheap: a single AI call). */
+export function buildTonePrompt(texts: string[]): string {
+  const lines = texts.map((t, i) => `${i + 1}. ${t.replace(/\s+/g, ' ').slice(0, 240)}`).join('\n')
+  return (
+    'You classify social posts about stocks. For EACH numbered post, output its overall tone toward the stock(s) it ' +
+    'mentions: "positive" (confirmed good news / bullish), "hopeful" (forward-looking optimism that has NOT happened yet), ' +
+    '"negative" (bad news / bearish), or "neutral". ' +
+    `Return ONLY a JSON array of ${texts.length} lowercase strings in the same order — nothing else.\n\nPosts:\n${lines}`
+  )
+}
+
+/** Parse the AI's tone array back to exactly n valid tones (default neutral). */
+export function parseTones(raw: string, n: number): Tone[] {
+  const valid = new Set(['positive', 'hopeful', 'negative', 'neutral'])
+  let parsed: unknown = []
+  try {
+    let s = raw.trim()
+    const f = s.match(/\[[\s\S]*\]/)
+    if (f) s = f[0]
+    parsed = JSON.parse(s)
+  } catch {
+    parsed = []
+  }
+  const list = Array.isArray(parsed) ? parsed : []
+  const out: Tone[] = []
+  for (let i = 0; i < n; i++) {
+    const v = String(list[i] ?? '').toLowerCase().trim()
+    out.push((valid.has(v) ? v : 'neutral') as Tone)
+  }
+  return out
+}
+
 /**
  * PROPOSED GROWTH grade for a ticker from the average tone of its posts. This is
  * a crowd-sentiment LEAN, not a forecast — the implied % is intentionally
@@ -211,14 +256,20 @@ export interface Tally {
   neutral: number
 }
 
-/** Count mentions per ticker across tweets, with tone breakdown + growth lean. */
-export function tallyMentions(tweets: XTweet[]): Tally[] {
+/**
+ * Count mentions per ticker across tweets, with tone breakdown + growth lean.
+ * When `tones` is supplied (AI tone read, aligned by index) it overrides the
+ * lexicon classification; otherwise the lexicon `analyzePost` is used.
+ */
+export function tallyMentions(tweets: XTweet[], tones?: Tone[]): Tally[] {
   const map = new Map<
     string,
     { mentions: number; engagement: number; sSum: number; gSum: number; positive: number; hopeful: number; negative: number; neutral: number }
   >()
-  for (const tw of tweets) {
-    const a = analyzePost(tw.text)
+  for (let i = 0; i < tweets.length; i++) {
+    const tw = tweets[i]
+    const a =
+      tones && tones[i] ? { tone: tones[i], ...toneScores(tones[i]) } : analyzePost(tw.text)
     for (const tag of tw.cashtags) {
       const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, gSum: 0, positive: 0, hopeful: 0, negative: 0, neutral: 0 }
       e.mentions++

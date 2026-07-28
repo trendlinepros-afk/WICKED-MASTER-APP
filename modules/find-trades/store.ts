@@ -19,6 +19,7 @@ interface Status {
   hasAi: boolean
   hasX: boolean
   scanSize?: number
+  aiTone?: boolean
   session: string
 }
 
@@ -44,6 +45,7 @@ interface TrendingRes {
   marketValidated?: boolean
   generatedAt?: number
   note?: string
+  toneBy?: string
   history?: ScanRecord[]
 }
 
@@ -91,6 +93,7 @@ function showRecord(set: (p: Partial<State>) => void, rec: ScanRecord): void {
     xMarketValidated: rec.marketValidated,
     xGeneratedAt: rec.generatedAt,
     xNote: rec.note,
+    xToneBy: rec.toneBy ?? '',
     xError: '',
     xArchiveNeeded: false
   })
@@ -113,6 +116,8 @@ interface State {
   // "Trending on X" panel — scans are user-triggered, saved to history
   xWindow: string // the window the NEXT scan will use
   xScanSize: number // tweets per scan (100 | 200 | 300)
+  xAiTone: boolean // AI tone read (default on) vs keyword lexicon
+  xToneBy: string // how the displayed scan read tone
   xRows: TrendRow[] // currently displayed scan
   xShownId: string | null // id of the displayed scan (null = none yet)
   xShownWindow: string // window of the displayed scan
@@ -144,6 +149,7 @@ interface State {
   runPreset: (id: string) => Promise<void>
   setXWindow: (id: string) => void
   setScanSize: (n: number) => Promise<void>
+  setAiTone: (on: boolean) => Promise<void>
   loadHistory: () => Promise<void>
   scanTweets: () => Promise<void>
   selectScan: (id: string) => void
@@ -162,6 +168,8 @@ export const useFindTrades = create<State>((set, get) => ({
 
   xWindow: '24h',
   xScanSize: 100,
+  xAiTone: true,
+  xToneBy: '',
   xRows: [],
   xShownId: null,
   xShownWindow: '24h',
@@ -192,6 +200,7 @@ export const useFindTrades = create<State>((set, get) => ({
       const st = res as unknown as Status
       set({ status: st })
       if (typeof st.scanSize === 'number') set({ xScanSize: st.scanSize })
+      if (typeof st.aiTone === 'boolean') set({ xAiTone: st.aiTone })
       // Reading saved history is FREE (no API call) — populate the dropdown and
       // show the most recent past scan. Scanning itself is user-triggered.
       if (st.hasX) void get().loadHistory()
@@ -248,6 +257,11 @@ export const useFindTrades = create<State>((set, get) => ({
     await invoke('x-set-scan-size', { size })
   },
 
+  setAiTone: async (on) => {
+    set({ xAiTone: on })
+    await invoke('x-set-ai-tone', { on })
+  },
+
   loadHistory: async () => {
     const res = await invoke<{ ok: boolean; history?: ScanRecord[] }>('x-history')
     if (!res.ok) return
@@ -277,6 +291,7 @@ export const useFindTrades = create<State>((set, get) => ({
         endpoint: res.endpoint ?? '',
         marketValidated: res.marketValidated === true,
         note: res.note ?? '',
+        toneBy: res.toneBy,
         rows: res.rows ?? []
       })
     } catch (err) {
