@@ -239,6 +239,9 @@ interface State {
   outBusy: boolean
   outcomes: OutcomesData | null
   outError: string
+  auditCount: number
+  auditEntries: { at: number; kind: string; query: string; regime?: string | null; picks?: { ticker: string; score: number | null; verdict?: string | null }[] }[]
+  healthRows: { source: string; lastOk: number | null; lastFail: number | null; note: string }[]
 
   setInput: (v: string) => void
   dismissError: () => void
@@ -263,6 +266,9 @@ interface State {
   runBacktest: () => Promise<void>
   loadLastBacktest: () => Promise<void>
   loadOutcomes: () => Promise<void>
+  loadAudit: () => Promise<void>
+  exportAudit: () => Promise<void>
+  loadHealth: () => Promise<void>
   _onBtProgress: (p: unknown) => void
   setXWindow: (id: string) => void
   setScanSize: (n: number) => Promise<void>
@@ -299,6 +305,9 @@ export const useFindTrades = create<State>((set, get) => ({
   outBusy: false,
   outcomes: null,
   outError: '',
+  auditCount: 0,
+  auditEntries: [],
+  healthRows: [],
 
   xWindow: '24h',
   xScanSize: 100,
@@ -404,7 +413,23 @@ export const useFindTrades = create<State>((set, get) => ({
     if (v) {
       if (!get().btResult) void get().loadLastBacktest()
       void get().loadOutcomes()
+      void get().loadAudit()
+      void get().loadHealth()
     }
+  },
+
+  loadAudit: async () => {
+    const res = (await invoke('audit-list')) as Res & { count?: number; entries?: State['auditEntries'] }
+    if (res.ok) set({ auditCount: res.count ?? 0, auditEntries: res.entries ?? [] })
+  },
+
+  exportAudit: async () => {
+    await invoke('audit-export')
+  },
+
+  loadHealth: async () => {
+    const res = (await invoke('health')) as Res & { sources?: State['healthRows'] }
+    if (res.ok) set({ healthRows: res.sources ?? [] })
   },
 
   runBacktest: async () => {

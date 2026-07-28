@@ -1,3 +1,4 @@
+import { writeFileSync } from 'fs'
 import { Notification } from 'electron'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
@@ -297,6 +298,22 @@ async function dailyBars(massiveKey: string, ticker: string): Promise<Bar[]> {
 /** Regime context for the CURRENT screen run (set by runScreen; cached 10 min). */
 let activeRegime: Regime | null = null
 
+/* --------------------------- data-health tracking ------------------------- *
+ * Enterprise reliability 101: know which feeds are alive. Each key call site
+ * records success/failure; the Performance panel shows the roster.
+ * ------------------------------------------------------------------------- */
+const healthMap = new Map<string, { lastOk: number | null; lastFail: number | null; note: string }>()
+
+function recordHealth(source: string, ok: boolean, note = ''): void {
+  const h = healthMap.get(source) ?? { lastOk: null, lastFail: null, note: '' }
+  if (ok) h.lastOk = Date.now()
+  else {
+    h.lastFail = Date.now()
+    h.note = note.slice(0, 120)
+  }
+  healthMap.set(source, h)
+}
+
 /** Build the Trade Score for a candidate (hasSocial adds the small social bonus). */
 function scoreFor(c: Candidate, hasSocial: boolean): ReturnType<typeof tradeScore> {
   return tradeScore({
@@ -377,8 +394,9 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
       if (finnhubKey) {
         try {
           c.extras = await tickerExtras(finnhubKey, c.ticker)
-        } catch {
-          /* leave without extras */
+          recordHealth('finnhub', true)
+        } catch (e) {
+          recordHealth('finnhub', false, errMsg(e))
         }
       }
       try {
@@ -403,23 +421,26 @@ async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows:
         attachNewsVel(c)
         try {
           c.edgar = await getEdgarSummary(c.ticker)
+          recordHealth('sec-edgar', c.edgar !== null)
           // A recent registration/offering filing is a strong AVOID — it beats
           // whatever the news-based catalyst said.
           if (c.edgar?.recentOffering) c.catalyst = { type: 'Offering', avoid: true, label: 'Recent SEC offering filing' }
-        } catch {
-          /* no filings */
+        } catch (e) {
+          recordHealth('sec-edgar', false, errMsg(e))
         }
         try {
           c.stocktwits = await getStockTwits(c.ticker)
+          recordHealth('stocktwits', c.stocktwits !== null)
           // Meaningful bullish StockTwits chatter lights the social bonus.
           if (c.stocktwits && c.stocktwits.messages >= 5 && c.stocktwits.sentiment > 0.2) c.score = scoreFor(c, true)
-        } catch {
-          /* no StockTwits */
+        } catch (e) {
+          recordHealth('stocktwits', false, errMsg(e))
         }
         try {
           c.shortVolRatio = await getShortVolRatio(c.ticker)
-        } catch {
-          /* no FINRA data */
+          recordHealth('finra', true)
+        } catch (e) {
+          recordHealth('finra', false, errMsg(e))
         }
       }
     }
@@ -617,6 +638,49 @@ export default function register(ctx: ModuleIpcContext): void {
     return Number.isFinite(v) && v > 0 ? Math.round(v) : 0
   }
 
+  /* --------------------------- audit trail ------------------------------- *
+   * Every scan is recorded (inputs, regime, picks, verdicts) so results are
+   * reproducible and reviewable — exportable as JSON.
+   * ----------------------------------------------------------------------- */
+  const AUDIT_KEY = `${ID}.auditLog`
+  const AUDIT_CAP = 200
+
+  const recordAudit = (entry: Record<string, unknown>): void => {
+    const raw = ctx.storeGet<unknown[]>(AUDIT_KEY, [])
+    const log = Array.isArray(raw) ? raw : []
+    log.unshift(entry)
+    ctx.storeSet(AUDIT_KEY, log.slice(0, AUDIT_CAP))
+  }
+
+  ctx.ipcMain.handle(`${ID}:audit-list`, () => {
+    const raw = ctx.storeGet<unknown[]>(AUDIT_KEY, [])
+    const log = Array.isArray(raw) ? raw : []
+    return { ok: true, count: log.length, entries: log.slice(0, 25) }
+  })
+
+  ctx.ipcMain.handle(`${ID}:audit-export`, async () => {
+    const raw = ctx.storeGet<unknown[]>(AUDIT_KEY, [])
+    const win = ctx.getMainWindow()
+    const opts = {
+      title: 'Export Find Trades audit log',
+      defaultPath: `find-trades-audit-${etTodayYmd()}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    }
+    const res = win ? await ctx.dialog.showSaveDialog(win, opts) : await ctx.dialog.showSaveDialog(opts)
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+    try {
+      writeFileSync(res.filePath, JSON.stringify(Array.isArray(raw) ? raw : [], null, 2))
+      return { ok: true, path: res.filePath }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:health`, () => ({
+    ok: true,
+    sources: [...healthMap.entries()].map(([source, h]) => ({ source, ...h }))
+  }))
+
   // Adversarial bull/bear review of the top picks (default ON).
   const DEBATE_KEY = `${ID}.aiDebate`
   const getDebate = (): boolean => ctx.storeGet<boolean>(DEBATE_KEY, true) !== false
@@ -725,6 +789,7 @@ export default function register(ctx: ModuleIpcContext): void {
     try {
       const now = Date.now()
       const res = await fetchTrending(bearer, windowId, now, scanSize)
+      recordHealth('x', res.ok || res.tweets.length > 0, res.error ?? '')
       if (!res.ok && res.tweets.length === 0)
         return { ok: false, error: res.error ?? 'X request failed.', archiveNeeded: res.archiveNeeded === true }
 
@@ -889,7 +954,15 @@ export default function register(ctx: ModuleIpcContext): void {
     } catch {
       activeRegime = null
     }
-    const { rows, note } = await buildUniverse(massiveKey, plan)
+    let uni: { rows: Candidate[]; note: string }
+    try {
+      uni = await buildUniverse(massiveKey, plan)
+      recordHealth('massive', true)
+    } catch (e) {
+      recordHealth('massive', false, errMsg(e))
+      throw e
+    }
+    const { rows, note } = uni
     // Tradability gate BEFORE the cap, so the enrichment slots go to real names.
     const numeric = applyLiquidityGate(rankRows(applyNumericFilters(rows, plan), plan), plan).slice(0, PRE_ENRICH_CAP)
     // Always enrich the top survivors with details + Tier 1 technical signals +
@@ -994,6 +1067,16 @@ export default function register(ctx: ModuleIpcContext): void {
       }
 
       logPicks('ai', picks)
+      recordAudit({
+        at: Date.now(),
+        kind: 'ai-search',
+        query: last.text.slice(0, 200),
+        rationale: plan.rationale,
+        provider: planRes.provider,
+        regime: activeRegime?.label ?? null,
+        universe: note,
+        picks: picks.map((p) => ({ ticker: p.ticker, score: p.score, verdict: p.debate?.verdict ?? null }))
+      })
       return {
         ok: true,
         plan,
@@ -1068,6 +1151,14 @@ export default function register(ctx: ModuleIpcContext): void {
       const { candidates, note } = await runScreen(plan)
       const picks = candidates.map((c) => toPick(c))
       logPicks(preset.id, picks)
+      recordAudit({
+        at: Date.now(),
+        kind: `preset:${preset.id}`,
+        query: preset.name,
+        regime: activeRegime?.label ?? null,
+        universe: note,
+        picks: picks.map((p) => ({ ticker: p.ticker, score: p.score, verdict: null }))
+      })
       return { ok: true, name: preset.name, note, picks }
     } catch (err) {
       return { ok: false, error: errMsg(err) }

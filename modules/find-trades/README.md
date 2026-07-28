@@ -157,6 +157,15 @@ calls per search; best-effort (a failure never blocks results).
   **FOMC decision or CPI print** is within 5 days, and the AI ranker is told to
   respect it. 2026 schedules hardcoded — verify/extend annually.
 
+## Audit trail & data health (Wall St #6)
+
+- **Audit trail** — every AI search and one-click scan is recorded (inputs,
+  regime, universe note, picks + verdicts; capped 200) and **exportable as
+  JSON** from the Performance panel. Results are reproducible, not vibes.
+- **Data health** — each feed (massive, finnhub, sec-edgar, stocktwits, finra,
+  x) records success/failure at its call sites; the Performance panel shows a
+  live green/red roster with last-success/failure times.
+
 ## Performance & validation (Wall St #1 — the proof loop)
 
 The **Performance** button opens the validation panel:

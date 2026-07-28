@@ -983,6 +983,60 @@ function PerformanceModal(): React.JSX.Element {
               </div>
             )}
           </div>
+
+          {/* data health */}
+          <div className="rounded-xl border border-edge bg-raised/30 p-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Data health</span>
+              <button onClick={() => void s.loadHealth()} className="ml-auto rounded-lg bg-raised px-2 py-1 text-xs hover:bg-edge/60">
+                <RefreshCw size={12} className="mr-1 inline" /> Refresh
+              </button>
+            </div>
+            {s.healthRows.length === 0 ? (
+              <p className="mt-1 text-xs text-muted">No calls made yet this session — run a scan and check back.</p>
+            ) : (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {s.healthRows.map((h) => {
+                  const healthy = h.lastOk != null && (h.lastFail == null || h.lastOk > h.lastFail)
+                  return (
+                    <span
+                      key={h.source}
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${healthy ? 'bg-ok/15 text-ok' : 'bg-danger/15 text-danger'}`}
+                      title={`${h.source}: last success ${agoLabel(h.lastOk)}${h.lastFail ? ` · last failure ${agoLabel(h.lastFail)}${h.note ? ` (${h.note})` : ''}` : ''}`}
+                    >
+                      {healthy ? '●' : '✕'} {h.source}
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* audit trail */}
+          <div className="rounded-xl border border-edge bg-raised/30 p-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Audit trail</span>
+              <span className="text-xs text-muted">{s.auditCount} scan(s) recorded</span>
+              <button
+                onClick={() => void s.exportAudit()}
+                disabled={s.auditCount === 0}
+                className="ml-auto rounded-lg bg-raised px-2 py-1 text-xs hover:bg-edge/60 disabled:opacity-40"
+              >
+                Export JSON
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              Every AI search and one-click scan is logged with its inputs, regime, picks and verdicts — reproducible
+              and reviewable.
+            </p>
+            {s.auditEntries.slice(0, 5).map((e, i) => (
+              <div key={i} className="mt-1.5 flex items-center gap-2 border-t border-edge/40 pt-1.5 text-[11px] text-muted">
+                <span className="shrink-0 rounded bg-raised px-1.5 py-0.5">{e.kind}</span>
+                <span className="min-w-0 flex-1 truncate">{e.query}</span>
+                <span className="shrink-0">{(e.picks ?? []).length} picks · {agoLabel(e.at)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
