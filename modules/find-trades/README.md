@@ -135,6 +135,16 @@ in `ipc.ts`; `find-trades:presets` / `:preset`.
   live change outside regular hours (Polygon zeroes day.o, which used to read
   as a -100% gap).
 
+## Bull/bear judge (Wall St #3 — adversarial review)
+
+After the ranker, the top 3 picks go to committee (toggle under the chat input,
+**on by default**; `lib/debate.ts`, pure + tested): a **bear attacker** (cheap
+tier) writes the strongest concrete case AGAINST each pick, then a **risk judge**
+(strong tier) weighs thesis vs bear case in the current regime and stamps
+**✓ Take / ⚠ Caution / ✗ Pass** with a confidence. The verdict badge sits next to
+the Score; non-Take picks show their bear case under the thesis. Two extra AI
+calls per search; best-effort (a failure never blocks results).
+
 ## Performance & validation (Wall St #1 — the proof loop)
 
 The **Performance** button opens the validation panel:

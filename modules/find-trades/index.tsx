@@ -83,6 +83,16 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
                 Score {p.score}
               </span>
             )}
+            {p.debate && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  p.debate.verdict === 'take' ? 'bg-ok/15 text-ok' : p.debate.verdict === 'pass' ? 'bg-danger/15 text-danger' : 'bg-warn/15 text-warn'
+                }`}
+                title={`Risk judge: ${p.debate.verdict.toUpperCase()} (${p.debate.confidence} confidence). ${p.debate.note}${p.debate.bearCase ? ` — Bear case: ${p.debate.bearCase}` : ''}`}
+              >
+                {p.debate.verdict === 'take' ? '✓ Take' : p.debate.verdict === 'pass' ? '✗ Pass' : '⚠ Caution'}
+              </span>
+            )}
             {p.catalyst && (
               <span
                 className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${p.catalyst.avoid ? 'bg-danger/15 text-danger' : 'bg-accent/15 text-accent'}`}
@@ -155,6 +165,11 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
         </button>
       </div>
       {p.thesis && <p className="mt-2 text-sm text-ink/90">{p.thesis}</p>}
+      {p.debate?.bearCase && p.debate.verdict !== 'take' && (
+        <p className="mt-1 text-xs text-danger/80" title={p.debate.note}>
+          Bear case: {p.debate.bearCase}
+        </p>
+      )}
       {p.plan && (
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg bg-raised/40 px-2 py-1.5 text-[11px] text-muted" title="Rough ATR-based plan — educational scaffolding, not advice">
           <span className="font-semibold text-ink/80">Plan</span>
@@ -1175,9 +1190,18 @@ export default function FindTrades(): React.JSX.Element {
             {s.busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
           </button>
         </div>
-        <p className="mx-auto mt-1.5 max-w-3xl text-center text-[10px] text-muted">
-          Screens live data for ideas to research — educational only, not financial advice.
-        </p>
+        <div className="mx-auto mt-1.5 flex max-w-3xl items-center justify-between gap-2 text-[10px] text-muted">
+          <label className="flex cursor-pointer items-center gap-1" title="After ranking, a bear-case attacker + risk judge review the top 3 picks and stamp Take / Caution / Pass (2 extra AI calls per search)">
+            <input
+              type="checkbox"
+              checked={s.aiDebate}
+              onChange={(e) => void s.setAiDebate(e.target.checked)}
+              className="h-3 w-3 accent-[rgb(var(--wk-accent))]"
+            />
+            Bull/bear judge
+          </label>
+          <span>Screens live data for ideas to research — educational only, not financial advice.</span>
+        </div>
       </div>
     </div>
   )

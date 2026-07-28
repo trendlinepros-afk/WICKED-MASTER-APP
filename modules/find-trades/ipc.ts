@@ -44,6 +44,7 @@ import {
   type WatchItem
 } from './lib/watch'
 import { buildSeries, runBacktest, type DayRows } from './lib/backtest'
+import { buildBearPrompt, buildJudgePrompt, parseBear, parseVerdicts } from './lib/debate'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -112,6 +113,8 @@ export interface Pick {
   newsHot: boolean
   /** tradability annotation ('thin' = < $2M traded today) */
   liquidity: string
+  /** adversarial bull/bear review verdict (top picks only) */
+  debate: { verdict: string; confidence: string; bearCase: string; note: string } | null
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -201,7 +204,8 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
         : null,
     newsCount24h: c.newsCount24h ?? null,
     newsHot: c.newsHot ?? false,
-    liquidity: c.liquidity ?? ''
+    liquidity: c.liquidity ?? '',
+    debate: null
   }
 }
 
@@ -594,6 +598,16 @@ export default function register(ctx: ModuleIpcContext): void {
     return Number.isFinite(v) && v > 0 ? Math.round(v) : 0
   }
 
+  // Adversarial bull/bear review of the top picks (default ON).
+  const DEBATE_KEY = `${ID}.aiDebate`
+  const getDebate = (): boolean => ctx.storeGet<boolean>(DEBATE_KEY, true) !== false
+
+  ctx.ipcMain.handle(`${ID}:set-ai-debate`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    if (typeof r.on === 'boolean') ctx.storeSet(DEBATE_KEY, r.on)
+    return { ok: true, aiDebate: getDebate() }
+  })
+
   ctx.ipcMain.handle(`${ID}:status`, async () => {
     const massiveKey = ctx.getApiKey('massive')
     let regime: Regime | null = null
@@ -613,7 +627,11 @@ export default function register(ctx: ModuleIpcContext): void {
       hasX: !!ctx.getApiKey('x'),
       session: marketSession(),
       regime,
-      riskDollars: getRisk()
+      riskDollars: getRisk(),
+      aiDebate: getDebate(),
+      // persisted X prefs, so the UI reflects saved values after a restart
+      scanSize: getScanSize(),
+      aiTone: getAiTone()
     }
   })
 
@@ -918,6 +936,41 @@ export default function register(ctx: ModuleIpcContext): void {
         if (!c) continue
         const ai = ranked.picks.find((p) => p.ticker === tk)
         picks.push(toPick(c, ai?.thesis ?? '', ai?.flags ?? []))
+      }
+
+      // Adversarial review (default on): a bear attacker builds the strongest
+      // case against the top picks, then a judge issues take/caution/pass.
+      if (getDebate() && picks.length > 0) {
+        try {
+          const top = picks.slice(0, 3)
+          const dline = (p: Pick): string =>
+            `${p.ticker} | price ${p.price ?? 'n/a'} | chg ${p.changePct?.toFixed(2) ?? 'n/a'}% | RVOL ${p.rvol ?? 'n/a'} | score ${p.score ?? 'n/a'} | setup ${p.setup} | ` +
+            `catalyst ${p.catalyst ? p.catalyst.label + (p.catalyst.avoid ? ' (CAUTION)' : '') : 'none'} | ` +
+            `earnings ${p.daysToEarnings != null && p.daysToEarnings >= 0 ? `in ${p.daysToEarnings}d` : 'n/a'} | thesis: ${p.thesis || '(none)'}`
+          const bearRes = await callAi(aiKeys(), [{ role: 'user', text: buildBearPrompt(top.map(dline)) }], { json: true, tier: 'lite' })
+          const bearBy = bearRes.ok ? parseBear(bearRes.text, top.map((t) => t.ticker)) : new Map<string, string>()
+          const judgeRes = await callAi(
+            aiKeys(),
+            [
+              {
+                role: 'user',
+                text: buildJudgePrompt(
+                  top.map((p) => ({ ticker: p.ticker, data: dline(p), bearCase: bearBy.get(p.ticker) ?? '' })),
+                  regimeLine(activeRegime)
+                )
+              }
+            ],
+            { json: true, tier: 'pro' }
+          )
+          if (judgeRes.ok) {
+            for (const v of parseVerdicts(judgeRes.text, top.map((t) => t.ticker))) {
+              const p = picks.find((x) => x.ticker === v.ticker)
+              if (p) p.debate = { verdict: v.verdict, confidence: v.confidence, bearCase: bearBy.get(v.ticker) ?? '', note: v.note }
+            }
+          }
+        } catch {
+          /* the debate is best-effort — picks stand on their own without it */
+        }
       }
 
       logPicks('ai', picks)

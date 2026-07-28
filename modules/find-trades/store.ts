@@ -98,6 +98,7 @@ interface Status {
   session: string
   regime?: RegimeInfo | null
   riskDollars?: number
+  aiDebate?: boolean
 }
 
 interface Res {
@@ -225,6 +226,8 @@ interface State {
 
   // risk sizing ($ risked per trade; 0 = off)
   riskDollars: number
+  // adversarial bull/bear review of top picks (default on)
+  aiDebate: boolean
 
   // performance (validation loop)
   perfOpen: boolean
@@ -254,6 +257,7 @@ interface State {
   clearAlerts: () => void
   _onAlerts: (fired: unknown) => void
   setRisk: (n: number) => Promise<void>
+  setAiDebate: (on: boolean) => Promise<void>
   setPerfOpen: (v: boolean) => void
   runBacktest: () => Promise<void>
   loadLastBacktest: () => Promise<void>
@@ -284,6 +288,7 @@ export const useFindTrades = create<State>((set, get) => ({
   watchOpen: false,
 
   riskDollars: 0,
+  aiDebate: true,
 
   perfOpen: false,
   btBusy: false,
@@ -330,6 +335,7 @@ export const useFindTrades = create<State>((set, get) => ({
       if (typeof st.scanSize === 'number') set({ xScanSize: st.scanSize })
       if (typeof st.aiTone === 'boolean') set({ xAiTone: st.aiTone })
       if (typeof st.riskDollars === 'number') set({ riskDollars: st.riskDollars })
+      if (typeof st.aiDebate === 'boolean') set({ aiDebate: st.aiDebate })
       // Reading saved history is FREE (no API call) — populate the dropdown and
       // show the most recent past scan. Scanning itself is user-triggered.
       if (st.hasX) void get().loadHistory()
@@ -385,6 +391,11 @@ export const useFindTrades = create<State>((set, get) => ({
     const v = Number.isFinite(n) && n > 0 ? Math.min(1_000_000, Math.round(n)) : 0
     set({ riskDollars: v })
     await invoke('set-risk', { riskDollars: v })
+  },
+
+  setAiDebate: async (on) => {
+    set({ aiDebate: on })
+    await invoke('set-ai-debate', { on })
   },
 
   setPerfOpen: (v) => {
