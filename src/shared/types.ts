@@ -213,8 +213,91 @@ export const SHELL_IPC = {
   /** (password: string) => { ok, error? } — set the backup password */
   backupPasswordSet: 'shell:backup-password-set',
   /** () => void — clear the backup password (keys stop being included) */
-  backupPasswordClear: 'shell:backup-password-clear'
+  backupPasswordClear: 'shell:backup-password-clear',
+
+  /* ---- Cloud Sync (private GitHub repo) — all device-local, never synced ---- */
+  /** () => SyncStatus — current sync config + state (never returns secrets) */
+  syncStatus: 'shell:sync-status',
+  /** (patch: Partial<SyncConfig>) => SyncStatus — update non-secret sync config */
+  syncSetConfig: 'shell:sync-set-config',
+  /** ({ token?, passphrase? }) => { ok, error? } — store secrets in the vault (safeStorage) */
+  syncSetSecrets: 'shell:sync-set-secrets',
+  /** () => void — forget this device's token + passphrase */
+  syncClearSecrets: 'shell:sync-clear-secrets',
+  /** () => { ok, defaultBranch?, private?, error? } — verify repo access */
+  syncTestRepo: 'shell:sync-test-repo',
+  /** () => SyncResult — snapshot + encrypt + push to the repo now */
+  syncPushNow: 'shell:sync-push-now',
+  /** () => SyncResult — download remote manifest to preview a pull (no changes) */
+  syncCheckRemote: 'shell:sync-check-remote',
+  /** () => SyncResult — pull, stage, and relaunch to apply (destructive: replaces local) */
+  syncPullNow: 'shell:sync-pull-now',
+  /** main → renderer broadcast of sync activity (SyncStatus payload) */
+  syncEvent: 'shell:sync-event',
+
+  /* ------------------------- App lock (device-local) ------------------------ */
+  /** () => { enabled: boolean } */
+  appLockStatus: 'shell:applock-status',
+  /** (pin: string) => { ok, error? } — set/replace the launch PIN */
+  appLockSet: 'shell:applock-set',
+  /** (pin: string) => { ok } — verify the PIN at the lock screen */
+  appLockVerify: 'shell:applock-verify',
+  /** (pin: string) => { ok, error? } — turn the lock off (requires the current PIN) */
+  appLockClear: 'shell:applock-clear'
 } as const
+
+/** Non-secret cloud-sync configuration (device-local; secrets live in the vault). */
+export interface SyncConfig {
+  /** "owner/name" of the PRIVATE repo used as the sync store */
+  repo: string
+  /** branch to read/write (default "main") */
+  branch: string
+  /** push a snapshot automatically on a timer */
+  autoPush: boolean
+  /** minutes between automatic pushes */
+  intervalMinutes: number
+  /** push one last snapshot when the app closes */
+  pushOnClose: boolean
+  /** friendly name for THIS device (shown in conflict warnings) */
+  deviceName: string
+}
+
+/** The small PLAINTEXT metadata stored next to the encrypted blob in the repo. */
+export interface SyncRemoteInfo {
+  version: number
+  updatedUtc: string
+  device: string
+  appVersion: string
+  sizeBytes: number
+}
+
+export interface SyncStatus extends SyncConfig {
+  /** repo + token + passphrase all present → ready to sync */
+  configured: boolean
+  hasToken: boolean
+  hasPassphrase: boolean
+  deviceId: string
+  lastPushUtc: string
+  lastPullUtc: string
+  /** version this device last pushed or pulled (for conflict detection) */
+  lastSyncedVersion: number
+  /** last-known remote metadata (from the newest status/check), or null */
+  remote: SyncRemoteInfo | null
+  busy: boolean
+  error: string
+}
+
+export interface SyncResult {
+  ok: boolean
+  error?: string
+  /** true when a pull was staged and the app is about to relaunch */
+  staged?: boolean
+  /** remote metadata fetched during the operation */
+  remote?: SyncRemoteInfo | null
+  /** pull preview: remote is newer / same / this device is ahead */
+  compare?: 'remote-newer' | 'up-to-date' | 'local-ahead' | 'no-remote'
+  version?: number
+}
 
 /** A folder that may hold user data from a previous WICKED version. */
 export interface RecoveryCandidate {

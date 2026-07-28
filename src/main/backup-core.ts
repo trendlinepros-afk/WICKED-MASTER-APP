@@ -141,6 +141,41 @@ export function writeBackupZip(
   return count
 }
 
+/**
+ * Build the same backup zip as writeBackupZip but return it as an in-memory
+ * Buffer (used by Cloud Sync, which encrypts the bytes and uploads them rather
+ * than writing a .zip to disk).
+ */
+export function buildBackupZipBuffer(
+  entries: BackupEntry[],
+  appVersion: string,
+  extraFiles: { rel: string; data: string }[] = []
+): Buffer {
+  const zip = new AdmZip()
+  let count = 0
+  for (const e of entries) {
+    try {
+      zip.addFile(e.rel, readFileSync(e.abs))
+      count++
+    } catch {
+      // a single unreadable/locked file must not fail the whole snapshot
+    }
+  }
+  for (const ex of extraFiles) {
+    zip.addFile(ex.rel, Buffer.from(ex.data, 'utf8'))
+    count++
+  }
+  const manifest: BackupManifest = {
+    magic: MANIFEST_MAGIC,
+    version: 1,
+    createdUtc: new Date().toISOString(),
+    appVersion,
+    fileCount: count
+  }
+  zip.addFile(MANIFEST_NAME, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
+  return zip.toBuffer()
+}
+
 /** Read+validate a backup's manifest, or null if it isn't one of ours. */
 export function readManifest(zipFile: string): BackupManifest | null {
   try {

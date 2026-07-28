@@ -12,6 +12,7 @@ import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
 import { registerRecoveryIpc } from './recovery'
 import { registerBackupIpc, scheduleBackups } from './backup'
+import { pushNow, registerSyncIpc, scheduleSync, shouldPushOnClose } from './sync'
 
 // Chromium's GPU child process cannot launch when Electron runs from a network
 // share (dev happens on the NAS; mapped drives resolve to UNC). Run the GPU
@@ -137,6 +138,7 @@ app.whenReady().then(() => {
   registerApiKeyIpc(() => mainWindow)
   registerRecoveryIpc(() => mainWindow)
   registerBackupIpc(() => mainWindow)
+  registerSyncIpc(() => mainWindow)
 
   // MCP: the channel registry needs the main window for synthetic-event senders
   setMainWindowGetter(() => mainWindow)
@@ -159,6 +161,8 @@ app.whenReady().then(() => {
 
   // start the scheduled-backup timer if the user enabled it
   scheduleBackups()
+  // start the cloud-sync auto-push timer if the user enabled it
+  scheduleSync()
 
   createWindow()
 
@@ -171,6 +175,22 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let closingPushDone = false
+app.on('before-quit', (e) => {
+  // "Sync app on close": push one last snapshot, then really quit. app.exit(0)
+  // bypasses before-quit, so this runs at most once. 8s network cap so a hung
+  // connection can't wedge the quit.
+  if (!closingPushDone && shouldPushOnClose()) {
+    e.preventDefault()
+    closingPushDone = true
+    Promise.race([
+      pushNow().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 8000))
+    ]).finally(() => {
+      stopMcpServer()
+      app.exit(0)
+    })
+    return
+  }
   stopMcpServer()
 })

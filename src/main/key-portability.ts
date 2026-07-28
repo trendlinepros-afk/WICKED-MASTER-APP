@@ -33,6 +33,42 @@ export function encryptWithPassword(plaintext: string, password: string): string
   })
 }
 
+/**
+ * Encrypt raw BYTES (e.g. a backup zip) with a password → portable JSON blob
+ * string. Same scheme/format as encryptWithPassword, so decryptBytesWithPassword
+ * reverses it. Used to encrypt the whole sync snapshot before it leaves the PC.
+ */
+export function encryptBytesWithPassword(plain: Buffer, password: string): string {
+  const salt = randomBytes(16)
+  const iv = randomBytes(12)
+  const key = deriveKey(password, salt)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const ct = Buffer.concat([cipher.update(plain), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return JSON.stringify({
+    v: 1,
+    bin: 1,
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ct: ct.toString('base64')
+  })
+}
+
+/** Decrypt a blob from encryptBytesWithPassword → Buffer. Null on wrong password / tamper. */
+export function decryptBytesWithPassword(blob: string, password: string): Buffer | null {
+  try {
+    const o = JSON.parse(blob) as { salt?: string; iv?: string; tag?: string; ct?: string }
+    if (!o.salt || !o.iv || !o.tag || !o.ct) return null
+    const key = deriveKey(password, Buffer.from(o.salt, 'base64'))
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(o.iv, 'base64'))
+    decipher.setAuthTag(Buffer.from(o.tag, 'base64'))
+    return Buffer.concat([decipher.update(Buffer.from(o.ct, 'base64')), decipher.final()])
+  } catch {
+    return null
+  }
+}
+
 /** Decrypt a blob from encryptWithPassword. Returns null on wrong password / tamper. */
 export function decryptWithPassword(blob: string, password: string): string | null {
   try {

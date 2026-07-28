@@ -1,21 +1,26 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Bot,
   ChevronDown,
   ChevronRight,
+  Cloud,
   Copy,
   DatabaseBackup,
+  DownloadCloud,
   FolderOpen,
+  GitBranch,
   HardDriveDownload,
   KeyRound,
   LayoutGrid,
   Loader2,
+  Lock,
   Monitor,
   Moon,
   RefreshCw,
   RotateCcw,
   Save,
-  Sun
+  Sun,
+  UploadCloud
 } from 'lucide-react'
 import {
   API_PROVIDERS,
@@ -29,6 +34,9 @@ import {
   type RecoveryResult,
   type RecoveryScan,
   type ShellSettings,
+  type SyncConfig,
+  type SyncResult,
+  type SyncStatus,
   type UpdateEvent
 } from '@shared/types'
 import { modules, type RegisteredModule } from './registry'
@@ -668,6 +676,316 @@ function BackupSection(): React.JSX.Element {
   )
 }
 
+/**
+ * Cloud Sync — keep every device's config in one PRIVATE GitHub repo. Snapshots
+ * are encrypted with your passphrase before upload; your main PC auto-pushes and
+ * other devices pull on demand. See src/main/sync.ts for the model.
+ */
+function SyncSection(): React.JSX.Element {
+  const [status, setStatus] = useState<SyncStatus | null>(null)
+  const [repo, setRepo] = useState('')
+  const [branch, setBranch] = useState('main')
+  const [deviceName, setDeviceName] = useState('')
+  const [token, setToken] = useState('')
+  const [passphrase, setPassphrase] = useState('')
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const seeded = useRef(false)
+
+  const refresh = async (): Promise<void> => {
+    setStatus((await window.wicked.invoke(SHELL_IPC.syncStatus)) as SyncStatus)
+  }
+  useEffect(() => {
+    void refresh()
+    return window.wicked.on(SHELL_IPC.syncEvent, (raw) => setStatus(raw as SyncStatus))
+  }, [])
+  useEffect(() => {
+    if (status && !seeded.current) {
+      setRepo(status.repo)
+      setBranch(status.branch || 'main')
+      setDeviceName(status.deviceName)
+      seeded.current = true
+    }
+  }, [status])
+
+  const setConfig = async (patch: Partial<SyncConfig>): Promise<void> => {
+    setStatus((await window.wicked.invoke(SHELL_IPC.syncSetConfig, patch)) as SyncStatus)
+  }
+
+  const saveConnection = async (): Promise<void> => {
+    setErr(null)
+    setMsg(null)
+    await setConfig({ repo, branch, deviceName })
+    if (token.trim() || passphrase.trim()) {
+      const res = (await window.wicked.invoke(SHELL_IPC.syncSetSecrets, {
+        token: token.trim() || undefined,
+        passphrase: passphrase.trim() || undefined
+      })) as { ok?: boolean; error?: string }
+      if (!res.ok) {
+        setErr(res.error ?? 'Could not store the token/passphrase.')
+        return
+      }
+      setToken('')
+      setPassphrase('')
+    }
+    setMsg('Saved.')
+    void refresh()
+  }
+
+  const test = async (): Promise<void> => {
+    setBusy('test')
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncTestRepo)) as { ok?: boolean; defaultBranch?: string; private?: boolean; error?: string }
+    setBusy('')
+    if (res.ok) setMsg(`Connected. Default branch: ${res.defaultBranch}${res.private === false ? ' · ⚠ this repo is PUBLIC — use a private one' : ' · private ✓'}`)
+    else setErr(res.error ?? 'Connection failed.')
+  }
+
+  const push = async (): Promise<void> => {
+    setBusy('push')
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncPushNow)) as SyncResult
+    setBusy('')
+    if (res.ok) setMsg(`Pushed snapshot v${res.version}.`)
+    else setErr(res.error ?? 'Push failed.')
+  }
+
+  const check = async (): Promise<void> => {
+    setBusy('check')
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncCheckRemote)) as SyncResult
+    setBusy('')
+    if (!res.ok) {
+      setErr(res.error ?? 'Could not reach the repo.')
+      return
+    }
+    if (res.compare === 'no-remote') setMsg('Nothing has been pushed to this repo yet.')
+    else if (res.compare === 'up-to-date') setMsg('This device is up to date with the cloud.')
+    else if (res.compare === 'remote-newer') setMsg(`Cloud has newer data (v${res.remote?.version} from ${res.remote?.device}). Use “Pull from cloud” to bring it in.`)
+    else setMsg('This device is ahead of the cloud — a pull would replace newer local data.')
+  }
+
+  const pull = async (): Promise<void> => {
+    setBusy('pull')
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncPullNow)) as SyncResult
+    setBusy('')
+    // On success the app relaunches; we only get here on cancel/failure.
+    if (!res.ok && res.error && res.error !== 'Canceled.') setErr(res.error)
+  }
+
+  const forget = async (): Promise<void> => {
+    await window.wicked.invoke(SHELL_IPC.syncClearSecrets)
+    setMsg('Token and passphrase forgotten on this device.')
+    void refresh()
+  }
+
+  const input = 'w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent'
+  const remote = status?.remote
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <Cloud size={14} />
+        Cloud Sync (private GitHub repo)
+      </h2>
+      <p className="mt-1 max-w-xl text-xs text-muted">
+        Keep every device in sync through a <strong>private</strong> GitHub repo. Each snapshot (settings,
+        all module data and your API keys) is <strong>encrypted with your passphrase before it leaves this
+        PC</strong> — a leaked token or repo only ever exposes ciphertext. Your main PC auto-pushes; other
+        devices click <em>Pull from cloud</em> to download and restart. You’ll need a fine-grained token with
+        <strong> Contents: read &amp; write</strong> on just that repo.
+      </p>
+
+      <div className="mt-3 max-w-xl space-y-4 rounded-xl border border-edge bg-surface p-4">
+        {/* repo + branch */}
+        <div className="grid grid-cols-[1fr_140px] gap-2">
+          <div>
+            <label className="text-xs font-medium text-muted">Repo (owner / name)</label>
+            <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="yourname/wicked-sync" className={`mt-1 ${input}`} />
+          </div>
+          <div>
+            <label className="flex items-center gap-1 text-xs font-medium text-muted"><GitBranch size={11} /> Branch</label>
+            <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" className={`mt-1 ${input}`} />
+          </div>
+        </div>
+
+        {/* token + passphrase */}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-medium text-muted">
+              <span className={`h-2 w-2 rounded-full ${status?.hasToken ? 'bg-ok' : 'bg-muted/40'}`} /> GitHub token
+            </label>
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={status?.hasToken ? '•••••• (saved — enter to replace)' : 'github_pat_…'} autoComplete="off" className={`mt-1 font-mono text-xs ${input}`} />
+          </div>
+          <div>
+            <label className="flex items-center gap-1.5 text-xs font-medium text-muted">
+              <span className={`h-2 w-2 rounded-full ${status?.hasPassphrase ? 'bg-ok' : 'bg-muted/40'}`} /> Sync passphrase
+            </label>
+            <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={status?.hasPassphrase ? '•••••• (saved — enter to replace)' : 'encrypts everything'} autoComplete="off" className={`mt-1 ${input}`} />
+          </div>
+        </div>
+        <p className="-mt-2 text-[11px] text-muted">
+          The passphrase never leaves your PC. Use the <strong>same passphrase on every device</strong> — it’s
+          what unlocks your synced data (and API keys) on a new machine. There is no recovery if you forget it.
+        </p>
+
+        <div>
+          <label className="text-xs font-medium text-muted">This device’s name</label>
+          <input value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="e.g. Desktop, Field-Laptop" className={`mt-1 ${input}`} />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => void saveConnection()} className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90">
+            <Save size={14} /> Save
+          </button>
+          <button onClick={() => void test()} disabled={busy === 'test'} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-50">
+            {busy === 'test' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Test connection
+          </button>
+          {(status?.hasToken || status?.hasPassphrase) && (
+            <button onClick={() => void forget()} className="rounded-lg px-3 py-2 text-sm font-medium text-muted hover:bg-raised hover:text-danger">
+              Forget on this device
+            </button>
+          )}
+        </div>
+
+        {/* auto-push + on close */}
+        <div className="border-t border-edge pt-3">
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm font-medium">Auto-push on a schedule</span>
+            <input type="checkbox" checked={status?.autoPush ?? false} onChange={(e) => void setConfig({ autoPush: e.target.checked })} className="h-4 w-4 accent-[rgb(var(--wk-accent))]" />
+          </label>
+          <div className="mt-2 flex items-center justify-between gap-4">
+            <span className={`text-sm ${status?.autoPush ? '' : 'text-muted'}`}>Push every</span>
+            <select value={status?.intervalMinutes ?? 30} disabled={!status?.autoPush} onChange={(e) => void setConfig({ intervalMinutes: Number(e.target.value) })} className="rounded-lg border border-edge bg-raised px-3 py-1.5 text-sm disabled:opacity-50">
+              {[15, 30, 60, 360].map((m) => (
+                <option key={m} value={m}>{m < 60 ? `${m} minutes` : `${m / 60} hour${m / 60 === 1 ? '' : 's'}`}</option>
+              ))}
+            </select>
+          </div>
+          <label className="mt-3 flex items-center justify-between gap-4">
+            <span className="text-sm font-medium">Sync app on close</span>
+            <input type="checkbox" checked={status?.pushOnClose ?? false} onChange={(e) => void setConfig({ pushOnClose: e.target.checked })} className="h-4 w-4 accent-[rgb(var(--wk-accent))]" />
+          </label>
+          <p className="mt-1 text-[11px] text-muted">Recommended: turn auto-push on for your MAIN PC only, and pull on demand elsewhere so a stale device can’t overwrite newer work.</p>
+        </div>
+
+        {/* actions */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-3">
+          <button onClick={() => void push()} disabled={!status?.configured || !!busy} className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40">
+            {busy === 'push' ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} Sync now (push)
+          </button>
+          <button onClick={() => void check()} disabled={!status?.repo || !status?.hasToken || !!busy} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
+            {busy === 'check' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Check cloud
+          </button>
+          <button onClick={() => void pull()} disabled={!status?.configured || !!busy} title="Download the cloud copy, replace local data and restart" className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
+            {busy === 'pull' ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />} Pull from cloud
+          </button>
+        </div>
+
+        {msg && <p className="text-xs text-ok">{msg}</p>}
+        {err && <p className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{err}</p>}
+
+        {/* status line */}
+        <div className="border-t border-edge pt-3 text-[11px] text-muted">
+          {status?.configured ? (
+            <>
+              Ready · this device “{status.deviceName}” · last synced v{status.lastSyncedVersion}
+              {status.lastPushUtc && ` · pushed ${fmtWhen(status.lastPushUtc)}`}
+              {status.lastPullUtc && ` · pulled ${fmtWhen(status.lastPullUtc)}`}
+              {remote && <div className="mt-0.5">Cloud: v{remote.version} from {remote.device || 'another device'} · {fmtWhen(remote.updatedUtc)} · {fmtBytes(remote.sizeBytes)}</div>}
+            </>
+          ) : (
+            'Not set up yet — add a repo, token and passphrase, then Save.'
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** Optional launch PIN (device-local). Convenience gate; see LockGate. */
+function AppLockSection(): React.JSX.Element {
+  const [enabled, setEnabled] = useState(false)
+  const [pin, setPin] = useState('')
+  const [current, setCurrent] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const refresh = async (): Promise<void> => {
+    const s = (await window.wicked.invoke(SHELL_IPC.appLockStatus)) as { enabled?: boolean }
+    setEnabled(s.enabled === true)
+  }
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const save = async (): Promise<void> => {
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.appLockSet, pin)) as { ok?: boolean; error?: string }
+    if (res.ok) {
+      setMsg(enabled ? 'PIN updated.' : 'App lock enabled.')
+      setPin('')
+      void refresh()
+    } else setErr(res.error ?? 'Could not set the PIN.')
+  }
+
+  const disable = async (): Promise<void> => {
+    setErr(null)
+    setMsg(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.appLockClear, current)) as { ok?: boolean; error?: string }
+    if (res.ok) {
+      setMsg('App lock turned off.')
+      setCurrent('')
+      void refresh()
+    } else setErr(res.error ?? 'Wrong PIN.')
+  }
+
+  const input = 'min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent'
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <Lock size={14} />
+        App Lock
+      </h2>
+      <p className="mt-1 max-w-xl text-xs text-muted">
+        Require a PIN to open WICKED on this device. It’s a convenience gate on top of the running app — the
+        real protection for your synced data is the sync passphrase, which encrypts everything before it
+        leaves the PC. The PIN is stored only as a salted hash and never syncs.
+      </p>
+      <div className="mt-3 max-w-xl space-y-3 rounded-xl border border-edge bg-surface p-4">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${enabled ? 'bg-ok' : 'bg-muted/40'}`} />
+          <span className="text-sm font-medium">{enabled ? 'App lock is ON for this device' : 'App lock is off'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder={enabled ? 'New PIN (min 4)' : 'Set a PIN (min 4)'} autoComplete="off" className={input} />
+          <button onClick={() => void save()} disabled={pin.trim().length < 4} className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40">
+            {enabled ? 'Change PIN' : 'Enable lock'}
+          </button>
+        </div>
+        {enabled && (
+          <div className="flex items-center gap-2 border-t border-edge pt-3">
+            <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} placeholder="Current PIN to turn off" autoComplete="off" className={input} />
+            <button onClick={() => void disable()} disabled={!current.trim()} className="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-muted hover:bg-raised hover:text-danger disabled:opacity-40">
+              Turn off
+            </button>
+          </div>
+        )}
+        {msg && <p className="text-xs text-ok">{msg}</p>}
+        {err && <p className="text-xs text-danger">{err}</p>}
+      </div>
+    </section>
+  )
+}
+
 export default function SettingsScreen(): React.JSX.Element {
   const { settings, update } = useSettings()
   const [version, setVersion] = useState('')
@@ -840,6 +1158,12 @@ export default function SettingsScreen(): React.JSX.Element {
 
       {/* Backup & Restore */}
       <BackupSection />
+
+      {/* Cloud Sync (private GitHub repo) */}
+      <SyncSection />
+
+      {/* App Lock */}
+      <AppLockSection />
 
       {/* Data & Recovery */}
       <RecoverySection />

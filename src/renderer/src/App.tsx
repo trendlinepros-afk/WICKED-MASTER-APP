@@ -16,6 +16,7 @@ import EditModuleModal from './shell/EditModuleModal'
 import GroupView from './shell/GroupView'
 import Home from './shell/Home'
 import ModuleBoundary from './shell/ModuleBoundary'
+import LockGate from './shell/LockGate'
 import ModuleMenu from './shell/ModuleMenu'
 import SettingsScreen from './shell/SettingsScreen'
 import UpdateDialog from './shell/UpdateDialog'
@@ -152,9 +153,19 @@ export default function App(): React.JSX.Element {
 
   if (!loaded) return <Spinner />
 
+  // Standalone module windows are spawned by the already-unlocked shell, so they
+  // don't re-prompt; the main window goes through the launch lock (if set).
+  const isStandalone = window.location.hash.startsWith('#/w/')
+
   return (
     <HashRouter>
-      <AppRoutes />
+      {isStandalone ? (
+        <AppRoutes />
+      ) : (
+        <LockGate>
+          <AppRoutes />
+        </LockGate>
+      )}
     </HashRouter>
   )
 }
