@@ -13,7 +13,16 @@ export interface ModuleGroup {
   icon: string
   /** one-line description for the folder's home card */
   description?: string
+  /**
+   * Parent folder id for nesting (user-created folders only). Empty / undefined
+   * means the folder sits at the top level. Shipped (manifest) folders never
+   * nest, so they always omit this.
+   */
+  parent?: string
 }
+
+/** How big the home / folder app tiles render (Settings → Appearance). */
+export type CardSize = 'sm' | 'md' | 'lg' | 'xl'
 
 /** Manifest shape for /modules/<id>/module.json */
 export interface ModuleManifest {
@@ -69,8 +78,13 @@ export interface ShellSettings {
   navExpanded: boolean
   /** user's custom module order (module ids); ids not listed sort after, by name */
   moduleOrder: string[]
-  /** per-module display overrides set by the user (pencil-edit on home cards) */
-  moduleOverrides: Record<string, { name?: string; description?: string }>
+  /**
+   * Per-module display overrides set by the user (pencil-edit on home cards).
+   * `color` is a stark hex accent for the tile (see CARD_COLORS); unset = default.
+   */
+  moduleOverrides: Record<string, { name?: string; description?: string; color?: string }>
+  /** size of the app tiles on the home + folder screens ('md' = default) */
+  cardSize: CardSize
   /** folders the user created on the home screen */
   customGroups: ModuleGroup[]
   /**
@@ -97,6 +111,7 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   navExpanded: true,
   moduleOrder: [],
   moduleOverrides: {},
+  cardSize: 'md',
   customGroups: [],
   moduleGroupOverrides: {},
   groupOverrides: {},

@@ -4,7 +4,15 @@ import { FolderPlus } from 'lucide-react'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { GroupCard, ModuleCard } from './ModuleCard'
-import { navEntries, orderedModules, reorderNav } from './moduleView'
+import {
+  allGroups,
+  cardGridStyle,
+  cardSpec,
+  descendantGroupIds,
+  orderedModules,
+  reorderNav,
+  scopeSections
+} from './moduleView'
 
 export default function Home(): React.JSX.Element {
   const settings = useSettings((s) => s.settings)
@@ -13,12 +21,13 @@ export default function Home(): React.JSX.Element {
   const { dragId, setDragId, openFolderCreate, openFolderRename } = useShellUi()
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
-  const { moduleOrder: order, moduleOverrides: overrides, disabledModules: disabled } = settings
-  const all = orderedModules(order, overrides)
-  // Modules in a folder collapse into one folder tile (opens /g/<groupId>).
-  const entries = navEntries(settings)
+  const { moduleOverrides: overrides, disabledModules: disabled, cardSize } = settings
+  const all = orderedModules(settings.moduleOrder, overrides)
+  // Top level = folders (top) + loose tools (below), same layout as inside a folder.
+  const { folders, modules } = scopeSections('', settings)
   const toolCount = all.filter((m) => !disabled.includes(m.manifest.id)).length
-  const folderCount = entries.filter((e) => e.kind === 'group').length
+  const folderCount = allGroups(settings).length
+  const spec = cardSpec(cardSize)
 
   const commitReorder = (targetToken: string): void => {
     if (dragId && dragId !== targetToken) {
@@ -34,6 +43,19 @@ export default function Home(): React.JSX.Element {
     update({
       moduleGroupOverrides: { ...settings.moduleGroupOverrides, [moduleId]: groupId }
     })
+  }
+
+  /** Nest one (user-created) folder inside another; guards against cycles. */
+  const nestFolder = (draggedId: string, parentId: string): void => {
+    if (draggedId === parentId) return
+    if (!settings.customGroups.some((g) => g.id === draggedId)) return // shipped folders don't move
+    if (descendantGroupIds(draggedId, settings).has(parentId)) return // no cycles
+    update({
+      customGroups: settings.customGroups.map((g) =>
+        g.id === draggedId ? { ...g, parent: parentId } : g
+      )
+    })
+    setDragId(null)
   }
 
   return (
@@ -56,30 +78,49 @@ export default function Home(): React.JSX.Element {
         </button>
       </div>
 
-      <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
-        {entries.map((e) =>
-          e.kind === 'group' ? (
-            <GroupCard
-              key={`g:${e.group.id}`}
-              group={e.group}
-              count={e.modules.length}
-              onOpen={() => navigate(`/g/${e.group.id}`)}
-              onRename={() => openFolderRename(e.group.id)}
-              onDropModule={(moduleId) => moveToFolder(moduleId, e.group.id)}
-              commitReorder={commitReorder}
-            />
-          ) : (
-            <ModuleCard
-              key={e.module.manifest.id}
-              m={e.module}
-              overrides={overrides}
-              dropTarget={dropTarget}
-              setDropTarget={setDropTarget}
-              commitReorder={commitReorder}
-            />
-          )
-        )}
-      </div>
+      {/* Folders */}
+      {folders.length > 0 && (
+        <section className="mt-8">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Folders</h2>
+          <div className={`mt-3 grid ${spec.gap}`} style={cardGridStyle(cardSize)}>
+            {folders.map((f) => (
+              <GroupCard
+                key={`g:${f.group.id}`}
+                group={f.group}
+                count={f.toolCount}
+                folderCount={f.folderCount}
+                size={cardSize}
+                onOpen={() => navigate(`/g/${f.group.id}`)}
+                onRename={() => openFolderRename(f.group.id)}
+                onDropModule={(moduleId) => moveToFolder(moduleId, f.group.id)}
+                onNestFolder={(draggedId) => nestFolder(draggedId, f.group.id)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Misc Tools */}
+      {modules.length > 0 && (
+        <section className="mt-8">
+          {folders.length > 0 && (
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Misc Tools</h2>
+          )}
+          <div className={`${folders.length > 0 ? 'mt-3' : 'mt-8'} grid ${spec.gap}`} style={cardGridStyle(cardSize)}>
+            {modules.map((m) => (
+              <ModuleCard
+                key={m.manifest.id}
+                m={m}
+                overrides={overrides}
+                dropTarget={dropTarget}
+                setDropTarget={setDropTarget}
+                commitReorder={commitReorder}
+                size={cardSize}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

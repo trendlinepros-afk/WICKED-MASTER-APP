@@ -82,7 +82,7 @@ function OverviewTab(): React.JSX.Element {
           <h3 className="text-sm font-semibold">Equity curve — cumulative realized P&L</h3>
           <span className={`text-sm font-semibold ${pos(stats.totalRealized)}`}>{signedMoney(stats.totalRealized)}</span>
         </div>
-        <EquityCurve values={stats.equityCurve.map((p) => p.cumulative)} />
+        <EquityCurve points={stats.equityCurve.map((p) => ({ at: p.at, value: p.cumulative }))} />
       </div>
 
       {/* market sector P&L */}

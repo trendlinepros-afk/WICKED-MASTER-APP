@@ -5,7 +5,7 @@ import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import ModuleIcon from './ModuleIcon'
-import { allGroups, effectiveGroupId } from './moduleView'
+import { allGroups, effectiveGroupId, groupPath } from './moduleView'
 import { moduleById } from './registry'
 
 /**
@@ -123,17 +123,21 @@ export default function ModuleMenu(): React.JSX.Element | null {
           </span>
           No folder (top level)
         </button>
-        {folders.map((g) => (
-          <button key={g.id} className={item} onClick={() => moveTo(g.id)}>
-            <span className="w-[15px] shrink-0">
-              {currentGroup === g.id && <Check size={13} className="text-accent" />}
-            </span>
-            <ModuleIcon name={g.icon} size={14} strokeWidth={1.8} className="shrink-0 text-warn" />
-            <span className="min-w-0 truncate">{g.name}</span>
-          </button>
-        ))}
+        {folders.map((g) => {
+          const depth = Math.max(0, groupPath(g.id, settings).length - 1)
+          return (
+            <button key={g.id} className={item} onClick={() => moveTo(g.id)}>
+              <span className="w-[15px] shrink-0">
+                {currentGroup === g.id && <Check size={13} className="text-accent" />}
+              </span>
+              <span style={{ width: depth * 12 }} className="shrink-0" />
+              <ModuleIcon name={g.icon} size={14} strokeWidth={1.8} className="shrink-0 text-warn" />
+              <span className="min-w-0 truncate">{g.name}</span>
+            </button>
+          )
+        })}
       </div>
-      <button className={item} onClick={() => openFolderCreate(id)}>
+      <button className={item} onClick={() => openFolderCreate({ moduleId: id })}>
         <FolderPlus size={15} className="text-warn" />
         New folder…
       </button>

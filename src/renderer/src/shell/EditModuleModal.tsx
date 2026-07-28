@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw } from 'lucide-react'
+import { Check, RotateCcw } from 'lucide-react'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
+import { CARD_COLORS } from './moduleView'
 import { moduleById } from './registry'
 
-/** Edit a module's display name + short description (persisted as an override). */
+/** Edit a module's display name, description + tile color (persisted as an override). */
 export default function EditModuleModal(): React.JSX.Element | null {
   const editing = useShellUi((s) => s.editing)
   const closeEdit = useShellUi((s) => s.closeEdit)
@@ -14,12 +15,14 @@ export default function EditModuleModal(): React.JSX.Element | null {
   const mod = editing ? moduleById(editing) : undefined
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [color, setColor] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     if (!mod) return
     const ov = overrides[mod.manifest.id] ?? {}
     setName(ov.name ?? mod.manifest.name)
     setDescription(ov.description ?? mod.manifest.description)
+    setColor(ov.color)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing])
 
@@ -28,11 +31,12 @@ export default function EditModuleModal(): React.JSX.Element | null {
 
   const save = (): void => {
     const next = { ...overrides }
-    const ov: { name?: string; description?: string } = {}
+    const ov: { name?: string; description?: string; color?: string } = {}
     if (name.trim() && name.trim() !== mod.manifest.name) ov.name = name.trim()
     if (description.trim() && description.trim() !== mod.manifest.description)
       ov.description = description.trim()
-    if (ov.name || ov.description) next[id] = ov
+    if (color) ov.color = color
+    if (ov.name || ov.description || ov.color) next[id] = ov
     else delete next[id]
     update({ moduleOverrides: next })
     closeEdit()
@@ -76,6 +80,47 @@ export default function EditModuleModal(): React.JSX.Element | null {
           rows={3}
           className="mt-1 w-full resize-none rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
         />
+
+        {/* Color — a stark accent for this app's tile (folders stay yellow) */}
+        <div className="mt-4 rounded-xl border border-edge bg-raised/40 p-3">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-muted">Color</label>
+            {color && (
+              <button
+                onClick={() => setColor(undefined)}
+                className="text-[11px] font-medium text-muted hover:text-ink"
+              >
+                Default
+              </button>
+            )}
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted">Paint this app’s card so it’s easy to spot.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {/* Default (no color) swatch */}
+            <button
+              onClick={() => setColor(undefined)}
+              title="Default"
+              className={`flex h-8 w-8 items-center justify-center rounded-full border-2 bg-surface ${
+                !color ? 'border-accent' : 'border-edge'
+              }`}
+            >
+              {!color && <Check size={15} className="text-accent" />}
+            </button>
+            {CARD_COLORS.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => setColor(c.value)}
+                title={c.name}
+                style={{ backgroundColor: c.value }}
+                className={`flex h-8 w-8 items-center justify-center rounded-full border-2 transition-transform hover:scale-110 ${
+                  color === c.value ? 'border-ink' : 'border-transparent'
+                }`}
+              >
+                {color === c.value && <Check size={15} className="text-white" />}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="mt-5 flex items-center justify-between gap-2">
           <button

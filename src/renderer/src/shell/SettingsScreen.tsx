@@ -8,6 +8,7 @@ import {
   FolderOpen,
   HardDriveDownload,
   KeyRound,
+  LayoutGrid,
   Loader2,
   Monitor,
   Moon,
@@ -22,6 +23,7 @@ import {
   type ApiProviderId,
   type BackupInfo,
   type BackupResult,
+  type CardSize,
   type McpStatus,
   type ModuleDataPath,
   type RecoveryResult,
@@ -30,7 +32,7 @@ import {
   type UpdateEvent
 } from '@shared/types'
 import { modules, type RegisteredModule } from './registry'
-import { effectiveDescription, effectiveName } from './moduleView'
+import { CARD_SIZES, effectiveDescription, effectiveName } from './moduleView'
 import { useSettings } from '@/stores/settings'
 import ModuleIcon from './ModuleIcon'
 import ThemeStudio from './ThemeStudio'
@@ -744,6 +746,51 @@ export default function SettingsScreen(): React.JSX.Element {
             (light or dark) is shown.
           </p>
         )}
+
+        {/* Card size */}
+        <div className="mt-6">
+          <h3 className="text-sm font-medium">App tile size</h3>
+          <p className="mt-0.5 text-xs text-muted">
+            How big the app cards look on the home &amp; folder screens.
+          </p>
+          <div className="mt-3 grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-4">
+            {(Object.keys(CARD_SIZES) as CardSize[]).map((key) => {
+              const spec = CARD_SIZES[key]
+              const active = (settings.cardSize ?? 'md') === key
+              const chip = { sm: 18, md: 24, lg: 30, xl: 36 }[key]
+              return (
+                <button
+                  key={key}
+                  onClick={() => update({ cardSize: key })}
+                  title={`${spec.label} tiles`}
+                  className={`flex flex-col items-center gap-2 rounded-xl border p-3 transition-colors ${
+                    active ? 'border-accent bg-accent/5' : 'border-edge bg-surface hover:border-accent/50'
+                  }`}
+                >
+                  {/* miniature tile preview — scales with the chosen size */}
+                  <div className="flex h-20 w-full items-center justify-center rounded-lg bg-raised/50">
+                    <div className="flex items-center gap-2 rounded-md border border-edge bg-surface px-2 py-1.5">
+                      <span
+                        className="flex items-center justify-center rounded bg-accent/15 text-accent"
+                        style={{ height: chip, width: chip }}
+                      >
+                        <LayoutGrid size={Math.round(chip * 0.55)} />
+                      </span>
+                      <span className="flex flex-col gap-1">
+                        <span className="block rounded-full bg-ink/70" style={{ height: 4, width: chip * 1.7 }} />
+                        <span className="block rounded-full bg-muted/50" style={{ height: 3, width: chip }} />
+                      </span>
+                    </div>
+                  </div>
+                  <span className={`text-xs font-medium ${active ? 'text-accent' : 'text-ink'}`}>
+                    {spec.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         <ThemeStudio />
       </section>
 

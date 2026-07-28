@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, useRef, useState } from 'react'
 
 /**
  * Lightweight, dependency-free, theme-aware SVG charts. Colors come from the
@@ -14,47 +14,124 @@ const EDGE = 'rgb(var(--wk-edge))'
 
 /* ------------------------------ equity curve ----------------------------- */
 
+export interface EquityPoint {
+  /** ms timestamp for the point (trade close time) */
+  at: number
+  /** cumulative value plotted on the curve */
+  value: number
+}
+
+function fmtDay(at: number): string {
+  const d = new Date(at)
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fmtSignedMoney(v: number): string {
+  return `${v >= 0 ? '+' : '-'}$${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+}
+
+/**
+ * Cumulative realized P&L line. Hovering shows a crosshair that snaps to the
+ * nearest day and a readout of that day's value beside it, tracking the mouse
+ * as it slides horizontally along the curve.
+ */
 export function EquityCurve({
-  values,
+  points,
   height = 200
 }: {
-  values: number[]
+  points: EquityPoint[]
   height?: number
 }): React.JSX.Element {
   const gid = useId()
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const [hover, setHover] = useState<number | null>(null)
   const W = 800
   const H = height
   const padL = 8
   const padR = 8
   const padT = 12
   const padB = 12
-  if (values.length < 2) {
+  if (points.length < 2) {
     return <div className="flex h-40 items-center justify-center text-sm text-muted">Not enough closed trades to chart yet.</div>
   }
+  const values = points.map((p) => p.value)
   const min = Math.min(0, ...values)
   const max = Math.max(0, ...values)
   const range = max - min || 1
-  const x = (i: number): number => padL + (i / (values.length - 1)) * (W - padL - padR)
+  const n = points.length
+  const x = (i: number): number => padL + (i / (n - 1)) * (W - padL - padR)
   const y = (v: number): number => padT + (1 - (v - min) / range) * (H - padT - padB)
+  // fractions (0..1) of the plot box, for the HTML crosshair overlay
+  const fx = (i: number): number => x(i) / W
+  const fy = (v: number): number => y(v) / H
   const line = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')
-  const area = `${line} L${x(values.length - 1).toFixed(1)},${y(min).toFixed(1)} L${x(0).toFixed(1)},${y(min).toFixed(1)} Z`
+  const area = `${line} L${x(n - 1).toFixed(1)},${y(min).toFixed(1)} L${x(0).toFixed(1)},${y(min).toFixed(1)} Z`
   const zeroY = y(0)
-  const last = values[values.length - 1]
+  const last = values[n - 1]
   const stroke = last >= 0 ? OK : DANGER
 
+  const onMove = (e: React.MouseEvent): void => {
+    const el = overlayRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const frac = (e.clientX - rect.left) / rect.width
+    const i = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))))
+    setHover(i)
+  }
+
+  const hp = hover != null ? points[hover] : null
+  const leftPct = hover != null ? fx(hover) * 100 : 0
+  const topPct = hp ? fy(hp.value) * 100 : 0
+  const flip = leftPct > 55 // keep the tooltip on-screen near the right edge
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none" role="img" aria-label="Cumulative realized P&L">
-      <defs>
-        <linearGradient id={`eq-${gid}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={stroke} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={stroke} stopOpacity="0.02" />
-        </linearGradient>
-      </defs>
-      {/* zero baseline */}
-      <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke={EDGE} strokeWidth="1" strokeDasharray="4 4" />
-      <path d={area} fill={`url(#eq-${gid})`} />
-      <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-    </svg>
+    <div className="relative w-full select-none">
+      <svg viewBox={`0 0 ${W} ${H}`} className="block w-full" preserveAspectRatio="none" role="img" aria-label="Cumulative realized P&L">
+        <defs>
+          <linearGradient id={`eq-${gid}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {/* zero baseline */}
+        <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke={EDGE} strokeWidth="1" strokeDasharray="4 4" />
+        <path d={area} fill={`url(#eq-${gid})`} />
+        <path d={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+
+      {/* crosshair + readout overlay (matches the SVG box exactly) */}
+      <div
+        ref={overlayRef}
+        className="absolute inset-0 cursor-crosshair"
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+      >
+        {hp && (
+          <>
+            <div className="pointer-events-none absolute bottom-0 top-0 w-px" style={{ left: `${leftPct}%`, backgroundColor: MUTED, opacity: 0.55 }} />
+            <div className="pointer-events-none absolute left-0 right-0 h-px" style={{ top: `${topPct}%`, backgroundColor: MUTED, opacity: 0.3 }} />
+            <div
+              className="pointer-events-none absolute h-2.5 w-2.5 rounded-full border-2 bg-surface"
+              style={{ left: `${leftPct}%`, top: `${topPct}%`, borderColor: stroke, transform: 'translate(-50%,-50%)' }}
+            />
+            <div
+              className="pointer-events-none absolute z-10 whitespace-nowrap rounded-md border border-edge bg-surface px-2 py-1 text-[11px] shadow-lg"
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                transform: `translateY(-50%) translateX(${flip ? 'calc(-100% - 10px)' : '10px'})`
+              }}
+            >
+              <div className="font-medium text-ink">{fmtDay(hp.at)}</div>
+              <div className={hp.value >= 0 ? 'text-ok' : 'text-danger'}>{fmtSignedMoney(hp.value)}</div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
