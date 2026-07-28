@@ -31,6 +31,11 @@ const X_WINDOWS = [
 const scoreCls = (label: string): string =>
   label === 'Hot' ? 'bg-danger/15 text-danger' : label === 'Warm' ? 'bg-warn/15 text-warn' : label === 'Watch' ? 'bg-accent/15 text-accent' : 'bg-raised text-muted'
 
+const growthCls = (grade: string): string =>
+  grade === 'A' || grade === 'B' ? 'bg-ok/15 text-ok' : grade === 'C' ? 'bg-accent/15 text-accent' : grade === 'F' ? 'bg-danger/15 text-danger' : 'bg-raised text-muted'
+
+const signed = (n: number): string => `${n > 0 ? '+' : ''}${n}%`
+
 function agoLabel(ms: number | null): string {
   if (!ms) return ''
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000))
@@ -126,15 +131,22 @@ function AssistantMsg({ m }: { m: ChatMsg }): React.JSX.Element {
   )
 }
 
-function SentimentBar({ r }: { r: TrendRow }): React.JSX.Element {
-  const tot = Math.max(1, r.bull + r.bear + r.neutral)
-  const bp = (r.bull / tot) * 100
-  const rp = (r.bear / tot) * 100
+function ToneBar({ r }: { r: TrendRow }): React.JSX.Element {
+  const pos = r.positive ?? 0
+  const hope = r.hopeful ?? 0
+  const neg = r.negative ?? 0
+  const neu = r.neutral ?? 0
+  const tot = Math.max(1, pos + hope + neg + neu)
+  const w = (n: number): string => `${(n / tot) * 100}%`
   return (
-    <div className="flex h-1.5 w-16 overflow-hidden rounded-full bg-raised" title={`${r.bull} bullish · ${r.neutral} neutral · ${r.bear} bearish`}>
-      <div className="h-full bg-ok" style={{ width: `${bp}%` }} />
-      <div className="h-full bg-muted/40" style={{ width: `${100 - bp - rp}%` }} />
-      <div className="h-full bg-danger" style={{ width: `${rp}%` }} />
+    <div
+      className="flex h-1.5 w-20 overflow-hidden rounded-full bg-raised"
+      title={`${pos} positive · ${hope} hopeful · ${neu} neutral · ${neg} negative`}
+    >
+      <div className="h-full bg-ok" style={{ width: w(pos) }} />
+      <div className="h-full bg-accent" style={{ width: w(hope) }} />
+      <div className="h-full bg-muted/40" style={{ width: w(neu) }} />
+      <div className="h-full bg-danger" style={{ width: w(neg) }} />
     </div>
   )
 }
@@ -146,13 +158,24 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
     <div className="grid grid-cols-[20px_1fr_auto] items-center gap-2 border-b border-edge/50 px-3 py-2 text-xs last:border-b-0 hover:bg-raised/40">
       <span className="text-center text-[10px] font-semibold text-muted">{rank}</span>
       <div className="min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-bold">${r.ticker}</span>
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${scoreCls(r.label)}`}>{r.label} · {r.score}</span>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${scoreCls(r.label)}`} title={`Heat ${r.score}/100 — trending intensity (buzz + momentum + sentiment)`}>
+            {r.label} · {r.score}
+          </span>
+          {r.growthGrade && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${growthCls(r.growthGrade)}`}
+              title={`Proposed growth: ${r.growthLabel} · ${r.growthConfidence} confidence — a crowd-sentiment lean from post tone (positive / hopeful / negative), not a forecast`}
+            >
+              Growth {r.growthGrade} · {signed(r.growthPct)}
+              {r.growthConfidence === 'low' ? ' ·?' : ''}
+            </span>
+          )}
           <span className="tabular-nums text-muted">{r.mentions} mention{r.mentions === 1 ? '' : 's'}</span>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
-          <SentimentBar r={r} />
+          <ToneBar r={r} />
           {r.price != null && <span className="tabular-nums text-ink">{money(r.price)}</span>}
           {r.changePct != null && (
             <span className={`flex items-center gap-0.5 tabular-nums ${pctCls(r.changePct)}`}>
@@ -172,7 +195,7 @@ function TrendRowItem({ r, rank }: { r: TrendRow; rank: number }): React.JSX.Ele
           <BarChart2 size={12} className={s.xCountsTicker === r.ticker ? 'text-accent' : 'text-muted'} />
         </button>
         <button
-          onClick={() => void s.send(`What's driving $${r.ticker} right now? It's trending on X (${r.mentions} mentions, ${r.label.toLowerCase()}). Is it worth a trade?`)}
+          onClick={() => void s.send(`What's driving $${r.ticker} right now? On X it's ${r.label.toLowerCase()} (${r.mentions} mentions)${r.growthLabel ? `, post tone is "${r.growthLabel}"` : ''}. Is it worth a trade?`)}
           disabled={!canAsk}
           title={canAsk ? 'Ask the AI screener about this ticker' : 'Add an AI key to ask the screener'}
           className="flex items-center gap-1 rounded-lg border border-edge bg-surface px-2 py-1 text-[11px] font-medium hover:border-accent/60 disabled:opacity-40"
@@ -405,7 +428,7 @@ function TrendingPanel(): React.JSX.Element | null {
               {agoLabel(s.xGeneratedAt)}
             </span>
             {s.xNote && <span className="text-warn">{s.xNote}</span>}
-            <span>rating = buzz + momentum + sentiment</span>
+            <span>Heat = buzz + momentum + sentiment · Growth = post-tone lean (positive/hopeful/negative), not a forecast.</span>
           </div>
         </>
       )}

@@ -40,8 +40,15 @@ bull/bear sentiment read and a **heat rating** (`ipc/x.ts`).
   broad-finance fallback if that operator isn't on your access tier), pulls the
   `$CASHTAG` entities, and tallies mentions + engagement + a lightweight lexicon
   sentiment. No AI tokens are spent — the rating is deterministic.
-- **Rating** = buzz (mentions vs the hottest ticker) 50% + price momentum (today's
-  move) 25% + tweet sentiment 25%, bucketed **Hot / Warm / Watch / Cool**.
+- **Heat rating** = buzz (mentions vs the hottest ticker) 50% + price momentum
+  (today's move) 25% + tweet sentiment 25%, bucketed **Hot / Warm / Watch / Cool**.
+- **Proposed Growth** — a second, tone-driven grade. Each post is classified
+  **positive** (confirmed good news), **hopeful** (forward-looking optimism that
+  hasn't happened yet), or **negative**; the per-ticker average tone becomes a
+  grade **A → F** with a sentiment-implied % (bounded to ±15%) and a **confidence**
+  (from how many posts were seen). It is a crowd-sentiment LEAN, **not a
+  forecast** — labelled as such in the UI. Deterministic, so it adds no API/AI
+  cost to a scan.
 - **Validated against the market.** When a Massive key is present, tickers are
   filtered to real US equities (drops junk cashtags like `$ROPE`) and decorated
   with live price/change/volume.

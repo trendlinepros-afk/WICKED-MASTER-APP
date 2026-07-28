@@ -37,28 +37,104 @@ export function windowById(id: string): XWindow {
 
 /* ------------------------------- sentiment ------------------------------- */
 
-// Small finance lexicon — cheap, deterministic, no AI tokens spent on the auto
-// poll. Multi-word phrases are matched as substrings.
-const BULL = [
-  'moon', 'breakout', 'bullish', ' buy', 'buying', 'calls', ' long ', 'rocket', 'squeeze', 'ripping',
-  'soaring', 'beat', 'upgrade', 'rally', 'gap up', 'strong', 'accumulate', 'undervalued', 'all time high',
-  'ath', 'up big', 'green', 'bull '
+// Small finance lexicon — cheap, deterministic, no AI tokens spent per scan.
+// Three tones: POSITIVE = confirmed good news / bullish; HOPEFUL = forward-
+// looking optimism (a catalyst that HASN'T happened yet); NEGATIVE = bad news /
+// bearish. Multi-word phrases are matched as substrings.
+const POSITIVE = [
+  'bullish', 'beat', 'upgrade', 'rally', 'all time high', 'ath', 'record high', 'strong', 'surge', 'soaring',
+  'ripping', 'green', ' buy', 'buying', 'higher', 'outperform', 'accumulate', 'up big', 'jumps', 'jumped',
+  'pops', 'popped', 'gains', 'crushed', 'blowout', 'raised guidance', 'partnership', 'approval', 'up ', 'winner'
 ]
-const BEAR = [
-  'crash', 'bearish', ' sell', 'selling', 'puts', ' short ', 'dump', 'tank', 'plunge', 'miss',
-  'downgrade', 'bankruptcy', 'dilution', 'weak', 'overvalued', 'avoid', 'bagholder', 'falling', 'red ',
-  'sell off', 'selloff', 'bear ', 'rug'
+const HOPEFUL = [
+  'could', 'potential', 'catalyst', 'upcoming', 'soon', 'watch', 'watchlist', 'expecting', 'expect',
+  'target', 'price target', ' pt ', 'breakout', 'setup', 'eyeing', 'poised', 'loading', 'accumulating',
+  'next leg', 'coming', 'about to', 'gonna', 'building', ' base ', 'ready', 'run up', 'moon', 'rocket',
+  'squeeze', 'undervalued', 'opportunity', 'keep an eye', 'if it', 'looking for', 'should', 'gap up'
+]
+const NEGATIVE = [
+  'bearish', 'crash', 'dump', 'tank', 'plunge', 'miss', 'downgrade', 'bankruptcy', 'dilution', 'weak',
+  'overvalued', 'avoid', 'bagholder', 'falling', ' sell', 'selling', 'sell off', 'selloff', ' short ',
+  'puts', 'red ', 'drops', 'dropped', 'plummet', 'warning', 'fraud', 'halt', 'lawsuit', 'rug', 'loss',
+  'down big', 'scam', 'cut guidance', 'delisting'
 ]
 
-/** Sentiment of one tweet in [-1, 1] from lexicon hits (0 = neutral/unknown). */
-export function scoreSentiment(text: string): number {
+const countHits = (t: string, words: string[]): number => {
+  let n = 0
+  for (const w of words) if (t.includes(w)) n++
+  return n
+}
+
+export type Tone = 'positive' | 'hopeful' | 'negative' | 'neutral'
+
+/**
+ * Classify one post's tone and derive two numbers:
+ *  - sentiment [-1, 1]: positive/hopeful vs negative (feeds the heat rating)
+ *  - growth {-1, +0.5, +1, 0}: the directional "proposed growth" contribution —
+ *    confirmed good news counts full, hopeful/forward-looking counts half.
+ */
+export function analyzePost(text: string): { sentiment: number; growth: number; tone: Tone } {
   const t = ' ' + text.toLowerCase().replace(/[\n\r]+/g, ' ') + ' '
-  let pos = 0
-  let neg = 0
-  for (const w of BULL) if (t.includes(w)) pos++
-  for (const w of BEAR) if (t.includes(w)) neg++
-  const tot = pos + neg
-  return tot === 0 ? 0 : (pos - neg) / tot
+  const pos = countHits(t, POSITIVE)
+  const hope = countHits(t, HOPEFUL)
+  const neg = countHits(t, NEGATIVE)
+  const posLike = pos + hope
+  let tone: Tone = 'neutral'
+  let growth = 0
+  if (neg > posLike) {
+    tone = 'negative'
+    growth = -1
+  } else if (posLike > neg) {
+    if (pos >= hope && pos > 0) {
+      tone = 'positive'
+      growth = 1
+    } else {
+      tone = 'hopeful'
+      growth = 0.5
+    }
+  }
+  const sentiment = posLike + neg === 0 ? 0 : (posLike - neg) / (posLike + neg)
+  return { sentiment, growth, tone }
+}
+
+/** Back-compat: just the [-1, 1] sentiment. */
+export function scoreSentiment(text: string): number {
+  return analyzePost(text).sentiment
+}
+
+/**
+ * PROPOSED GROWTH grade for a ticker from the average tone of its posts. This is
+ * a crowd-sentiment LEAN, not a forecast — the implied % is intentionally
+ * bounded to ±15% and confidence scales with how many posts we saw.
+ */
+export function gradeGrowth(growthScore: number, mentions: number): {
+  grade: 'A' | 'B' | 'C' | 'D' | 'F'
+  label: string
+  pct: number
+  confidence: 'low' | 'medium' | 'high'
+} {
+  const g = Math.max(-1, Math.min(1, growthScore))
+  const pct = Math.round(g * 15)
+  let grade: 'A' | 'B' | 'C' | 'D' | 'F'
+  let label: string
+  if (g >= 0.55) {
+    grade = 'A'
+    label = 'Strong upside lean'
+  } else if (g >= 0.3) {
+    grade = 'B'
+    label = 'Bullish lean'
+  } else if (g >= 0.1) {
+    grade = 'C'
+    label = 'Slight upside'
+  } else if (g > -0.1) {
+    grade = 'D'
+    label = 'Mixed / flat'
+  } else {
+    grade = 'F'
+    label = 'Bearish lean'
+  }
+  const confidence = mentions >= 8 ? 'high' : mentions >= 3 ? 'medium' : 'low'
+  return { grade, label, pct, confidence }
 }
 
 /* ------------------------------- cashtags -------------------------------- */
@@ -127,23 +203,31 @@ export interface Tally {
   engagement: number
   /** average sentiment over mentioning tweets, [-1, 1] */
   sentiment: number
-  bull: number
-  bear: number
+  /** average growth-tone over mentioning tweets, [-1, 1] */
+  growthScore: number
+  positive: number
+  hopeful: number
+  negative: number
   neutral: number
 }
 
-/** Count mentions per ticker across tweets, with sentiment + engagement. */
+/** Count mentions per ticker across tweets, with tone breakdown + growth lean. */
 export function tallyMentions(tweets: XTweet[]): Tally[] {
-  const map = new Map<string, { mentions: number; engagement: number; sSum: number; bull: number; bear: number; neutral: number }>()
+  const map = new Map<
+    string,
+    { mentions: number; engagement: number; sSum: number; gSum: number; positive: number; hopeful: number; negative: number; neutral: number }
+  >()
   for (const tw of tweets) {
-    const s = scoreSentiment(tw.text)
+    const a = analyzePost(tw.text)
     for (const tag of tw.cashtags) {
-      const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, bull: 0, bear: 0, neutral: 0 }
+      const e = map.get(tag) ?? { mentions: 0, engagement: 0, sSum: 0, gSum: 0, positive: 0, hopeful: 0, negative: 0, neutral: 0 }
       e.mentions++
       e.engagement += tw.engagement
-      e.sSum += s
-      if (s > 0.1) e.bull++
-      else if (s < -0.1) e.bear++
+      e.sSum += a.sentiment
+      e.gSum += a.growth
+      if (a.tone === 'positive') e.positive++
+      else if (a.tone === 'hopeful') e.hopeful++
+      else if (a.tone === 'negative') e.negative++
       else e.neutral++
       map.set(tag, e)
     }
@@ -154,8 +238,10 @@ export function tallyMentions(tweets: XTweet[]): Tally[] {
       mentions: e.mentions,
       engagement: e.engagement,
       sentiment: e.mentions ? e.sSum / e.mentions : 0,
-      bull: e.bull,
-      bear: e.bear,
+      growthScore: e.mentions ? e.gSum / e.mentions : 0,
+      positive: e.positive,
+      hopeful: e.hopeful,
+      negative: e.negative,
       neutral: e.neutral
     }))
     .sort((a, b) => b.mentions - a.mentions || b.engagement - a.engagement)

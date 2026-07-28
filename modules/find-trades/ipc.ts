@@ -20,7 +20,7 @@ import {
   type Candidate,
   type ScreenPlan
 } from './lib/plan'
-import { fetchMentionCounts, fetchTrending, rateTicker, tallyMentions, validTicker } from './ipc/x'
+import { fetchMentionCounts, fetchTrending, gradeGrowth, rateTicker, tallyMentions, validTicker } from './ipc/x'
 
 /* ------------------------------------------------------------------------ *
  *  FIND TRADES — an AI screener agent. A plain-English request is turned into
@@ -62,13 +62,22 @@ export interface TrendRow {
   name: string
   mentions: number
   engagement: number
-  bull: number
-  bear: number
+  /** tone breakdown of the posts mentioning this ticker */
+  positive: number
+  hopeful: number
+  negative: number
   neutral: number
   sentiment: number
+  /** PROPOSED GROWTH — a sentiment lean from post tone (not a forecast) */
+  growthScore: number
+  growthPct: number
+  growthGrade: string
+  growthLabel: string
+  growthConfidence: string
   price: number | null
   changePct: number | null
   volume: number | null
+  /** heat rating (buzz + momentum + sentiment) */
   score: number
   label: string
 }
@@ -314,15 +323,22 @@ export default function register(ctx: ModuleIpcContext): void {
       const rows: TrendRow[] = top.map((t) => {
         const q = quoteByTicker.get(t.ticker)
         const rating = rateTicker({ mentions: t.mentions, maxMentions, changePct: q?.changePct ?? null, sentiment: t.sentiment })
+        const growth = gradeGrowth(t.growthScore, t.mentions)
         return {
           ticker: t.ticker,
           name: '',
           mentions: t.mentions,
           engagement: t.engagement,
-          bull: t.bull,
-          bear: t.bear,
+          positive: t.positive,
+          hopeful: t.hopeful,
+          negative: t.negative,
           neutral: t.neutral,
           sentiment: t.sentiment,
+          growthScore: t.growthScore,
+          growthPct: growth.pct,
+          growthGrade: growth.grade,
+          growthLabel: growth.label,
+          growthConfidence: growth.confidence,
           price: q?.price ?? null,
           changePct: q?.changePct ?? null,
           volume: q?.volume ?? null,
