@@ -2,7 +2,7 @@
   "id": "find-trades",
   "name": "Find Trades",
   "icon": "Radar",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Describe what you're hunting for and an AI screens the live market + news — plus the tickers trending most on X",
   "status": "stable",
   "group": {

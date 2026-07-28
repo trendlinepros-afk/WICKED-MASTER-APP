@@ -129,6 +129,47 @@ const round = (v: number, d: number): number => {
 }
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
 
+/* --------------------------- session-aware RVOL --------------------------- */
+
+export type VolMode =
+  /** market open: compare volume-so-far vs the fraction of a day elapsed */
+  | { kind: 'intraday'; fraction: number }
+  /** premarket/closed: today's tape is empty — judge the LAST COMPLETE day */
+  | { kind: 'lastComplete'; todayYmd: string }
+
+const barYmd = (t: number): string => new Date(t).toISOString().slice(0, 10)
+
+/**
+ * Relative volume that doesn't lie by session. Naive RVOL (today ÷ 20-day avg)
+ * reads ~0 in premarket and ~0.1 just after the open, which silently kills any
+ * volume filter. Intraday mode scales the average by the elapsed fraction of
+ * the session; lastComplete mode rates the most recent finished day instead.
+ */
+export function sessionRvol(bars: Bar[], todayVolume: number | null, mode: VolMode): number | null {
+  if (bars.length === 0) return null
+  if (mode.kind === 'lastComplete') {
+    let idx = -1
+    for (let i = bars.length - 1; i >= 0; i--) {
+      if (barYmd(bars[i].t) < mode.todayYmd) {
+        idx = i
+        break
+      }
+    }
+    if (idx < 20) return null
+    let s = 0
+    for (let k = idx - 20; k < idx; k++) s += bars[k].v
+    const avg = s / 20
+    return avg > 0 ? round(bars[idx].v / avg, 2) : null
+  }
+  if (todayVolume == null || todayVolume <= 0) return null
+  const hist = bars.length > 1 ? bars.slice(0, -1) : bars
+  const vols = hist.map((b) => b.v).filter((v) => Number.isFinite(v) && v > 0)
+  if (vols.length < 5) return null
+  const avg = vols.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, vols.length)
+  const frac = Math.max(0.05, Math.min(1, mode.fraction))
+  return avg > 0 ? round(todayVolume / (avg * frac), 2) : null
+}
+
 /* -------------------------------- score ---------------------------------- */
 
 export interface ScoreInput {
@@ -143,6 +184,8 @@ export interface ScoreInput {
   trendUp: boolean
   hasNews: boolean
   hasSocial?: boolean
+  /** market regime context — chase-y components are damped in risk-off tape */
+  regime?: 'risk-on' | 'neutral' | 'risk-off'
 }
 
 export interface ScoreResult {
@@ -159,17 +202,21 @@ export interface ScoreResult {
  */
 export function tradeScore(i: ScoreInput): ScoreResult {
   const parts: { pts: number; reason: string; show: boolean }[] = []
+  // In risk-off tape, damp the chase-y components (today's pop, breakout
+  // proximity); in risk-on give them a modest boost. Volume/trend are regime-
+  // agnostic evidence and stay untouched.
+  const regimeMult = i.regime === 'risk-off' ? 0.6 : i.regime === 'risk-on' ? 1.15 : 1
 
   const rvolPts = i.rvol != null ? clamp01((i.rvol - 1) / 2) * 30 : 0
   parts.push({ pts: rvolPts, reason: i.rvol != null ? `${i.rvol.toFixed(1)}× relative volume` : '', show: (i.rvol ?? 0) >= 1.5 })
 
-  const momPts = i.changePct != null ? clamp01(i.changePct / 10) * 20 : 0
+  const momPts = (i.changePct != null ? clamp01(i.changePct / 10) * 20 : 0) * regimeMult
   parts.push({ pts: momPts, reason: i.changePct != null ? `up ${i.changePct.toFixed(1)}% today` : '', show: (i.changePct ?? 0) >= 3 })
 
   const trendPts = (i.aboveSma20 ? 6 : 0) + (i.aboveSma50 ? 5 : 0) + (i.trendUp ? 4 : 0)
   parts.push({ pts: trendPts, reason: 'in an uptrend (above 20/50-day)', show: i.aboveSma20 && i.aboveSma50 })
 
-  const breakoutPts = i.pctFrom52High != null ? clamp01(1 - Math.abs(i.pctFrom52High) / 10) * 12 : 0
+  const breakoutPts = (i.pctFrom52High != null ? clamp01(1 - Math.abs(i.pctFrom52High) / 10) * 12 : 0) * regimeMult
   parts.push({ pts: breakoutPts, reason: 'near 52-week highs', show: (i.pctFrom52High ?? -99) > -3 })
 
   const atrPts = i.atrPct != null ? clamp01(i.atrPct / 6) * 8 : 0

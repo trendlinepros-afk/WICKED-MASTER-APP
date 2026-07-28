@@ -1,7 +1,7 @@
 import { Notification } from 'electron'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
-import { marketSession } from '../stock-planner/ipc/market/sessions'
+import { etParts, marketSession } from '../stock-planner/ipc/market/sessions'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import {
   getAggregates,
@@ -17,14 +17,16 @@ import {
 import { preMarketGainers, afterHoursGainers } from '../stock-planner/ipc/market/screeners'
 import { getCompanyNews, getFinnhubEarnings, getFinnhubExtras, type FinnhubExtras } from '../stock-planner/ipc/market/finnhub'
 import { etTodayYmd } from '../stock-planner/ipc/market/sessions'
-import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
+import { classifySetup, computeSignals, sessionRvol, tradePlan, tradeScore, type VolMode } from '../stock-planner/ipc/market/signals'
 import { classifyCatalyst, newsVelocity } from '../stock-planner/ipc/market/catalyst'
 import { getEdgarSummary } from '../stock-planner/ipc/market/edgar'
 import { getStockTwits } from '../stock-planner/ipc/market/stocktwits'
+import { getRegime, type Regime } from '../stock-planner/ipc/market/regime'
 import { classifySector } from '../trade-analytics/lib/sector'
 import {
   applyEnrichedFilters,
   applyExtrasFilters,
+  applyLiquidityGate,
   applyNumericFilters,
   applySignalFilters,
   parseScreenPlan,
@@ -108,6 +110,8 @@ export interface Pick {
   /** news velocity — headlines in 24h + hot flag */
   newsCount24h: number | null
   newsHot: boolean
+  /** tradability annotation ('thin' = < $2M traded today) */
+  liquidity: string
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -196,7 +200,8 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
         ? Math.round((c.stocktwits.bullish / (c.stocktwits.bullish + c.stocktwits.bearish)) * 100)
         : null,
     newsCount24h: c.newsCount24h ?? null,
-    newsHot: c.newsHot ?? false
+    newsHot: c.newsHot ?? false,
+    liquidity: c.liquidity ?? ''
   }
 }
 
@@ -210,9 +215,28 @@ function rowToCandidate(r: FullSnapshotRow): Candidate {
     price: q.price,
     changePct: q.changePct,
     volume: q.volume,
-    dayOpen: typeof r.day?.o === 'number' ? r.day.o : null,
-    prevClose: typeof r.prevDay?.c === 'number' ? r.prevDay.c : null
+    // Polygon zeroes day.o outside regular hours — 0 is "missing", not a price
+    // (a 0 open made every gap read -100% premarket and killed gap filters).
+    dayOpen: typeof r.day?.o === 'number' && r.day.o > 0 ? r.day.o : null,
+    prevClose: typeof r.prevDay?.c === 'number' && r.prevDay.c > 0 ? r.prevDay.c : null
   }
+}
+
+/**
+ * How to judge relative volume RIGHT NOW. Naive today÷avg RVOL reads ~0 before
+ * the open (this is what made every preset return zero results premarket) and
+ * badly understates the first market hour.
+ */
+function volMode(): VolMode {
+  const s = marketSession()
+  if (s === 'regular') {
+    const p = etParts()
+    const mins = Math.max(1, p.hour * 60 + p.minute - 570)
+    return { kind: 'intraday', fraction: Math.min(1, mins / 390) }
+  }
+  if (s === 'afterhours') return { kind: 'intraday', fraction: 1 }
+  // premarket / closed: today's tape is empty — judge the last complete day
+  return { kind: 'lastComplete', todayYmd: etTodayYmd() }
 }
 
 async function buildUniverse(
@@ -258,6 +282,9 @@ async function dailyBars(massiveKey: string, ticker: string): Promise<Bar[]> {
   return bars
 }
 
+/** Regime context for the CURRENT screen run (set by runScreen; cached 10 min). */
+let activeRegime: Regime | null = null
+
 /** Build the Trade Score for a candidate (hasSocial adds the small social bonus). */
 function scoreFor(c: Candidate, hasSocial: boolean): ReturnType<typeof tradeScore> {
   return tradeScore({
@@ -271,8 +298,25 @@ function scoreFor(c: Candidate, hasSocial: boolean): ReturnType<typeof tradeScor
     aboveSma50: c.signals?.aboveSma50 ?? false,
     trendUp: c.signals?.trendUp ?? false,
     hasNews: (c.news?.length ?? 0) > 0,
-    hasSocial
+    hasSocial,
+    regime: activeRegime?.label
   })
+}
+
+function regimeLine(r: Regime | null): string {
+  if (!r) return ''
+  const bits = [
+    r.spyAbove50 ? 'SPY above its 50-day' : 'SPY below its 50-day',
+    r.breadthPct != null ? `breadth ${r.breadthPct}% advancers` : null,
+    r.spyR5 != null ? `SPY ${r.spyR5 > 0 ? '+' : ''}${r.spyR5}% over 5d` : null
+  ].filter(Boolean)
+  const advice =
+    r.label === 'risk-off'
+      ? 'Be selective: momentum chases fail more often in this tape — favor oversold/quality setups and demand stronger volume confirmation.'
+      : r.label === 'risk-on'
+        ? 'Trend-following and breakout setups have the wind at their back.'
+        : 'Mixed tape — take setups on their individual merits.'
+  return `MARKET REGIME: ${r.label.toUpperCase()} (${bits.join(', ')}). ${advice}\n\n`
 }
 
 const extrasCache = new Map<string, { at: number; extras: FinnhubExtras }>()
@@ -371,6 +415,8 @@ async function enrich(
   const need = rows.slice(0, ENRICH_CAP)
   const queue = [...need]
   const wantNews = plan.needsNews || plan.keywords.length > 0
+  const mode = volMode()
+  const sess = marketSession()
   const worker = async (): Promise<void> => {
     for (;;) {
       const c = queue.shift()
@@ -402,6 +448,11 @@ async function enrich(
           dayOpen: c.dayOpen ?? null,
           prevClose: c.prevClose ?? null
         })
+        // Session-corrected RVOL (naive RVOL ~0 premarket kills every filter).
+        c.signals.rvol = sessionRvol(bars, c.volume, mode)
+        // No official open outside regular hours — the live change IS the gap.
+        if (c.signals.gapPct == null && sess !== 'regular' && c.changePct != null)
+          c.signals.gapPct = Math.round(c.changePct * 100) / 100
       } catch {
         /* no signals — score falls back to what we have */
       }
@@ -435,6 +486,7 @@ const PLAN_RULES =
   'Smart-money fields: insiderBuying (true for "insider buying"), minAnalystBull (0-100 for "analyst favorite/rated buy"), ' +
   'minShortPctFloat (for "high short interest/squeeze", e.g. 20). ' +
   'Earnings: maxDaysToEarnings (for "earnings coming up/this week/soon", e.g. 7), avoidEarnings (true for "no earnings/avoid earnings risk"). ' +
+  'Sub-$1 and thin names are auto-excluded for tradability; set allowIlliquid true ONLY if the user explicitly wants penny/illiquid stocks. ' +
   'Leave any unused field null/false. Keep limit <= 20. rationale = one sentence.'
 
 function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
@@ -466,6 +518,7 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
     )
   })
   return (
+    regimeLine(activeRegime) +
     `The trader asked for: "${plan.rationale}". Here are the pre-filtered candidates with live data + technical signals ` +
     `(RVOL = relative volume, higher = a more real move; score = a 0-100 momentum Trade Score):\n\n${lines.join('\n')}\n\n` +
     'Pick the best matches — prefer higher Trade Score, higher relative volume, a real catalyst, and a clean trend; ' +
@@ -535,14 +588,41 @@ export default function register(ctx: ModuleIpcContext): void {
     openai: ctx.getApiKey('openai')
   })
 
-  ctx.ipcMain.handle(`${ID}:status`, () => ({
-    ok: true,
-    hasMassive: !!ctx.getApiKey('massive'),
-    hasFinnhub: !!ctx.getApiKey('finnhub'),
-    hasAi: !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
-    hasX: !!ctx.getApiKey('x'),
-    session: marketSession()
-  }))
+  const RISK_KEY = `${ID}.riskDollars`
+  const getRisk = (): number => {
+    const v = Number(ctx.storeGet<number>(RISK_KEY, 0))
+    return Number.isFinite(v) && v > 0 ? Math.round(v) : 0
+  }
+
+  ctx.ipcMain.handle(`${ID}:status`, async () => {
+    const massiveKey = ctx.getApiKey('massive')
+    let regime: Regime | null = null
+    if (massiveKey) {
+      try {
+        regime = await getRegime(massiveKey)
+        activeRegime = regime
+      } catch {
+        /* neutral */
+      }
+    }
+    return {
+      ok: true,
+      hasMassive: !!massiveKey,
+      hasFinnhub: !!ctx.getApiKey('finnhub'),
+      hasAi: !!(ctx.getApiKey('anthropic') || ctx.getApiKey('gemini') || ctx.getApiKey('deepseek') || ctx.getApiKey('openai')),
+      hasX: !!ctx.getApiKey('x'),
+      session: marketSession(),
+      regime,
+      riskDollars: getRisk()
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:set-risk`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const n = Number(r.riskDollars)
+    ctx.storeSet(RISK_KEY, Number.isFinite(n) && n > 0 ? Math.min(1_000_000, Math.round(n)) : 0)
+    return { ok: true, riskDollars: getRisk() }
+  })
 
   /* ---------------------------- X (social) trends ----------------------- */
 
@@ -765,8 +845,15 @@ export default function register(ctx: ModuleIpcContext): void {
     const massiveKey = ctx.getApiKey('massive')
     if (!massiveKey) throw new Error('Add your Massive / Polygon key in Settings → API Keys for market data.')
     const finnhubKey = ctx.getApiKey('finnhub')
+    // Market regime context (cached ~10 min) — feeds the score + the AI ranker.
+    try {
+      activeRegime = await getRegime(massiveKey)
+    } catch {
+      activeRegime = null
+    }
     const { rows, note } = await buildUniverse(massiveKey, plan)
-    const numeric = rankRows(applyNumericFilters(rows, plan), plan).slice(0, PRE_ENRICH_CAP)
+    // Tradability gate BEFORE the cap, so the enrichment slots go to real names.
+    const numeric = applyLiquidityGate(rankRows(applyNumericFilters(rows, plan), plan), plan).slice(0, PRE_ENRICH_CAP)
     // Always enrich the top survivors with details + Tier 1 technical signals +
     // a Trade Score (the accuracy layer); news is fetched only when the plan
     // needs it. Then attach Tier 3 smart-money extras (top-N, Finnhub), apply
@@ -1178,10 +1265,10 @@ export default function register(ctx: ModuleIpcContext): void {
             const sig = computeSignals(bars, {
               price: q.price,
               todayVolume: q.volume,
-              dayOpen: typeof row.day?.o === 'number' ? row.day.o : null,
-              prevClose: typeof row.prevDay?.c === 'number' ? row.prevDay.c : null
+              dayOpen: typeof row.day?.o === 'number' && row.day.o > 0 ? row.day.o : null,
+              prevClose: typeof row.prevDay?.c === 'number' && row.prevDay.c > 0 ? row.prevDay.c : null
             })
-            rvol = sig.rvol
+            rvol = sessionRvol(bars, q.volume, volMode())
             pct52 = sig.pctFrom52High
           } catch {
             /* signal-based conditions just won't fire this tick */

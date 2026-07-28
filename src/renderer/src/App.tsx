@@ -5,9 +5,10 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useParams
 } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { ChevronLeft, Home as HomeIcon, Loader2 } from 'lucide-react'
 import ActivityBar from './shell/ActivityBar'
 import AddNewApp from './shell/AddNewApp'
 import EditFolderModal from './shell/EditFolderModal'
@@ -34,15 +35,44 @@ function Spinner(): React.JSX.Element {
 
 function ModuleHost(): React.JSX.Element {
   const { id = '' } = useParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const overrides = useSettings((s) => s.settings.moduleOverrides)
   const mod = moduleById(id)
   if (!mod) return <Navigate to="/" replace />
   const { Component } = mod
+  // Back = wherever you came from (a folder, home); fresh deep links go home.
+  const goBack = (): void => {
+    if (location.key && location.key !== 'default') navigate(-1)
+    else navigate('/')
+  }
   return (
-    <ModuleBoundary moduleId={id}>
-      <Suspense fallback={<Spinner />}>
-        <Component />
-      </Suspense>
-    </ModuleBoundary>
+    <div className="flex h-full flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge bg-surface/70 px-1.5">
+        <button
+          onClick={goBack}
+          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-muted hover:bg-raised hover:text-ink"
+          title="Back"
+        >
+          <ChevronLeft size={14} /> Back
+        </button>
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center rounded-md p-1 text-muted hover:bg-raised hover:text-ink"
+          title="Home"
+        >
+          <HomeIcon size={13} />
+        </button>
+        <span className="ml-1 truncate text-xs text-muted">{effectiveName(mod, overrides)}</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        <ModuleBoundary moduleId={id}>
+          <Suspense fallback={<Spinner />}>
+            <Component />
+          </Suspense>
+        </ModuleBoundary>
+      </div>
+    </div>
   )
 }
 

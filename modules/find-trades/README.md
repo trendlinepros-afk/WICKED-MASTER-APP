@@ -117,6 +117,24 @@ volume**, **Large-cap momentum**, **Oversold bounce**, **Squeeze candidates**
 (needs Finnhub short data), **Smart-money picks** (analyst + insider) — `PRESETS`
 in `ipc.ts`; `find-trades:presets` / `:preset`.
 
+## Market regime & tradability (Wall St #2/#4)
+
+- **Regime chip** in the header — 🟢 Risk-on / ⚪ Neutral / 🔴 Risk-off from SPY
+  vs its 20/50-day + market breadth (`market/regime.ts`, pure classify, cached
+  ~10 min). The Trade Score **damps momentum/breakout points ×0.6 in risk-off**
+  tape (×1.15 risk-on), and the AI ranker gets a regime line with instructions.
+- **Tradability gate** (`plan.ts applyLiquidityGate`) — sub-$1 and <$500k-daily-
+  dollar-volume names are dropped before they waste enrichment slots (bypass:
+  `allowIlliquid`, or an explicit sub-$1 screen); <$2M/day survivors get a
+  **⚠ thin liquidity** tag on the Plan line.
+- **Risk sizing** — set "Risk per trade $" in Performance and every pick's Plan
+  line shows the share size that stops out at ~1R.
+- **Session-correct RVOL** (`signals.ts sessionRvol`) — fixes the premarket
+  zero-results bug: before the open RVOL judges the LAST COMPLETE day; during
+  hours it scales the average by session-elapsed fraction; gap falls back to the
+  live change outside regular hours (Polygon zeroes day.o, which used to read
+  as a -100% gap).
+
 ## Performance & validation (Wall St #1 — the proof loop)
 
 The **Performance** button opens the validation panel:

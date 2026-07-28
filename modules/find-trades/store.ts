@@ -80,6 +80,14 @@ export interface ChatMsg {
   provider?: string
 }
 
+export interface RegimeInfo {
+  label: 'risk-on' | 'neutral' | 'risk-off'
+  spyAbove20: boolean
+  spyAbove50: boolean
+  spyR5: number | null
+  breadthPct: number | null
+}
+
 interface Status {
   hasMassive: boolean
   hasFinnhub: boolean
@@ -88,6 +96,8 @@ interface Status {
   scanSize?: number
   aiTone?: boolean
   session: string
+  regime?: RegimeInfo | null
+  riskDollars?: number
 }
 
 interface Res {
@@ -213,6 +223,9 @@ interface State {
   alerts: FiredAlert[]
   watchOpen: boolean
 
+  // risk sizing ($ risked per trade; 0 = off)
+  riskDollars: number
+
   // performance (validation loop)
   perfOpen: boolean
   btBusy: boolean
@@ -240,6 +253,7 @@ interface State {
   dismissAlert: (i: number) => void
   clearAlerts: () => void
   _onAlerts: (fired: unknown) => void
+  setRisk: (n: number) => Promise<void>
   setPerfOpen: (v: boolean) => void
   runBacktest: () => Promise<void>
   loadLastBacktest: () => Promise<void>
@@ -268,6 +282,8 @@ export const useFindTrades = create<State>((set, get) => ({
   monitorEnabled: true,
   alerts: [],
   watchOpen: false,
+
+  riskDollars: 0,
 
   perfOpen: false,
   btBusy: false,
@@ -313,6 +329,7 @@ export const useFindTrades = create<State>((set, get) => ({
       set({ status: st })
       if (typeof st.scanSize === 'number') set({ xScanSize: st.scanSize })
       if (typeof st.aiTone === 'boolean') set({ xAiTone: st.aiTone })
+      if (typeof st.riskDollars === 'number') set({ riskDollars: st.riskDollars })
       // Reading saved history is FREE (no API call) — populate the dropdown and
       // show the most recent past scan. Scanning itself is user-triggered.
       if (st.hasX) void get().loadHistory()
@@ -363,6 +380,12 @@ export const useFindTrades = create<State>((set, get) => ({
   dismissAlert: (i) => set({ alerts: get().alerts.filter((_, idx) => idx !== i) }),
 
   clearAlerts: () => set({ alerts: [] }),
+
+  setRisk: async (n) => {
+    const v = Number.isFinite(n) && n > 0 ? Math.min(1_000_000, Math.round(n)) : 0
+    set({ riskDollars: v })
+    await invoke('set-risk', { riskDollars: v })
+  },
 
   setPerfOpen: (v) => {
     set({ perfOpen: v })

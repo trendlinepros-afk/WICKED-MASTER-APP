@@ -162,6 +162,16 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
           <span>Stop <span className="tabular-nums text-danger">{money(p.plan.stop)}</span></span>
           <span>Target <span className="tabular-nums text-ok">{money(p.plan.target)}</span></span>
           <span>R:R <span className="tabular-nums text-ink">{p.plan.rr}</span></span>
+          {s.riskDollars > 0 && p.plan.entry > p.plan.stop && (
+            <span title={`Position size for $${s.riskDollars} risk per trade (set in Performance)`}>
+              Size <span className="tabular-nums text-accent">{Math.max(0, Math.floor(s.riskDollars / (p.plan.entry - p.plan.stop))).toLocaleString('en-US')} sh</span>
+            </span>
+          )}
+          {p.liquidity === 'thin' && (
+            <span className="text-warn" title="Under ~$2M traded today — expect wider spreads and slippage; size down">
+              ⚠ thin liquidity
+            </span>
+          )}
         </div>
       )}
       {p.flags.length > 0 && (
@@ -411,7 +421,7 @@ function SizePicker(): React.JSX.Element {
         <option value="100">100 tweets (≈$0.50)</option>
         <option value="200">200 tweets (≈$1.00)</option>
         <option value="300">300 tweets (≈$1.50)</option>
-        <option value="custom">{customOpen || !isPreset ? `Custom: ${s.xScanSize}` : 'Custom…'}</option>
+        <option value="custom">{customOpen || !isPreset ? `Custom: ${s.xScanSize} (≈$${(s.xScanSize * 0.005).toFixed(2)})` : 'Custom…'}</option>
       </select>
       {(customOpen || !isPreset) && (
         <span className="flex items-center gap-1">
@@ -427,7 +437,9 @@ function SizePicker(): React.JSX.Element {
             title="Custom tweets per scan (10–500) — saved until you change it"
             className="w-14 rounded-lg border border-edge bg-raised px-1.5 py-1 text-[11px] text-ink outline-none focus:border-accent disabled:opacity-50"
           />
-          <span className="text-[10px]">tweets</span>
+          <span className="text-[10px]">
+            tweets{draft && Number(draft) > 0 ? ` ≈ $${(Math.min(500, Math.max(10, Number(draft))) * 0.005).toFixed(2)}` : ''}
+          </span>
         </span>
       )}
     </label>
@@ -505,7 +517,9 @@ function TrendingPanel(): React.JSX.Element | null {
             />
             AI tone read
           </label>
-          <span className="text-[10px] text-muted">≈ ${cost}/scan</span>
+          <span className="rounded-full bg-raised px-2 py-0.5 text-[10px] font-medium text-warn" title="Estimated cost of the next scan at ~$0.005 per tweet read">
+            Est. cost: {s.xScanSize} tweets ≈ ${cost}
+          </span>
         </div>
       )}
 
@@ -774,6 +788,25 @@ function StatCells({ st }: { st: { n: number; graded?: number; avg1: number | nu
   )
 }
 
+function RiskInput(): React.JSX.Element {
+  const s = useFindTrades()
+  const [draft, setDraft] = useState(s.riskDollars > 0 ? String(s.riskDollars) : '')
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, '').slice(0, 7))}
+      onBlur={() => void s.setRisk(Number(draft) || 0)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+      }}
+      inputMode="numeric"
+      placeholder="e.g. 100"
+      title="Dollars risked per trade (0 or blank = off) — persisted"
+      className="w-20 bg-transparent px-1.5 py-1.5 text-sm outline-none"
+    />
+  )
+}
+
 function PerformanceModal(): React.JSX.Element {
   const s = useFindTrades()
   const bt = s.btResult
@@ -791,6 +824,20 @@ function PerformanceModal(): React.JSX.Element {
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+          {/* position sizing */}
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-edge bg-raised/30 p-3">
+            <span className="text-sm font-semibold">Risk per trade</span>
+            <div className="flex items-center overflow-hidden rounded-lg border border-edge bg-raised">
+              <span className="pl-2 text-xs text-muted">$</span>
+              <RiskInput />
+            </div>
+            <span className="text-xs text-muted">
+              {s.riskDollars > 0
+                ? `Each pick's Plan line shows a share size stopping you out at ~$${s.riskDollars} (1R).`
+                : 'Set how many dollars you risk per trade and every pick shows its share size (entry−stop = 1R).'}
+            </span>
+          </div>
+
           {/* score backtest */}
           <div className="rounded-xl border border-edge bg-raised/30 p-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -945,7 +992,21 @@ export default function FindTrades(): React.JSX.Element {
           <Radar size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Find Trades</h1>
+          <h1 className="flex items-center gap-2 text-base font-bold tracking-tight">
+            Find Trades
+            {s.status?.regime && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  s.status.regime.label === 'risk-on' ? 'bg-ok/15 text-ok' : s.status.regime.label === 'risk-off' ? 'bg-danger/15 text-danger' : 'bg-raised text-muted'
+                }`}
+                title={`Market regime from SPY trend + breadth: SPY ${s.status.regime.spyAbove50 ? 'above' : 'below'} its 50-day${
+                  s.status.regime.breadthPct != null ? ` · ${s.status.regime.breadthPct}% of stocks up today` : ''
+                }${s.status.regime.spyR5 != null ? ` · SPY ${s.status.regime.spyR5 > 0 ? '+' : ''}${s.status.regime.spyR5}% over 5d` : ''}. The Trade Score damps momentum-chasing in risk-off tape.`}
+              >
+                {s.status.regime.label === 'risk-on' ? '🟢 Risk-on' : s.status.regime.label === 'risk-off' ? '🔴 Risk-off' : '⚪ Neutral'}
+              </span>
+            )}
+          </h1>
           <p className="truncate text-xs text-muted">
             Describe what you&apos;re hunting — the AI screens the live market {s.status ? `· market ${s.status.session}` : ''}
           </p>

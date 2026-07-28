@@ -46,6 +46,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         minShortPctFloat: z.number().optional().describe('Minimum short interest as % of float — squeeze candidates (needs Finnhub plan with short data).'),
         maxDaysToEarnings: z.number().optional().describe('Only stocks reporting earnings within N days (earnings-runup plays).'),
         avoidEarnings: z.boolean().optional().describe('Exclude stocks with earnings within ~2 days (avoid holding through the report).'),
+        allowIlliquid: z.boolean().optional().describe('Bypass the default tradability gate (sub-$1 / under-$500k-daily-dollar-volume names are excluded otherwise).'),
         limit: z.number().int().optional().describe('Max results (default 12, cap 30).')
       },
       handler: (args) => ctx.invoke(`${ID}:screen`, args)

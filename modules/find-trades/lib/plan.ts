@@ -69,6 +69,8 @@ export const ScreenPlanSchema = z.object({
   maxDaysToEarnings: numOrNull,
   /** exclude stocks with earnings within ~2 days (don't hold through) */
   avoidEarnings: z.boolean().catch(false),
+  /** bypass the default tradability gate (sub-$1 / thin dollar-volume names) */
+  allowIlliquid: z.boolean().catch(false),
   /** how many final picks to return (clamped 1..30) */
   limit: z
     .number()
@@ -110,6 +112,8 @@ export interface Candidate {
   edgar?: EdgarSummary | null
   /** StockTwits social read (second social source) */
   stocktwits?: StockTwitsRead | null
+  /** tradability annotation from the liquidity gate */
+  liquidity?: 'ok' | 'thin'
   /** next earnings date + days away (negative/undefined = unknown) */
   earningsDate?: string | null
   daysToEarnings?: number | null
@@ -204,6 +208,25 @@ export function applySignalFilters(rows: Candidate[], plan: ScreenPlan): Candida
     if (plan.nearHigh && !(s && s.pctFrom52High != null && s.pctFrom52High >= -5)) return false
     if (plan.requireUptrend && !(s && s.trendUp && s.aboveSma20)) return false
     if (plan.minScore != null && !(r.score && r.score.score >= plan.minScore)) return false
+    return true
+  })
+}
+
+/**
+ * TRADABILITY GATE — where retail bleeds. Drops names you can't realistically
+ * trade (sub-$1 or < $500k traded today) unless the user explicitly asked for
+ * them (allowIlliquid, or a maxPrice below $1 = a deliberate penny screen), and
+ * annotates the survivors: < $2M/day = 'thin'. Rows with unknown price/volume
+ * (e.g. IPO listings) pass through un-gated rather than being silently killed.
+ */
+export function applyLiquidityGate(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+  const pennyScreen = plan.maxPrice != null && plan.maxPrice < 1
+  return rows.filter((r) => {
+    if (r.price == null || r.volume == null) return true
+    const dollarVol = r.price * r.volume
+    if (!plan.allowIlliquid && !pennyScreen && r.price < 1) return false
+    if (!plan.allowIlliquid && dollarVol < 500_000) return false
+    r.liquidity = dollarVol < 2_000_000 ? 'thin' : 'ok'
     return true
   })
 }
