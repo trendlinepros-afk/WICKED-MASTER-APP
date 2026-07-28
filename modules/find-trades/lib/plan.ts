@@ -63,6 +63,10 @@ export const ScreenPlanSchema = z.object({
   minAnalystBull: numOrNull,
   /** minimum short interest as % of float (squeeze candidates) */
   minShortPctFloat: numOrNull,
+  /** only stocks with earnings within N days (earnings-runup plays) */
+  maxDaysToEarnings: numOrNull,
+  /** exclude stocks with earnings within ~2 days (don't hold through) */
+  avoidEarnings: z.boolean().catch(false),
   /** how many final picks to return (clamped 1..30) */
   limit: z
     .number()
@@ -96,6 +100,10 @@ export interface Candidate {
   catalyst?: Catalyst | null
   /** Tier 3 smart-money extras (analyst / insider / short) */
   extras?: FinnhubExtras
+  /** next earnings date + days away (negative/undefined = unknown) */
+  earningsDate?: string | null
+  daysToEarnings?: number | null
+  earningsHour?: string
 }
 
 /* ------------------------------ plan parsing ----------------------------- */
@@ -197,6 +205,8 @@ export function applyExtrasFilters(rows: Candidate[], plan: ScreenPlan): Candida
     if (plan.insiderBuying && !(e && e.insiderBuying)) return false
     if (plan.minAnalystBull != null && !(e && e.analystBull != null && e.analystBull >= plan.minAnalystBull)) return false
     if (plan.minShortPctFloat != null && !(e && e.shortPctFloat != null && e.shortPctFloat >= plan.minShortPctFloat)) return false
+    if (plan.maxDaysToEarnings != null && !(r.daysToEarnings != null && r.daysToEarnings >= 0 && r.daysToEarnings <= plan.maxDaysToEarnings)) return false
+    if (plan.avoidEarnings && r.daysToEarnings != null && r.daysToEarnings >= 0 && r.daysToEarnings <= 2) return false
     return true
   })
 }

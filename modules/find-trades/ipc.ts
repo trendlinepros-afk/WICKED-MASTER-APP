@@ -4,6 +4,7 @@ import { marketSession } from '../stock-planner/ipc/market/sessions'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import {
   getAggregates,
+  getBenzingaEarnings,
   getFullSnapshot,
   getTickerDetails,
   getIpos,
@@ -12,7 +13,8 @@ import {
   type FullSnapshotRow
 } from '../stock-planner/ipc/market/massive'
 import { preMarketGainers, afterHoursGainers } from '../stock-planner/ipc/market/screeners'
-import { getCompanyNews, getFinnhubExtras, type FinnhubExtras } from '../stock-planner/ipc/market/finnhub'
+import { getCompanyNews, getFinnhubEarnings, getFinnhubExtras, type FinnhubExtras } from '../stock-planner/ipc/market/finnhub'
+import { etTodayYmd } from '../stock-planner/ipc/market/sessions'
 import { classifySetup, computeSignals, tradePlan, tradeScore } from '../stock-planner/ipc/market/signals'
 import { classifyCatalyst } from '../stock-planner/ipc/market/catalyst'
 import { classifySector } from '../trade-analytics/lib/sector'
@@ -80,6 +82,9 @@ export interface Pick {
   insiderBuying: boolean
   insiderNet: number | null
   shortPctFloat: number | null
+  /** next earnings date + days away */
+  daysToEarnings: number | null
+  earningsHour: string | null
 }
 
 /** One row of the "Trending on X" panel — a most-mentioned ticker + rating. */
@@ -152,7 +157,9 @@ function toPick(c: Candidate, thesis = '', flags: string[] = []): Pick {
     analystLabel: c.extras?.analystLabel ?? null,
     insiderBuying: c.extras?.insiderBuying ?? false,
     insiderNet: c.extras?.insiderNet ?? null,
-    shortPctFloat: c.extras?.shortPctFloat ?? null
+    shortPctFloat: c.extras?.shortPctFloat ?? null,
+    daysToEarnings: c.daysToEarnings ?? null,
+    earningsHour: c.earningsHour ?? null
   }
 }
 
@@ -224,17 +231,41 @@ async function tickerExtras(finnhubKey: string, ticker: string): Promise<Finnhub
   return extras
 }
 
-/** Tier 3: attach analyst/insider/short extras to the top candidates (bounded). */
-async function enrichExtras(finnhubKey: string, rows: Candidate[]): Promise<void> {
+/** Days from ET-today to a YYYY-MM-DD earnings date (null if unparseable). */
+function daysToYmd(dateStr: string): number | null {
+  const a = Date.parse(etTodayYmd() + 'T00:00:00Z')
+  const b = Date.parse(dateStr + 'T00:00:00Z')
+  if (Number.isNaN(a) || Number.isNaN(b)) return null
+  return Math.round((b - a) / DAY_MS)
+}
+
+/**
+ * Tier 3: attach analyst/insider/short extras + next earnings date to the top
+ * candidates (bounded, cached). Earnings come from Finnhub, else Massive/Benzinga.
+ */
+async function enrichExtras(finnhubKey: string | null, massiveKey: string, rows: Candidate[]): Promise<void> {
   const queue = rows.slice(0, EXTRAS_CAP)
+  const today = etTodayYmd()
   const worker = async (): Promise<void> => {
     for (;;) {
       const c = queue.shift()
       if (!c) return
+      if (finnhubKey) {
+        try {
+          c.extras = await tickerExtras(finnhubKey, c.ticker)
+        } catch {
+          /* leave without extras */
+        }
+      }
       try {
-        c.extras = await tickerExtras(finnhubKey, c.ticker)
+        const earn = finnhubKey ? await getFinnhubEarnings(finnhubKey, c.ticker) : await getBenzingaEarnings(massiveKey, c.ticker, today)
+        if (earn?.date) {
+          c.earningsDate = earn.date
+          c.daysToEarnings = daysToYmd(earn.date)
+          c.earningsHour = 'hour' in earn ? (earn as { hour?: string }).hour : undefined
+        }
       } catch {
-        /* leave without extras */
+        /* no earnings date */
       }
     }
   }
@@ -322,8 +353,9 @@ const PLAN_RULES =
   'minAtrPct (true movers/"volatile"=>3-5), requireUptrend (true for "uptrend, above moving averages, strong trend"), ' +
   'minScore (0-100, use 60+ only for "best/highest-quality/strongest setups"). ' +
   'Smart-money fields: insiderBuying (true for "insider buying"), minAnalystBull (0-100 for "analyst favorite/rated buy"), ' +
-  'minShortPctFloat (for "high short interest/squeeze", e.g. 20). Leave any unused field null/false. ' +
-  'Keep limit <= 20. rationale = one sentence.'
+  'minShortPctFloat (for "high short interest/squeeze", e.g. 20). ' +
+  'Earnings: maxDaysToEarnings (for "earnings coming up/this week/soon", e.g. 7), avoidEarnings (true for "no earnings/avoid earnings risk"). ' +
+  'Leave any unused field null/false. Keep limit <= 20. rationale = one sentence.'
 
 function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
   const lines = cands.map((c) => {
@@ -340,7 +372,8 @@ function rankPrompt(plan: ScreenPlan, cands: Candidate[]): string {
       (c.catalyst ? ` | catalyst ${c.catalyst.label}${c.catalyst.avoid ? ' (⚠CAUTION)' : ''}` : '') +
       (c.extras?.analystLabel ? ` | analysts ${c.extras.analystLabel} (${c.extras.analystBull}%)` : '') +
       (c.extras?.insiderBuying ? ' | insider buying' : '') +
-      (c.extras?.shortPctFloat != null ? ` | short ${c.extras.shortPctFloat}% float` : '')
+      (c.extras?.shortPctFloat != null ? ` | short ${c.extras.shortPctFloat}% float` : '') +
+      (c.daysToEarnings != null && c.daysToEarnings >= 0 && c.daysToEarnings <= 21 ? ` | earnings in ${c.daysToEarnings}d` : '')
     return (
       `${c.ticker} | ${c.name ?? ''} | price ${c.price ?? 'n/a'} | chg ${c.changePct?.toFixed(2) ?? 'n/a'}% | vol ${c.volume ?? 'n/a'} | ${c.sector ?? '?'} | cap ${fmtCap(c.marketCap ?? null)}` +
       tech +
@@ -376,7 +409,8 @@ export const PRESETS: Preset[] = [
   { id: 'large-momentum', name: 'Large-cap momentum', desc: 'Big caps trending up on volume', plan: { source: 'movers', direction: 'up', minMarketCap: 10_000_000_000, minChangePct: 2, requireUptrend: true, minRvol: 1.2, limit: 15, rationale: 'Large-cap momentum' } },
   { id: 'oversold', name: 'Oversold bounce', desc: 'Down hard, may be due for a bounce', plan: { source: 'movers', direction: 'down', maxChangePct: -5, minRvol: 1.5, limit: 15, rationale: 'Oversold pullbacks' } },
   { id: 'squeeze', name: 'Squeeze candidates', desc: 'High short interest + moving up (needs Finnhub short data)', plan: { source: 'movers', direction: 'up', minShortPctFloat: 20, minRvol: 1.5, limit: 15, rationale: 'Short-squeeze candidates' } },
-  { id: 'smart-money', name: 'Smart-money picks', desc: 'Analyst-loved + insider buying', plan: { source: 'movers', direction: 'up', minAnalystBull: 70, insiderBuying: true, minRvol: 1, limit: 15, rationale: 'Analyst + insider favorites' } }
+  { id: 'smart-money', name: 'Smart-money picks', desc: 'Analyst-loved + insider buying', plan: { source: 'movers', direction: 'up', minAnalystBull: 70, insiderBuying: true, minRvol: 1, limit: 15, rationale: 'Analyst + insider favorites' } },
+  { id: 'earnings-soon', name: 'Earnings this week', desc: 'Movers reporting within 7 days (runup plays)', plan: { source: 'movers', direction: 'up', maxDaysToEarnings: 7, minRvol: 1.2, limit: 15, rationale: 'Earnings within a week' } }
 ]
 
 interface RankOut {
@@ -618,7 +652,7 @@ export default function register(ctx: ModuleIpcContext): void {
     // needs it. Then attach Tier 3 smart-money extras (top-N, Finnhub), apply
     // all filters, and rank by score.
     const enriched = await enrich(massiveKey, finnhubKey, numeric, plan)
-    if (finnhubKey) await enrichExtras(finnhubKey, enriched)
+    await enrichExtras(finnhubKey, massiveKey, enriched)
     const filtered = applyExtrasFilters(applySignalFilters(applyEnrichedFilters(enriched, plan), plan), plan)
     const final = [...filtered].sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0)).slice(0, plan.limit)
     return { candidates: final, note }
@@ -722,7 +756,8 @@ export default function register(ctx: ModuleIpcContext): void {
           analystBull: c.extras?.analystBull ?? null,
           analystLabel: c.extras?.analystLabel ?? null,
           insiderBuying: c.extras?.insiderBuying ?? false,
-          shortPctFloat: c.extras?.shortPctFloat ?? null
+          shortPctFloat: c.extras?.shortPctFloat ?? null,
+          daysToEarnings: c.daysToEarnings ?? null
         }))
       }
     } catch (err) {

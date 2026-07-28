@@ -44,6 +44,8 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         insiderBuying: z.boolean().optional().describe('Require net insider buying over ~90 days (needs Finnhub).'),
         minAnalystBull: z.number().optional().describe('Minimum % of bullish analysts, 0-100 (needs Finnhub).'),
         minShortPctFloat: z.number().optional().describe('Minimum short interest as % of float — squeeze candidates (needs Finnhub plan with short data).'),
+        maxDaysToEarnings: z.number().optional().describe('Only stocks reporting earnings within N days (earnings-runup plays).'),
+        avoidEarnings: z.boolean().optional().describe('Exclude stocks with earnings within ~2 days (avoid holding through the report).'),
         limit: z.number().int().optional().describe('Max results (default 12, cap 30).')
       },
       handler: (args) => ctx.invoke(`${ID}:screen`, args)

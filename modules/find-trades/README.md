@@ -64,9 +64,14 @@ nothing:
 - **Insider activity** — net Form-4 share change over ~90 days ("Insider buys").
 - **Short interest % of float** — squeeze potential (only when your Finnhub plan
   exposes it), plus beta.
+- **Next earnings date** — days away (Finnhub, else Massive/Benzinga), shown as an
+  "Earnings in Nd" chip (amber ≤5 days). Filter with `maxDaysToEarnings`
+  (runup plays) or `avoidEarnings` (don't hold through the report).
 
-Filterable via `insiderBuying`, `minAnalystBull`, `minShortPctFloat` (the AI sets
-them from "insider buying", "analyst favorite", "high short interest / squeeze"),
+Filterable via `insiderBuying`, `minAnalystBull`, `minShortPctFloat`,
+`maxDaysToEarnings`, `avoidEarnings` (the AI sets them from "insider buying",
+"analyst favorite", "high short interest / squeeze", "earnings this week",
+"no earnings risk"),
 and surfaced as row chips + fed to the AI ranker. Extras are cached ~30 min/ticker
 and capped to the top 12 to stay friendly to Finnhub's rate limit.
 

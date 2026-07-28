@@ -105,6 +105,11 @@ function PickCard({ p }: { p: Pick }): React.JSX.Element {
             )}
             {p.insiderBuying && <span className="text-ok" title="Net insider buying over ~90 days">Insider buys</span>}
             {p.shortPctFloat != null && <span className={p.shortPctFloat >= 20 ? 'text-warn' : ''} title="Short interest as % of float — high = squeeze potential">Short {p.shortPctFloat}%</span>}
+            {p.daysToEarnings != null && p.daysToEarnings >= 0 && p.daysToEarnings <= 21 && (
+              <span className={p.daysToEarnings <= 5 ? 'font-medium text-warn' : ''} title={`Reports earnings in ${p.daysToEarnings} day(s)${p.earningsHour ? ` (${p.earningsHour})` : ''} — expect volatility`}>
+                Earnings {p.daysToEarnings === 0 ? 'today' : `in ${p.daysToEarnings}d`}
+              </span>
+            )}
             {p.sector && p.sector !== '—' && <span>{p.sector}</span>}
             {p.marketCap != null && <span className="tabular-nums">Cap {cap(p.marketCap)}</span>}
           </div>
