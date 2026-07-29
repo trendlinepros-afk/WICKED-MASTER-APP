@@ -5,6 +5,8 @@
  * exactly like the web app.
  */
 
+import { etTodayYmd, etYmdDaysAgo } from './sessions'
+
 const DEFAULT_BASE = 'https://api.polygon.io'
 const TIMEOUT_MS = 15_000
 
@@ -229,13 +231,56 @@ export interface FullSnapshotRow extends SnapshotTicker {
   ticker: string
 }
 
+/**
+ * Whole-market rows synthesized from grouped end-of-day aggregates — the fallback
+ * when the real-time snapshot endpoint is unavailable (basic plans / off hours),
+ * so screeners and the Find Trades universe still have a market to scan. Uses the
+ * latest trading day's OHLCV vs the prior trading day's close for the % change.
+ */
+async function groupedSnapshotFallback(key: string): Promise<FullSnapshotRow[]> {
+  let latest: GroupedOHLC[] | null = null
+  let latestBack = 0
+  for (let back = 0; back <= 6; back++) {
+    const ymd = back === 0 ? etTodayYmd() : etYmdDaysAgo(back)
+    const rows = await getGroupedOHLC(key, ymd)
+    if (rows.length > 0) {
+      latest = rows
+      latestBack = back
+      break
+    }
+  }
+  if (!latest) return []
+  const prior = new Map<string, number>()
+  for (let back = latestBack + 1; back <= latestBack + 7; back++) {
+    const rows = await getGroupedDaily(key, etYmdDaysAgo(back))
+    if (rows.length > 0) {
+      for (const r of rows) prior.set(r.T, r.c)
+      break
+    }
+  }
+  return latest.map((r) => {
+    const pc = prior.get(r.T)
+    const row: FullSnapshotRow = {
+      ticker: r.T,
+      day: { o: r.o, h: r.h, l: r.l, c: r.c, v: r.v },
+      lastTrade: { p: r.c },
+      ...(pc != null && pc > 0
+        ? { prevDay: { c: pc }, todaysChange: r.c - pc, todaysChangePerc: ((r.c - pc) / pc) * 100 }
+        : {})
+    }
+    return row
+  })
+}
+
 /** FULL market snapshot (pre/after/daily gainers). 20s cache. */
 let fullSnapCache: { at: number; rows: FullSnapshotRow[] } | null = null
 
 export async function getFullSnapshot(key: string): Promise<FullSnapshotRow[]> {
   if (fullSnapCache && Date.now() - fullSnapCache.at < 20_000) return fullSnapCache.rows
   const j = await massiveFetch(key, `/v2/snapshot/locale/us/markets/stocks/tickers?include_otc=false`)
-  const rows = arr(rec(j).tickers).map((r) => rec(r) as unknown as FullSnapshotRow).filter((r) => r.ticker)
+  let rows = arr(rec(j).tickers).map((r) => rec(r) as unknown as FullSnapshotRow).filter((r) => r.ticker)
+  // Snapshot endpoint empty (plan-gated / off-hours) → synthesize from grouped EOD.
+  if (rows.length === 0) rows = await groupedSnapshotFallback(key)
   if (rows.length > 0) fullSnapCache = { at: Date.now(), rows }
   return rows
 }

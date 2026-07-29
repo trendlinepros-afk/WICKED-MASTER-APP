@@ -160,10 +160,17 @@ function PieChart({ spec }: { spec: Spec }): React.JSX.Element {
   )
 }
 
+function ymdMinus(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() - days)
+  return dt.toISOString().slice(0, 10)
+}
+
 function CandleChart({ spec }: { spec: Spec }): React.JSX.Element {
   const symbol = String(spec.symbol ?? '').toUpperCase()
   const ymd = String(spec.ymd ?? '')
-  const [state, setState] = useState<{ loading: boolean; error?: string; bars?: Bar[] }>({ loading: true })
+  const [state, setState] = useState<{ loading: boolean; error?: string; bars?: Bar[]; usedYmd?: string }>({ loading: true })
 
   useEffect(() => {
     let alive = true
@@ -172,25 +179,32 @@ function CandleChart({ spec }: { spec: Spec }): React.JSX.Element {
         setState({ loading: false, error: 'A candle chart needs a symbol and ymd (YYYY-MM-DD).' })
         return
       }
-      try {
-        const res = (await window.wicked.invoke('trade-review:candles', { symbol, ymd })) as {
-          ok?: boolean
-          bars?: Bar[]
-          error?: string
+      const tryDay = async (d: string): Promise<Bar[] | null> => {
+        try {
+          const res = (await window.wicked.invoke('trade-review:candles', { symbol, ymd: d })) as { ok?: boolean; bars?: Bar[] }
+          return res?.ok && Array.isArray(res.bars) && res.bars.length ? res.bars : null
+        } catch {
+          return null
         }
-        if (!alive) return
-        if (res?.ok && Array.isArray(res.bars) && res.bars.length) setState({ loading: false, bars: res.bars })
-        else setState({ loading: false, error: res?.error || 'No candle data for that symbol/day.' })
-      } catch (e) {
-        if (alive) setState({ loading: false, error: e instanceof Error ? e.message : 'Failed to load candles.' })
       }
+      // Requested day may have no intraday bars yet (today not populated / weekend) — walk back.
+      let used = ymd
+      let bars = await tryDay(ymd)
+      for (let back = 1; back <= 5 && !bars && alive; back++) {
+        used = ymdMinus(ymd, back)
+        bars = await tryDay(used)
+      }
+      if (!alive) return
+      if (bars) setState({ loading: false, bars, usedYmd: used })
+      else setState({ loading: false, error: `No intraday data for ${symbol} on ${ymd} or the prior 5 days.` })
     })()
     return () => {
       alive = false
     }
   }, [symbol, ymd])
 
-  const title = String(spec.title ?? `${symbol} — ${ymd}`)
+  const usedYmd = state.usedYmd ?? ymd
+  const title = String(spec.title ?? `${symbol} — ${usedYmd}`) + (usedYmd !== ymd ? ` (latest session; ${ymd} had no data)` : '')
   if (state.loading)
     return (
       <Frame title={title}>

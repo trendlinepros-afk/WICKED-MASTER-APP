@@ -62,7 +62,16 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!key)
       return { ok: false, error: 'Add your Massive/Polygon key in Settings → API Keys to load candles.', bars: [] }
     try {
-      return { ok: true, bars: await getDayMinuteBars(key, symbol, ymd) }
+      const bars = await getDayMinuteBars(key, symbol, ymd)
+      return {
+        ok: true,
+        bars,
+        ...(bars.length === 0
+          ? {
+              note: `No intraday minute bars for ${symbol} on ${ymd}. Polygon may not have the current session yet, or your market-data plan may exclude intraday aggregates — try a prior trading day.`
+            }
+          : {})
+      }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
