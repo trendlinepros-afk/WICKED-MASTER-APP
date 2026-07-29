@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { AI_ADVISOR_EVENT, type AdvisorEvent, type ChatMessage, type ToolTrace } from './types'
 import { useAdvisor, type LiveTool } from './store'
+import { ChartBlock } from './chart'
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -35,6 +36,47 @@ const mdCls =
   '[&_pre]:bg-raised [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_a]:text-accent [&_a]:underline [&_strong]:font-semibold ' +
   '[&_h1]:mt-3 [&_h1]:text-base [&_h1]:font-bold [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-bold [&_h3]:mt-2 [&_h3]:font-semibold ' +
   '[&_table]:my-2 [&_table]:w-full [&_th]:border [&_th]:border-edge [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-edge [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-2 [&_blockquote]:border-edge [&_blockquote]:pl-3 [&_blockquote]:text-muted'
+
+/** Render assistant text as markdown, rendering any ```wicked-chart``` blocks as charts. */
+const CHART_RE = /```wicked-chart\s*\n?([\s\S]*?)```/g
+function renderRich(text: string): React.ReactNode {
+  const out: React.ReactNode[] = []
+  let last = 0
+  let key = 0
+  let m: RegExpExecArray | null
+  CHART_RE.lastIndex = 0
+  while ((m = CHART_RE.exec(text)) !== null) {
+    const before = text.slice(last, m.index)
+    if (before.trim())
+      out.push(
+        <div key={key++} className={mdCls}>
+          <Markdown remarkPlugins={[remarkGfm]}>{before}</Markdown>
+        </div>
+      )
+    let spec: Record<string, unknown> | null = null
+    try {
+      spec = JSON.parse(m[1].trim()) as Record<string, unknown>
+    } catch {
+      spec = null
+    }
+    if (spec) out.push(<ChartBlock key={key++} spec={spec} />)
+    else
+      out.push(
+        <pre key={key++} className="my-2 overflow-x-auto rounded-lg bg-raised p-2 text-[10px] text-muted">
+          {m[1].trim()}
+        </pre>
+      )
+    last = m.index + m[0].length
+  }
+  const rest = text.slice(last)
+  if (rest.trim() || out.length === 0)
+    out.push(
+      <div key={key++} className={mdCls}>
+        <Markdown remarkPlugins={[remarkGfm]}>{rest}</Markdown>
+      </div>
+    )
+  return <>{out}</>
+}
 
 function ToolChip({ label, status }: { label: string; status: string }): React.JSX.Element {
   const icon =
@@ -85,13 +127,7 @@ function Bubble({ msg }: { msg: ChatMessage }): React.JSX.Element {
               : 'rounded-2xl rounded-tl-sm border border-edge bg-surface px-3.5 py-2'
           }
         >
-          {isUser ? (
-            msg.text
-          ) : (
-            <div className={mdCls}>
-              <Markdown remarkPlugins={[remarkGfm]}>{msg.text}</Markdown>
-            </div>
-          )}
+          {isUser ? msg.text : renderRich(msg.text)}
         </div>
       </div>
       {isUser && (
@@ -177,7 +213,7 @@ export default function AiAdvisor(): React.JSX.Element {
           <div className="min-w-0">
             <h1 className="text-sm font-bold tracking-tight">AI Advisor</h1>
             <p className="truncate text-[11px] text-muted">
-              Reads your Stocks tools · {s.toolCount} tools · Claude
+              Reads your Stocks tools · {s.toolCount} tools · {s.model || 'Claude'}
             </p>
           </div>
         </header>
@@ -240,9 +276,7 @@ export default function AiAdvisor(): React.JSX.Element {
                   ) : (
                     <div className="rounded-2xl rounded-tl-sm border border-edge bg-surface px-3.5 py-2">
                       {s.liveText ? (
-                        <div className={mdCls}>
-                          <Markdown remarkPlugins={[remarkGfm]}>{s.liveText}</Markdown>
-                        </div>
+                        renderRich(s.liveText)
                       ) : (
                         <span className="flex items-center gap-2 text-sm text-muted">
                           <Loader2 size={14} className="animate-spin" /> Thinking…
@@ -293,9 +327,17 @@ export default function AiAdvisor(): React.JSX.Element {
               </button>
             )}
           </div>
-          <p className="mx-auto mt-1.5 max-w-3xl text-center text-[10px] text-muted">
-            The advisor reads your Stocks data; it can’t place trades. Verify before acting. X-API calls ask first (they cost money).
-          </p>
+          <div className="mx-auto mt-1.5 flex max-w-3xl items-center justify-between gap-2 text-[10px] text-muted">
+            <span className="min-w-0 truncate">
+              The advisor reads your Stocks data; it can’t place trades. X-API calls ask first (they cost money).
+            </span>
+            <span
+              className="flex shrink-0 items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5 font-medium"
+              title="The AI model answering in this chat"
+            >
+              <Bot size={10} /> {s.model || 'Claude'}
+            </span>
+          </div>
         </div>
       </main>
     </div>

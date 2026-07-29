@@ -21,6 +21,22 @@ So "how did my NVDA trades do this month?", "is there news moving my watchlist?"
 or "does this setup look good?" pull your actual journals, quotes, candles and
 news before answering.
 
+## Graphical
+
+The advisor renders **charts inline** by emitting a ```` ```wicked-chart ```` code
+block (intercepted before markdown):
+
+- **Stock charts** — `{"kind":"candles","symbol":"NVDA","ymd":"2026-07-28"}`; the
+  renderer fetches 1-minute candles (`trade-review:candles`) and draws a
+  candlestick chart.
+- **Archive stats** — `bar` / `line` / `pie` with inline `data:[{label,value}]`
+  the model computes from your journals (e.g. P/L by symbol, by day, win/loss).
+
+Charts are drawn as theme-aware inline SVG (no external chart library). The model
+is told to visualize proactively when reviewing performance or a ticker's price.
+
+The current model is shown in the header and by the composer.
+
 ## Paid X/Twitter — asks first
 
 The Find Trades **X/Twitter** tools cost real money per use. The advisor *may*

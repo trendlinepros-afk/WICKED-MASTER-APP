@@ -15,6 +15,7 @@ interface StatusRes {
   ok: boolean
   hasKey: boolean
   toolCount: number
+  model: string
 }
 interface ListRes {
   ok: boolean
@@ -44,6 +45,7 @@ interface State {
   convo: Conversation | null
   hasKey: boolean
   toolCount: number
+  model: string
   input: string
   streaming: boolean
   liveText: string
@@ -71,6 +73,7 @@ export const useAdvisor = create<State>((set, get) => ({
   convo: null,
   hasKey: true,
   toolCount: 0,
+  model: '',
   input: '',
   streaming: false,
   liveText: '',
@@ -81,7 +84,7 @@ export const useAdvisor = create<State>((set, get) => ({
 
   init: async () => {
     const st = await invoke<StatusRes>('status')
-    set({ hasKey: !!st.hasKey, toolCount: st.toolCount ?? 0 })
+    set({ hasKey: !!st.hasKey, toolCount: st.toolCount ?? 0, model: st.model ?? '' })
     const list = await invoke<ListRes>('list')
     const metas = list.conversations ?? []
     set({ metas })

@@ -56,6 +56,12 @@ function systemPrompt(): string {
     '',
     'X/Twitter tools cost real money per use. You MAY call them when X sentiment genuinely adds value, but the app will ask the user to approve each X call. If the user declines, continue without X and note the gap. Do not spam X calls.',
     '',
+    'Charts — you can render charts inline. Emit a fenced code block whose language is "wicked-chart" containing JSON on its own lines:',
+    '- Price candles (the app fetches the data — you only give the symbol + date): ```wicked-chart {"kind":"candles","symbol":"NVDA","ymd":"2026-07-28","title":"NVDA — Jul 28"} ```',
+    '- Your trading stats (compute the numbers yourself from the tool data and inline them): {"kind":"bar","title":"Realized P/L by symbol","unit":"$","data":[{"label":"NVDA","value":420},{"label":"TSLA","value":-130}]}',
+    '- Also supported: {"kind":"line",...} and {"kind":"pie",...} using the same data:[{"label","value"}] shape.',
+    'PROACTIVELY visualize: when you review performance or the trading archive, show a bar/line/pie of the key stats (P/L by symbol, P/L by day, win/loss counts, etc.). When you discuss a specific stock\'s price action, show its candles for the relevant day. Put each chart block on its own lines as valid JSON, and still explain it in words. Use "$" as the unit for dollar amounts.',
+    '',
     `Today is ${new Date().toDateString()}. Keep answers focused and use markdown.`
   ].join('\n')
 }
@@ -110,6 +116,7 @@ async function runAgent(
 
   const traces: ToolTrace[] = []
   let assembled = ''
+  let repairs = 0
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const stream = client.messages.stream({
@@ -121,6 +128,9 @@ async function runAgent(
     })
     activeStreams.set(requestId, { abort: () => stream.abort() })
     stream.on('text', (_delta, snapshot) => emit({ requestId, type: 'text', text: assembled + snapshot }))
+    stream.on('error', () => {
+      /* surfaced via finalMessage() rejection; listener prevents an unhandled 'error' */
+    })
 
     let final: Anthropic.Message
     try {
@@ -140,14 +150,28 @@ async function runAgent(
     const toolUses = final.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
 
     if (toolUses.length === 0) {
-      assembled += textPart
+      if (textPart.trim()) {
+        assembled += textPart
+        emit({ requestId, type: 'text', text: assembled })
+        break
+      }
+      // Empty answer (no text, no tools). Retry the same context a couple of times —
+      // occasional empty completions happen, especially right after tool results.
+      if (repairs < 2) {
+        repairs++
+        console.warn(`[ai-advisor] empty completion (stop=${final.stop_reason}); retrying (${repairs}/2)`)
+        continue
+      }
+      assembled += `_The model returned an empty response${final.stop_reason ? ` (stop reason: ${final.stop_reason})` : ''}. Please try asking again._`
       emit({ requestId, type: 'text', text: assembled })
       break
     }
 
-    // model wants tools: commit any preamble text, then run each tool
+    // model wants tools: commit any preamble text, then run each tool.
+    // Drop empty text blocks so the follow-up request can't 400 on an empty block.
     if (textPart) assembled += `${textPart}\n\n`
-    messages.push({ role: 'assistant', content: final.content as Anthropic.ContentBlockParam[] })
+    const assistantContent = final.content.filter((b) => !(b.type === 'text' && !b.text.trim()))
+    messages.push({ role: 'assistant', content: assistantContent as Anthropic.ContentBlockParam[] })
 
     const results: Anthropic.ToolResultBlockParam[] = []
     for (const tu of toolUses) {
@@ -198,7 +222,8 @@ export default function register(ctx: ModuleIpcContext): void {
   ctx.ipcMain.handle(`${ID}:status`, () => ({
     ok: true,
     hasKey: ctx.getApiKey('anthropic') !== null,
-    toolCount: stocksTools().length
+    toolCount: stocksTools().length,
+    model: MODEL
   }))
 
   ctx.ipcMain.handle(`${ID}:list`, () => ({ ok: true, conversations: sortConvos(readAll(ctx)).map(metaOf) }))
