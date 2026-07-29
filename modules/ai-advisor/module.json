@@ -1,0 +1,14 @@
+{
+  "id": "ai-advisor",
+  "name": "AI Advisor",
+  "icon": "Bot",
+  "version": "1.0.0",
+  "description": "An AI trading advisor that can read everything in your Stocks tools — journals, screens, live market data and news — and reason about your trades",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
