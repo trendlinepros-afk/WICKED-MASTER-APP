@@ -57,9 +57,15 @@ the gap. Nothing X-related is spent without your click.
 
 ## Conversations
 
-Previous chats are listed on the left; start new ones with **New chat**. They're
-stored in the module store (`ai-advisor.conversations`), so they're **included in
-Backup & Cloud Sync**.
+Previous chats are listed on the left; start new ones with **New chat**. Hover a
+chat for actions: **rename** (pencil), **archive** (tucks it into the collapsible
+*Archived* dropdown at the bottom of the list), and **delete** (permanent, with a
+confirm). They're stored in the module store (`ai-advisor.conversations`), so
+they're **included in Backup & Cloud Sync**.
+
+The chat text and column width **scale with the window** — on a large/maximized
+screen the bubbles and font grow so the conversation isn't stuck tiny in a narrow
+column.
 
 ## MCP
 

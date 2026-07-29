@@ -25,6 +25,8 @@ export interface Conversation {
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
+  /** archived chats are tucked into a dropdown in the sidebar */
+  archived?: boolean
 }
 
 /** Lightweight conversation summary for the sidebar list. */
@@ -33,6 +35,7 @@ export interface ChatMeta {
   title: string
   updatedAt: number
   count: number
+  archived: boolean
 }
 
 /** Streaming events pushed main → renderer during a send (channel = AI_ADVISOR_EVENT). */

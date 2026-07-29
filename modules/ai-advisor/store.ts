@@ -59,6 +59,7 @@ interface State {
   select: (id: string) => Promise<void>
   newChat: () => Promise<void>
   rename: (id: string, title: string) => Promise<void>
+  archive: (id: string, archived: boolean) => Promise<void>
   remove: (id: string) => Promise<void>
   setInput: (v: string) => void
   send: () => Promise<void>
@@ -88,7 +89,8 @@ export const useAdvisor = create<State>((set, get) => ({
     const list = await invoke<ListRes>('list')
     const metas = list.conversations ?? []
     set({ metas })
-    if (metas.length > 0) await get().select(metas[0].id)
+    const active = metas.filter((m) => !m.archived)
+    if (active.length > 0) await get().select(active[0].id)
     else await get().newChat()
   },
 
@@ -121,11 +123,21 @@ export const useAdvisor = create<State>((set, get) => ({
     }
   },
 
+  archive: async (id, archived) => {
+    await invoke('archive', id, archived)
+    await get().refreshMetas()
+    if (archived && get().currentId === id) {
+      const next = get().metas.find((m) => !m.archived)
+      if (next) await get().select(next.id)
+      else await get().newChat()
+    }
+  },
+
   remove: async (id) => {
     await invoke('delete', id)
     await get().refreshMetas()
     if (get().currentId === id) {
-      const next = get().metas[0]
+      const next = get().metas.find((m) => !m.archived)
       if (next) await get().select(next.id)
       else await get().newChat()
     }

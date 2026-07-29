@@ -31,8 +31,8 @@ function writeAll(ctx: ModuleIpcContext, convos: Conversation[]): void {
 function sortConvos(convos: Conversation[]): Conversation[] {
   return [...convos].sort((a, b) => b.updatedAt - a.updatedAt)
 }
-function metaOf(c: Conversation): { id: string; title: string; updatedAt: number; count: number } {
-  return { id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length }
+function metaOf(c: Conversation): { id: string; title: string; updatedAt: number; count: number; archived: boolean } {
+  return { id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length, archived: !!c.archived }
 }
 
 /* ---------------------------- system prompt ------------------------------ */
@@ -247,6 +247,15 @@ export default function register(ctx: ModuleIpcContext): void {
     convos[i] = { ...convos[i], title: String(title ?? '').slice(0, 80) || convos[i].title, updatedAt: Date.now() }
     writeAll(ctx, convos)
     return { ok: true, conversation: convos[i] }
+  })
+
+  ctx.ipcMain.handle(`${ID}:archive`, (_e, id: unknown, archived: unknown) => {
+    const convos = readAll(ctx)
+    const i = convos.findIndex((x) => x.id === String(id))
+    if (i === -1) return { ok: false, error: 'Not found.' }
+    convos[i] = { ...convos[i], archived: !!archived }
+    writeAll(ctx, convos)
+    return { ok: true, conversations: sortConvos(readAll(ctx)).map(metaOf) }
   })
 
   ctx.ipcMain.handle(`${ID}:delete`, (_e, id: unknown) => {

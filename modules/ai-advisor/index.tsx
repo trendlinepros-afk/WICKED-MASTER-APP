@@ -1,12 +1,17 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   Bot,
   Check,
+  ChevronDown,
+  ChevronRight,
   DollarSign,
   Loader2,
+  Pencil,
   Plus,
   Send,
   Square,
@@ -15,7 +20,7 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import { AI_ADVISOR_EVENT, type AdvisorEvent, type ChatMessage, type ToolTrace } from './types'
+import { AI_ADVISOR_EVENT, type AdvisorEvent, type ChatMessage, type ChatMeta, type ToolTrace } from './types'
 import { useAdvisor, type LiveTool } from './store'
 import { ChartBlock } from './chart'
 
@@ -31,10 +36,10 @@ function ago(ts: number): string {
 }
 
 const mdCls =
-  'text-sm leading-relaxed [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 ' +
-  '[&_code]:rounded [&_code]:bg-raised [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg ' +
+  'leading-relaxed [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 ' +
+  '[&_code]:rounded [&_code]:bg-raised [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.85em] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg ' +
   '[&_pre]:bg-raised [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_a]:text-accent [&_a]:underline [&_strong]:font-semibold ' +
-  '[&_h1]:mt-3 [&_h1]:text-base [&_h1]:font-bold [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-bold [&_h3]:mt-2 [&_h3]:font-semibold ' +
+  '[&_h1]:mt-3 [&_h1]:text-[1.2em] [&_h1]:font-bold [&_h2]:mt-3 [&_h2]:text-[1.08em] [&_h2]:font-bold [&_h3]:mt-2 [&_h3]:font-semibold ' +
   '[&_table]:my-2 [&_table]:w-full [&_th]:border [&_th]:border-edge [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-edge [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-2 [&_blockquote]:border-edge [&_blockquote]:pl-3 [&_blockquote]:text-muted'
 
 /** Render assistant text as markdown, rendering any ```wicked-chart``` blocks as charts. */
@@ -123,7 +128,7 @@ function Bubble({ msg }: { msg: ChatMessage }): React.JSX.Element {
         <div
           className={
             isUser
-              ? 'rounded-2xl rounded-tr-sm bg-accent px-3.5 py-2 text-sm text-accent-ink whitespace-pre-wrap'
+              ? 'rounded-2xl rounded-tr-sm bg-accent px-3.5 py-2 text-accent-ink whitespace-pre-wrap'
               : 'rounded-2xl rounded-tl-sm border border-edge bg-surface px-3.5 py-2'
           }
         >
@@ -145,6 +150,11 @@ export default function AiAdvisor(): React.JSX.Element {
   const s = useAdvisor()
   const endRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const mainRef = useRef<HTMLElement>(null)
+  const [paneW, setPaneW] = useState(900)
+  const [showArchived, setShowArchived] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameText, setRenameText] = useState('')
 
   useEffect(() => {
     void s.init()
@@ -157,6 +167,17 @@ export default function AiAdvisor(): React.JSX.Element {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [s.convo?.messages.length, s.liveText, s.liveTools.length, s.xGate])
 
+  // Scale chat text + column width with the available space so it isn't tiny on a big screen.
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setPaneW(e.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -166,6 +187,76 @@ export default function AiAdvisor(): React.JSX.Element {
 
   const messages = s.convo?.messages ?? []
   const showLive = s.streaming || s.liveText || s.liveTools.length > 0 || s.xGate
+
+  const fontPx = Math.round(Math.max(14, Math.min(20, paneW / 62)))
+  const colMax = Math.round(Math.max(720, Math.min(1180, paneW * 0.84)))
+  const active = s.metas.filter((m) => !m.archived)
+  const archived = s.metas.filter((m) => m.archived)
+
+  const commitRename = async (id: string): Promise<void> => {
+    const t = renameText.trim()
+    setRenamingId(null)
+    if (t) await s.rename(id, t)
+  }
+
+  const row = (m: ChatMeta, isArchived: boolean): React.JSX.Element => (
+    <div
+      key={m.id}
+      className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 ${m.id === s.currentId ? 'bg-raised' : 'hover:bg-raised/50'}`}
+    >
+      {renamingId === m.id ? (
+        <input
+          autoFocus
+          value={renameText}
+          onChange={(e) => setRenameText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void commitRename(m.id)
+            else if (e.key === 'Escape') setRenamingId(null)
+          }}
+          onBlur={() => void commitRename(m.id)}
+          className="min-w-0 flex-1 rounded border border-edge bg-bg px-1.5 py-1 text-sm outline-none focus:border-accent"
+        />
+      ) : (
+        <button onClick={() => void s.select(m.id)} className="min-w-0 flex-1 text-left">
+          <div className="truncate text-sm">{m.title || 'Untitled'}</div>
+          <div className="text-[10px] text-muted">
+            {ago(m.updatedAt)}
+            {m.count ? ` · ${m.count} msg` : ''}
+          </div>
+        </button>
+      )}
+      {renamingId !== m.id && (
+        <div className="flex shrink-0 items-center opacity-0 group-hover:opacity-100">
+          <button
+            onClick={() => {
+              setRenamingId(m.id)
+              setRenameText(m.title)
+            }}
+            title="Rename"
+            className="rounded p-1 text-muted hover:bg-edge/60 hover:text-ink"
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            onClick={() => void s.archive(m.id, !isArchived)}
+            title={isArchived ? 'Unarchive' : 'Archive'}
+            className="rounded p-1 text-muted hover:bg-edge/60 hover:text-ink"
+          >
+            {isArchived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm('Delete this chat permanently? This cannot be undone.')) void s.remove(m.id)
+            }}
+            title="Delete permanently"
+            className="rounded p-1 text-muted hover:bg-danger/10 hover:text-danger"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div className="flex h-full">
@@ -181,33 +272,29 @@ export default function AiAdvisor(): React.JSX.Element {
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {s.metas.length === 0 ? (
+          {active.length === 0 && archived.length === 0 ? (
             <p className="p-4 text-center text-xs text-muted">No conversations yet.</p>
           ) : (
-            s.metas.map((m) => (
-              <div
-                key={m.id}
-                className={`group flex items-center gap-1 rounded-lg px-2 py-2 ${m.id === s.currentId ? 'bg-raised' : 'hover:bg-raised/50'}`}
-              >
-                <button onClick={() => void s.select(m.id)} className="min-w-0 flex-1 text-left">
-                  <div className="truncate text-sm">{m.title || 'Untitled'}</div>
-                  <div className="text-[10px] text-muted">{ago(m.updatedAt)}</div>
-                </button>
-                <button
-                  onClick={() => void s.remove(m.id)}
-                  title="Delete chat"
-                  className="shrink-0 rounded p-1 text-muted opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))
+            <>
+              {active.map((m) => row(m, false))}
+              {archived.length > 0 && (
+                <div className="mt-2 border-t border-edge pt-2">
+                  <button
+                    onClick={() => setShowArchived((v) => !v)}
+                    className="flex w-full items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted hover:text-ink"
+                  >
+                    {showArchived ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Archived ({archived.length})
+                  </button>
+                  {showArchived && <div className="mt-1">{archived.map((m) => row(m, true))}</div>}
+                </div>
+              )}
+            </>
           )}
         </div>
       </aside>
 
       {/* chat */}
-      <main className="flex min-w-0 flex-1 flex-col bg-bg">
+      <main ref={mainRef} className="flex min-w-0 flex-1 flex-col bg-bg">
         <header className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
           <Bot size={18} className="text-accent" />
           <div className="min-w-0">
@@ -225,7 +312,7 @@ export default function AiAdvisor(): React.JSX.Element {
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl space-y-4 p-4">
+          <div className="mx-auto space-y-4 p-4" style={{ maxWidth: colMax, fontSize: fontPx }}>
             {messages.length === 0 && !showLive && (
               <div className="mt-10 text-center text-muted">
                 <Bot size={40} strokeWidth={1.5} className="mx-auto opacity-40" />
@@ -297,7 +384,7 @@ export default function AiAdvisor(): React.JSX.Element {
 
         {/* composer */}
         <div className="border-t border-edge bg-surface p-3">
-          <div className="mx-auto flex max-w-3xl items-end gap-2">
+          <div className="mx-auto flex items-end gap-2" style={{ maxWidth: colMax }}>
             <textarea
               ref={taRef}
               value={s.input}
@@ -305,8 +392,9 @@ export default function AiAdvisor(): React.JSX.Element {
               onKeyDown={onKey}
               rows={1}
               disabled={!s.hasKey}
+              style={{ fontSize: fontPx }}
               placeholder={s.hasKey ? 'Ask about your trades, a ticker, the market…' : 'Add an Anthropic key to start'}
-              className="max-h-40 min-h-[42px] flex-1 resize-none rounded-xl border border-edge bg-raised px-3 py-2.5 text-sm outline-none focus:border-accent disabled:opacity-50"
+              className="max-h-40 min-h-[46px] flex-1 resize-none rounded-xl border border-edge bg-raised px-3 py-2.5 outline-none focus:border-accent disabled:opacity-50"
             />
             {s.streaming ? (
               <button
@@ -327,7 +415,7 @@ export default function AiAdvisor(): React.JSX.Element {
               </button>
             )}
           </div>
-          <div className="mx-auto mt-1.5 flex max-w-3xl items-center justify-between gap-2 text-[10px] text-muted">
+          <div className="mx-auto mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted" style={{ maxWidth: colMax }}>
             <span className="min-w-0 truncate">
               The advisor reads your Stocks data; it can’t place trades. X-API calls ask first (they cost money).
             </span>
