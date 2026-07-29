@@ -1,0 +1,14 @@
+{
+  "id": "trade-log",
+  "name": "Trade Log",
+  "icon": "NotebookPen",
+  "version": "1.0.0",
+  "description": "A hand-written trade journal — for each trade log why you entered, why you exited, and a final review",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
