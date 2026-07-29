@@ -85,6 +85,7 @@ export const useTradeLog = create<State>((set, get) => ({
       sellAt: '',
       sellPrice: null,
       exitNote: '',
+      emotion: null,
       finalReview: ''
     })
     if (res.ok && res.entry) {

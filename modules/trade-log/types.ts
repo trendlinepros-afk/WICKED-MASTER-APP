@@ -25,6 +25,8 @@ export interface JournalEntry {
   sellPrice: number | null
   /** why you left the trade */
   exitNote: string
+  /** how the trade felt on a 1–5 stress scale (1 panicked → 5 cheerful); null = unset */
+  emotion: number | null
 
   /* --- final review --- */
   /** your final thoughts on the trade */
@@ -53,6 +55,20 @@ export function entryPnl(e: Pick<JournalEntry, 'shares' | 'buyPrice' | 'sellPric
 /** A trade is "closed" once a sold price is recorded. */
 export function isClosed(e: Pick<JournalEntry, 'sellPrice'>): boolean {
   return e.sellPrice != null
+}
+
+/** The 1–5 emotion/stress scale on the Exit card: scared/mad → happy/cheerful. */
+export const EMOTIONS: { value: number; emoji: string; label: string }[] = [
+  { value: 1, emoji: '😱', label: 'Panicked' },
+  { value: 2, emoji: '😠', label: 'Stressed' },
+  { value: 3, emoji: '😐', label: 'Neutral' },
+  { value: 4, emoji: '🙂', label: 'Calm' },
+  { value: 5, emoji: '😄', label: 'Cheerful' }
+]
+
+/** Emoji for a stored emotion value, or "" when unset/out of range. */
+export function emotionEmoji(value: number | null | undefined): string {
+  return EMOTIONS.find((e) => e.value === value)?.emoji ?? ''
 }
 
 /** "YYYY-MM-DDTHH:mm" (or a date-only prefix) → "MM/DD/YY"; "" if unparseable. */

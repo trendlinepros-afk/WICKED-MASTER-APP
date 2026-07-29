@@ -39,6 +39,10 @@ const shareCount = (v: unknown): number => {
   const n = num(v)
   return n != null && n >= 0 ? n : 0
 }
+const emotion = (v: unknown): number | null => {
+  const n = num(v)
+  return n != null && n >= 1 && n <= 5 ? Math.round(n) : null
+}
 
 /** Coerce arbitrary renderer/agent input into a clean draft. */
 function normalizeDraft(raw: unknown): JournalDraft {
@@ -57,6 +61,7 @@ function normalizeDraft(raw: unknown): JournalDraft {
     sellAt: str(r.sellAt, 40),
     sellPrice: num(r.sellPrice),
     exitNote: str(r.exitNote, MAX_NOTE),
+    emotion: emotion(r.emotion),
     finalReview: str(r.finalReview, MAX_NOTE)
   }
 }

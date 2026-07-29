@@ -22,6 +22,13 @@ const FIELDS = {
   sellAt: z.string().optional().describe('Datetime sold, "YYYY-MM-DDTHH:mm" (blank if still open).'),
   sellPrice: z.number().optional().describe('Price per share you sold at (blank if still open).'),
   exitNote: z.string().optional().describe('Why you left the trade.'),
+  emotion: z
+    .number()
+    .int()
+    .min(1)
+    .max(5)
+    .optional()
+    .describe('How the trade felt on a 1–5 stress scale: 1 panicked, 2 stressed, 3 neutral, 4 calm, 5 cheerful.'),
   finalReview: z.string().optional().describe('Your final thoughts on the trade.')
 }
 

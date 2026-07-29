@@ -14,9 +14,12 @@ AI coach): this one is purely your own narrative — one entry per trade.
   it (or hit "Use auto name") to go back to auto.
 - **Entry** — the stock, when you bought, how many shares, the buy price, and a
   **"Why I bought"** note (setup / thesis / plan).
-- **Exit** — the sold price, when you sold, and a **"Why I left the trade"**
-  note. Left blank, the trade shows as **Open**; add a sold price and it becomes
-  **Closed**.
+- **Exit** — the sold price, when you sold, a **"Why I left the trade"** note,
+  and a **stress/emotion rating**: a 5-emoji scale from 😱 Panicked → 😠 Stressed
+  → 😐 Neutral → 🙂 Calm → 😄 Cheerful, so you can judge how stressed you were
+  during the trade (click the chosen face again to clear it). The face shows on
+  the entry's list row. Left blank, the trade shows as **Open**; add a sold price
+  and it becomes **Closed**.
 - **Final review** — your hindsight thoughts on the trade.
 
 When buy price, shares and sold price are all present, the entry shows realized

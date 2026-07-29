@@ -9,7 +9,7 @@ import {
   Trash2
 } from 'lucide-react'
 import { useTradeLog } from './store'
-import { autoName, effectiveAuto, entryPnl, entryTitle, isClosed, type JournalEntry } from './types'
+import { autoName, effectiveAuto, EMOTIONS, emotionEmoji, entryPnl, entryTitle, isClosed, type JournalEntry } from './types'
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -64,6 +64,11 @@ function EntryRow({ e, active, onClick }: { e: JournalEntry; active: boolean; on
         >
           {closed ? 'Closed' : 'Open'}
         </span>
+        {emotionEmoji(e.emotion) && (
+          <span className="shrink-0 text-sm leading-none" title="How the trade felt">
+            {emotionEmoji(e.emotion)}
+          </span>
+        )}
         {pl && (
           <span className={`ml-auto flex items-center gap-0.5 text-xs font-semibold tabular-nums ${pl.abs >= 0 ? 'text-ok' : 'text-danger'}`}>
             {pl.abs >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
@@ -247,6 +252,32 @@ function Editor(): React.JSX.Element | null {
             />
           </div>
         </div>
+        <div className="mt-3">
+          <label className={labelCls}>
+            How did this trade feel? <span className="text-muted/70">— your stress level</span>
+          </label>
+          <div className="mt-1 flex gap-2">
+            {EMOTIONS.map((em) => {
+              const active = draft.emotion === em.value
+              return (
+                <button
+                  key={em.value}
+                  type="button"
+                  onClick={() => edit({ emotion: active ? null : em.value })}
+                  title={em.label}
+                  aria-pressed={active}
+                  className={`flex flex-1 flex-col items-center gap-1 rounded-lg border px-1 py-2 transition-colors ${
+                    active ? 'border-accent bg-accent/10' : 'border-edge bg-raised hover:border-accent/50'
+                  }`}
+                >
+                  <span className={`text-2xl leading-none transition ${active ? '' : 'opacity-60 grayscale'}`}>{em.emoji}</span>
+                  <span className={`text-[10px] font-medium ${active ? 'text-ink' : 'text-muted'}`}>{em.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="mt-3">
           <label className={labelCls}>Why I left the trade</label>
           <textarea
