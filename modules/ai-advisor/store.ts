@@ -25,6 +25,8 @@ interface OneRes {
   ok: boolean
   conversation?: Conversation | null
   error?: string
+  /** on a failed send, the user's text to put back in the composer */
+  restore?: string
 }
 
 /** A live tool chip while the advisor is working. */
@@ -166,7 +168,19 @@ export const useAdvisor = create<State>((set, get) => ({
       set({ convo: res.conversation, streaming: false, liveText: '', liveTools: [], xGate: null, reqId: null })
       await get().refreshMetas()
     } else {
-      set({ streaming: false, xGate: null, reqId: null, error: res.error ?? 'Something went wrong.' })
+      // failed turn: drop the optimistic user bubble (server rolled it back too)
+      // and put the text back in the composer so it's easy to resend.
+      set({
+        streaming: false,
+        liveText: '',
+        liveTools: [],
+        xGate: null,
+        reqId: null,
+        error: res.error ?? 'Something went wrong.',
+        ...(res.conversation ? { convo: res.conversation } : {}),
+        input: get().input.trim() ? get().input : res.restore ?? ''
+      })
+      await get().refreshMetas()
     }
   },
 

@@ -19,6 +19,58 @@ const MAX_TOKENS = 4096
 const MAX_ROUNDS = 8
 const CONVO_CAP = 60
 
+/* ------------------------------ error/retry ------------------------------ */
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+function errStatus(err: unknown): number {
+  const e = err as { status?: number; statusCode?: number }
+  return Number(e?.status ?? e?.statusCode ?? 0)
+}
+
+function isAbortErr(err: unknown): boolean {
+  const name = (err as { name?: string })?.name ?? ''
+  return name === 'APIUserAbortError' || /abort/i.test(err instanceof Error ? err.message : String(err))
+}
+
+/** Transient API conditions worth retrying (overloaded, rate-limit, 5xx, network). */
+function isTransientErr(err: unknown): boolean {
+  const s = errStatus(err)
+  if (s === 408 || s === 409 || s === 429 || s >= 500) return true
+  const m = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  return /overload|rate.?limit|timeout|temporarily|econnreset|etimedout|fetch failed|network/.test(m)
+}
+
+/** A readable message for the user instead of a raw SDK/JSON error body. */
+function friendlyErr(err: unknown): string {
+  const s = errStatus(err)
+  const raw = err instanceof Error ? err.message : String(err)
+  const m = raw.toLowerCase()
+  if (s === 529 || /overload/.test(m))
+    return 'Claude is temporarily overloaded. I retried a few times without luck — please send your message again in a moment.'
+  if (s === 429 || /rate.?limit/.test(m)) return 'Hit the API rate limit. Wait a few seconds and try again.'
+  if (s === 401 || /invalid x-api-key|authentication|unauthorized/.test(m))
+    return 'Your Anthropic API key was rejected. Check it in Settings → API Keys.'
+  if (s >= 500) return 'The AI service had a temporary error. Please try again in a moment.'
+  return `The AI request failed: ${raw.replace(/\s+/g, ' ').slice(0, 300)}`
+}
+
+/** Merge consecutive same-role messages so the API never sees two user (or two
+ *  assistant) turns in a row — e.g. a chat left with a dangling user message from
+ *  an earlier failed turn. */
+function coalesceMessages(msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = []
+  for (const m of msgs) {
+    const last = out[out.length - 1]
+    if (last && last.role === m.role && typeof last.content === 'string' && typeof m.content === 'string')
+      last.content = `${last.content}\n\n${m.content}`
+    else out.push({ role: m.role, content: m.content })
+  }
+  return out
+}
+
 /* ------------------------------ persistence ------------------------------ */
 
 function readAll(ctx: ModuleIpcContext): Conversation[] {
@@ -100,7 +152,7 @@ async function runAgent(
     if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, e)
   }
 
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, maxRetries: 3 })
   const tools = stocksTools()
   const byName = new Map(tools.map((t) => [t.def.name, t]))
   const anthropicTools: Anthropic.Tool[] = tools.map((t) => ({
@@ -109,39 +161,51 @@ async function runAgent(
     input_schema: t.jsonSchema as Anthropic.Tool['input_schema']
   }))
 
-  const messages: Anthropic.MessageParam[] = prior
-    .filter((m) => m.text.trim())
-    .map((m) => ({ role: m.role, content: m.text }))
-  messages.push({ role: 'user', content: userText })
+  const messages: Anthropic.MessageParam[] = coalesceMessages([
+    ...prior.filter((m) => m.text.trim()).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam),
+    { role: 'user', content: userText }
+  ])
 
   const traces: ToolTrace[] = []
   let assembled = ''
   let repairs = 0
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const stream = client.messages.stream({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: systemPrompt(),
-      messages,
-      ...(anthropicTools.length ? { tools: anthropicTools } : {})
-    })
-    activeStreams.set(requestId, { abort: () => stream.abort() })
-    stream.on('text', (_delta, snapshot) => emit({ requestId, type: 'text', text: assembled + snapshot }))
-    stream.on('error', () => {
-      /* surfaced via finalMessage() rejection; listener prevents an unhandled 'error' */
-    })
-
-    let final: Anthropic.Message
-    try {
-      final = await stream.finalMessage()
-    } catch (err) {
-      activeStreams.delete(requestId)
-      // aborted by the user → return whatever we have so far
-      if (assembled.trim()) return { text: assembled.trim(), tools: traces }
-      throw err
+    // Stream one round, retrying transient API errors (overloaded / rate-limit / 5xx).
+    let final: Anthropic.Message | undefined
+    for (let attempt = 0; ; attempt++) {
+      const stream = client.messages.stream({
+        model: MODEL,
+        max_tokens: MAX_TOKENS,
+        system: systemPrompt(),
+        messages,
+        ...(anthropicTools.length ? { tools: anthropicTools } : {})
+      })
+      activeStreams.set(requestId, { abort: () => stream.abort() })
+      stream.on('text', (_delta, snapshot) => emit({ requestId, type: 'text', text: assembled + snapshot }))
+      stream.on('error', () => {
+        /* surfaced via finalMessage() rejection; listener prevents an unhandled 'error' */
+      })
+      try {
+        final = await stream.finalMessage()
+        break
+      } catch (err) {
+        activeStreams.delete(requestId)
+        if (isAbortErr(err)) {
+          if (assembled.trim()) return { text: assembled.trim(), tools: traces }
+          throw err
+        }
+        if (isTransientErr(err) && attempt < 3) {
+          emit({ requestId, type: 'text', text: `${assembled}\n\n_Claude is busy — retrying (${attempt + 1}/3)…_` })
+          await sleep(Math.min(8000, 800 * 2 ** attempt))
+          continue
+        }
+        if (assembled.trim()) return { text: assembled.trim(), tools: traces }
+        throw err
+      }
     }
     activeStreams.delete(requestId)
+    if (!final) throw new Error('No response from Claude.')
 
     const textPart = final.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -314,7 +378,22 @@ export default function register(ctx: ModuleIpcContext): void {
       if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, { requestId: rid, type: 'done' } as AdvisorEvent)
       return { ok: true, conversation: j !== -1 ? after[j] : null }
     } catch (err) {
-      return emitErr(err instanceof Error ? err.message : String(err))
+      // Roll back the just-added user message so a failed turn can't leave a
+      // dangling user turn (which would duplicate on retry and break role
+      // alternation). Hand the text back so the composer can restore it.
+      const back = readAll(ctx)
+      const k = back.findIndex((x) => x.id === convos[i].id)
+      if (k !== -1) {
+        const msgs = back[k].messages
+        if (msgs.length && msgs[msgs.length - 1].role === 'user' && msgs[msgs.length - 1].text === userText) {
+          back[k] = { ...back[k], messages: msgs.slice(0, -1) }
+          writeAll(ctx, back)
+        }
+      }
+      const error = friendlyErr(err)
+      const win = ctx.getMainWindow()
+      if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, { requestId: rid, type: 'error', error } as AdvisorEvent)
+      return { ok: false, error, conversation: k !== -1 ? back[k] : null, restore: userText }
     }
   })
 
