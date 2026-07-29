@@ -155,16 +155,33 @@ function rowToExecution(r: Record<string, unknown>): Execution {
   }
 }
 
-function insertExecutions(database: Database.Database, execs: Execution[], account: string): number {
+/**
+ * Insert fills into `account`. A given fill (by content hash) may live in only
+ * ONE account: if the same fill already exists under a DIFFERENT account it is
+ * NOT copied here (counted as `crossSkipped`), so accounts stay 100% separate and
+ * the same trade can never be double-counted across accounts. Same-account
+ * re-imports are idempotent (INSERT OR IGNORE on the composite PK).
+ */
+function insertExecutions(
+  database: Database.Database,
+  execs: Execution[],
+  account: string
+): { imported: number; crossSkipped: number } {
   const stmt = database.prepare(`
     INSERT OR IGNORE INTO executions
       (account, hash, name, symbol, side, sideRaw, status, filled, qty, totalQty, price, avgPrice, limitPrice, timeInForce, placedText, filledText, filledAt, placedAt)
     VALUES
       (@account, @hash, @name, @symbol, @side, @sideRaw, @status, @filled, @qty, @totalQty, @price, @avgPrice, @limitPrice, @timeInForce, @placedText, @filledText, @filledAt, @placedAt)
   `)
+  const elsewhere = database.prepare('SELECT 1 FROM executions WHERE hash = ? AND account != ? LIMIT 1')
   let imported = 0
+  let crossSkipped = 0
   const tx = database.transaction((rows: Execution[]) => {
     for (const e of rows) {
+      if (elsewhere.get(e.hash, account)) {
+        crossSkipped++
+        continue
+      }
       const info = stmt.run({
         account,
         hash: e.hash,
@@ -189,7 +206,7 @@ function insertExecutions(database: Database.Database, execs: Execution[], accou
     }
   })
   tx(execs)
-  return imported
+  return { imported, crossSkipped }
 }
 
 function allExecutions(database: Database.Database): Execution[] {
@@ -236,15 +253,16 @@ function importCsvFile(
   database: Database.Database,
   path: string,
   account: string
-): { file: string; parsed: number; imported: number; skipped: number; errors: number } {
+): { file: string; parsed: number; imported: number; skipped: number; crossSkipped: number; errors: number } {
   const text = readFileSync(path, 'utf8')
   const parsed = parseWebullCsv(text)
-  const imported = insertExecutions(database, parsed.executions, account)
+  const { imported, crossSkipped } = insertExecutions(database, parsed.executions, account)
   return {
     file: path,
     parsed: parsed.executions.length,
     imported,
-    skipped: parsed.executions.length - imported,
+    skipped: parsed.executions.length - imported - crossSkipped,
+    crossSkipped,
     errors: parsed.errors.length
   }
 }
@@ -397,6 +415,7 @@ export default function register(ctx: ModuleIpcContext): void {
         files,
         imported: files.reduce((n, f) => n + f.imported, 0),
         skipped: files.reduce((n, f) => n + f.skipped, 0),
+        crossSkipped: files.reduce((n, f) => n + f.crossSkipped, 0),
         executions: allExecutions(database)
       }
     } catch (err) {
@@ -420,6 +439,7 @@ export default function register(ctx: ModuleIpcContext): void {
         files,
         imported: files.reduce((n, f) => n + f.imported, 0),
         skipped: files.reduce((n, f) => n + f.skipped, 0),
+        crossSkipped: files.reduce((n, f) => n + f.crossSkipped, 0),
         executions: allExecutions(database)
       }
     } catch (err) {
@@ -437,6 +457,54 @@ export default function register(ctx: ModuleIpcContext): void {
         database.exec('DELETE FROM executions')
       }
       return { ok: true, executions: allExecutions(database) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  /* ----------------------- cross-account de-duplication -------------------- */
+
+  // Count fills that (from older builds) exist under more than one account —
+  // these double-count trades and inflate open positions.
+  ctx.ipcMain.handle(`${ID}:dedupe-audit`, () => {
+    try {
+      const database = getDb(ctx.app)
+      const rows = database
+        .prepare('SELECT COUNT(DISTINCT account) AS accts FROM executions GROUP BY hash HAVING accts > 1')
+        .all() as { accts: number }[]
+      const duplicateHashes = rows.length
+      const extraCopies = rows.reduce((n, r) => n + (r.accts - 1), 0)
+      return { ok: true, duplicateHashes, extraCopies }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // Repair: keep each duplicated fill in ONE account (the earliest-created named
+  // account that holds it; 'default' is dropped whenever a named copy exists) and
+  // remove the other copies. Only ever deletes true duplicates — the fill remains.
+  ctx.ipcMain.handle(`${ID}:dedupe-fix`, () => {
+    try {
+      const database = getDb(ctx.app)
+      const rank = new Map<string, number>()
+      for (const a of database.prepare('SELECT id, createdAt FROM accounts').all() as { id: string; createdAt: number }[])
+        rank.set(a.id, a.id === 'default' ? Number.MAX_SAFE_INTEGER : a.createdAt)
+      const dupHashes = database
+        .prepare('SELECT hash FROM executions GROUP BY hash HAVING COUNT(DISTINCT account) > 1')
+        .all() as { hash: string }[]
+      const getAccts = database.prepare('SELECT DISTINCT account FROM executions WHERE hash = ?')
+      const del = database.prepare('DELETE FROM executions WHERE hash = ? AND account = ?')
+      let removed = 0
+      const tx = database.transaction(() => {
+        for (const { hash } of dupHashes) {
+          const accts = (getAccts.all(hash) as { account: string }[]).map((r) => r.account)
+          let keep = accts[0]
+          for (const a of accts) if ((rank.get(a) ?? 0) < (rank.get(keep) ?? 0)) keep = a
+          for (const a of accts) if (a !== keep) removed += del.run(hash, a).changes
+        }
+      })
+      tx()
+      return { ok: true, removed, executions: allExecutions(database) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }

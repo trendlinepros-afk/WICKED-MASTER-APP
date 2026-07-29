@@ -726,6 +726,24 @@ export default function TradeAnalytics(): React.JSX.Element {
       {/* accounts bar (multi-select view + manage + import target) */}
       {!empty && <AccountsBar onManage={() => setManageOpen(true)} />}
 
+      {/* cross-account duplicate repair (fills that leaked across accounts in older builds) */}
+      {!empty && s.dupExtraCopies > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-warn/40 bg-warn/10 px-5 py-2 text-sm text-warn">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span className="min-w-0 flex-1">
+            {s.dupExtraCopies} trade fill{s.dupExtraCopies === 1 ? '' : 's'} exist in more than one account (from an older
+            version). This double-counts trades and inflates your open positions.
+          </span>
+          <button
+            onClick={() => void s.fixDuplicates()}
+            disabled={s.importing}
+            className="shrink-0 rounded-lg bg-warn px-3 py-1.5 text-xs font-semibold text-bg hover:opacity-90 disabled:opacity-50"
+          >
+            Clean up duplicates
+          </button>
+        </div>
+      )}
+
       {/* tabs */}
       {!empty && (
         <div className="flex items-center gap-1 overflow-x-auto border-b border-edge px-4 pt-2">

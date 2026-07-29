@@ -51,6 +51,16 @@ cross-checked by hand).
   source of truth — so FIFO and every stat stay correct; a hand-entered exit
   price left blank means the position is still open. Manual rows carry a UUID
   key so they never collide with or get de-duped against imported fills.
+
+**Account isolation.** Each account's executions are FIFO-matched on their own, so
+a buy in one account can never close a position in another. A given fill (by
+content hash) lives in **exactly one account**: importing a CSV whose fills
+already exist under a different account skips them (reported as "already in
+another account"), so accounts stay 100% separate and no trade is double-counted.
+If data from an older build ended up in more than one account, a **"Clean up
+duplicates"** banner appears — it keeps each fill in a single account (the
+earliest-created named account that holds it) and removes the extra copies, which
+also fixes inflated open-position counts.
 - **Open Positions** — the "no sell yet" list with cost basis and age.
 - **Symbols** — P&L-by-symbol bar chart + a sortable-by-P&L table.
 - **Timing** — P&L by weekday, by hour (ET), and daily.

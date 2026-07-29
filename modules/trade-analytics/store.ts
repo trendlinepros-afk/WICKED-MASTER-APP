@@ -99,6 +99,8 @@ interface State {
   error: string
   lastImport: ImportSummary | null
   dragOver: boolean
+  /** fills that (from older builds) live under more than one account — inflates numbers */
+  dupExtraCopies: number
 
   // accounts
   accounts: Account[]
@@ -135,6 +137,8 @@ interface State {
   importDialog: (account?: string) => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
   clearAll: (account?: string) => Promise<void>
+  auditDuplicates: () => Promise<void>
+  fixDuplicates: () => Promise<void>
   saveTrade: (draft: TradeDraft) => Promise<string | null>
   deleteTrade: (account: string, hashes: string[]) => Promise<void>
   loadSectors: () => Promise<void>
@@ -164,16 +168,19 @@ export const useTrades = create<State>((set, get) => {
     const executions = Array.isArray((res as Ok).executions) ? ((res as Ok).executions as Execution[]) : get().allExecutions
     const imported = Number((res as Ok).imported) || 0
     const skipped = Number((res as Ok).skipped) || 0
+    const crossSkipped = Number((res as Ok).crossSkipped) || 0
     const files = Array.isArray((res as Ok).files) ? ((res as Ok).files as unknown[]).length : 1
     recompute(executions)
     await get().refreshAccounts()
     void get().loadSectors()
+    void get().auditDuplicates()
+    const dupNote = crossSkipped > 0 ? ` ${crossSkipped} already in another account were kept out (accounts stay separate).` : ''
     set({
       lastImport: { imported, skipped, files },
       status:
         imported > 0
-          ? `Imported ${imported} new execution(s)${skipped > 0 ? `, skipped ${skipped} duplicate(s)` : ''}.`
-          : `No new executions — all ${skipped} row(s) were already imported.`
+          ? `Imported ${imported} new execution(s)${skipped > 0 ? `, skipped ${skipped} duplicate(s)` : ''}.${dupNote}`
+          : `No new executions — all ${skipped} row(s) were already imported.${dupNote}`
     })
   }
 
@@ -190,6 +197,7 @@ export const useTrades = create<State>((set, get) => {
     error: '',
     lastImport: null,
     dragOver: false,
+    dupExtraCopies: 0,
 
     accounts: [],
     selectedAccounts: [],
@@ -229,6 +237,7 @@ export const useTrades = create<State>((set, get) => {
       if (res.ok === true) recompute((res.executions as Execution[]) ?? [], [])
       await get().refreshAccounts()
       void get().loadSectors()
+      void get().auditDuplicates()
       set({ loaded: true })
     },
 
@@ -312,6 +321,28 @@ export const useTrades = create<State>((set, get) => {
         recompute((res.executions as Execution[]) ?? [])
         await get().refreshAccounts()
         set({ status: account ? 'Account data cleared.' : 'All imported trade data cleared.', lastImport: null, aiText: '', aiProvider: '' })
+      } finally {
+        set({ importing: false })
+      }
+    },
+
+    auditDuplicates: async () => {
+      const res = (await invoke('dedupe-audit')) as Res & { extraCopies?: number }
+      if (res.ok === true) set({ dupExtraCopies: Number(res.extraCopies) || 0 })
+    },
+
+    fixDuplicates: async () => {
+      set({ importing: true, status: 'Cleaning up cross-account duplicates…', error: '' })
+      try {
+        const res = (await invoke('dedupe-fix')) as Res & { removed?: number; executions?: Execution[] }
+        if (res.ok !== true) {
+          set({ error: (res as Err).error ?? 'Cleanup failed.' })
+          return
+        }
+        recompute((res.executions as Execution[]) ?? get().allExecutions)
+        await get().refreshAccounts()
+        await get().auditDuplicates()
+        set({ status: `Removed ${Number(res.removed) || 0} duplicate fill(s) — each trade now lives in a single account.` })
       } finally {
         set({ importing: false })
       }
