@@ -1,91 +1,58 @@
-import { existsSync } from 'fs'
-import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
-import { chartServerUrl, startChartServer } from './ipc/server'
+import { getAggregates } from '../stock-planner/ipc/market/massive'
 
 /**
- * ADVANCED CHARTS — main process. The TradingView Charting Library is licensed
- * and NOT bundled: the user requests free access at
- * tradingview.com/advanced-charts, downloads the charting_library folder, and
- * points the module at it. Until then the UI shows setup instructions instead
- * of breaking (ported behavior).
+ * ADVANCED CHARTS — a self-contained candlestick chart rendered in the renderer
+ * with Lightweight Charts (MIT), fed by the same Massive/Polygon market data the
+ * rest of the Stocks tools use. No licensed TradingView library or local chart
+ * server is required: if the Massive key is set, charts work out of the box.
  */
 const ID = 'advanced-charts'
-const LIB_KEY = `${ID}.libraryPath`
 
-const LIB_MAIN_JS = 'charting_library.standalone.js'
+interface Timeframe {
+  mult: number
+  timespan: 'minute' | 'day'
+  days: number
+}
+const TIMEFRAMES: Record<string, Timeframe> = {
+  '1D': { mult: 1, timespan: 'minute', days: 2 },
+  '5D': { mult: 5, timespan: 'minute', days: 7 },
+  '1M': { mult: 1, timespan: 'day', days: 40 },
+  '3M': { mult: 1, timespan: 'day', days: 100 },
+  '1Y': { mult: 1, timespan: 'day', days: 380 }
+}
 
 export default function register(ctx: ModuleIpcContext): void {
-  const layoutsDir = join(ctx.app.getPath('userData'), 'modules', ID, 'layouts')
-
-  const libraryPath = (): string => {
-    const v = ctx.storeGet<string>(LIB_KEY, '')
-    return typeof v === 'string' ? v : ''
-  }
-  const libraryValid = (dir: string): boolean => !!dir && existsSync(join(dir, LIB_MAIN_JS))
-
   ctx.ipcMain.handle(`${ID}:status`, () => {
-    const lib = libraryPath()
-    return {
-      ok: true,
-      libraryPath: lib || null,
-      configured: libraryValid(lib),
-      hasMassive: !!ctx.getApiKey('massive'),
-      url: chartServerUrl() || null
-    }
+    const hasMassive = ctx.getApiKey('massive') !== null
+    return { ok: true, hasMassive, configured: hasMassive }
   })
 
-  ctx.ipcMain.handle(`${ID}:set-library-path`, async () => {
-    const win = ctx.getMainWindow()
-    const opts = {
-      title: 'Locate your TradingView charting_library folder',
-      properties: ['openDirectory' as const]
-    }
-    const res = win ? await ctx.dialog.showOpenDialog(win, opts) : await ctx.dialog.showOpenDialog(opts)
-    if (res.canceled || res.filePaths.length === 0) return { ok: false, canceled: true }
-    let dir = res.filePaths[0]
-    // accept the parent folder too (user picked the repo root)
-    if (!libraryValid(dir) && libraryValid(join(dir, 'charting_library'))) dir = join(dir, 'charting_library')
-    if (!libraryValid(dir))
-      return {
-        ok: false,
-        error: `That folder has no ${LIB_MAIN_JS}. Pick the charting_library folder from TradingView's Advanced Charts download.`
-      }
-    ctx.storeSet(LIB_KEY, dir)
-    return { ok: true, libraryPath: dir }
-  })
-
-  ctx.ipcMain.handle(`${ID}:start`, async () => {
-    const lib = libraryPath()
-    if (!libraryValid(lib))
-      return {
-        ok: false,
-        error:
-          'The charting library is not set up yet. Request free access at tradingview.com/advanced-charts, download it, then click "Locate library…".'
-      }
+  ctx.ipcMain.handle(`${ID}:candles`, async (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const symbol = typeof r.symbol === 'string' ? r.symbol.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '') : ''
+    const tfKey = typeof r.timeframe === 'string' && TIMEFRAMES[r.timeframe] ? r.timeframe : '1D'
+    if (!symbol) return { ok: false, error: 'Enter a symbol.', bars: [] }
+    const key = ctx.getApiKey('massive')
+    if (!key) return { ok: false, error: 'Add your Massive/Polygon key in Settings → API Keys to load charts.', bars: [] }
+    const tf = TIMEFRAMES[tfKey]
+    const to = Date.now()
+    const from = to - tf.days * 86_400_000
     try {
-      const { url } = await startChartServer({
-        getMassiveKey: () => ctx.getApiKey('massive'),
-        libraryPath,
-        layoutsDir
-      })
-      return { ok: true, url }
+      const bars = await getAggregates(key, symbol, tf.mult, tf.timespan, from, to)
+      return {
+        ok: true,
+        bars,
+        timeframe: tfKey,
+        ...(bars.length === 0
+          ? { note: `No ${tfKey} data for ${symbol} — unknown symbol, or your plan/market hours have no bars yet.` }
+          : {})
+      }
     } catch (err) {
-      return { ok: false, error: 'Could not start the chart host: ' + (err instanceof Error ? err.message : String(err)) }
+      return { ok: false, error: err instanceof Error ? err.message : String(err), bars: [] }
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => [
-    {
-      label: 'Charting library',
-      path: libraryValid(libraryPath()) ? libraryPath() : null,
-      note: 'Licensed TradingView folder you downloaded (not bundled with WICKED)'
-    },
-    {
-      label: 'Saved layouts',
-      path: existsSync(layoutsDir) ? layoutsDir : null,
-      note: 'Chart layouts incl. drawings (JSON, 8MB cap each)'
-    }
-  ])
+  ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => [])
 }

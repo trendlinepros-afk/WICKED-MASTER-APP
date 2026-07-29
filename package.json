@@ -1,7 +1,7 @@
 {
   "name": "wicked-suite",
   "productName": "WICKED",
-  "version": "0.1.70",
+  "version": "0.1.71",
   "description": "WICKED — unified Windows app suite (19 modules, one shell)",
   "main": "./out/main/index.js",
   "author": "Wicked RC LLC",
@@ -36,6 +36,7 @@
     "ffprobe-static": "^3.1.0",
     "ignore": "^5.3.2",
     "jspdf": "^4.2.1",
+    "lightweight-charts": "^4.2.3",
     "openai": "^6.42.0",
     "pdf-parse": "^2.4.5",
     "selfsigned": "^5.5.0",

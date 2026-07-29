@@ -2,8 +2,8 @@
   "id": "advanced-charts",
   "name": "Advanced Charts",
   "icon": "LineChart",
-  "version": "1.0.0",
-  "description": "Full TradingView charting workspace — drawings, indicators, saved layouts (bring your licensed charting_library)",
+  "version": "2.0.0",
+  "description": "Candlestick charts (Lightweight Charts) fed by your Massive market data — no external library needed",
   "status": "stable",
   "group": {
     "id": "stocks",

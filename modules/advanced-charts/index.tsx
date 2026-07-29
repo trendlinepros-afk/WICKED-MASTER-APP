@@ -1,142 +1,177 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, ExternalLink, FolderOpen, LineChart, Loader2, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp
+} from 'lightweight-charts'
+import { AlertTriangle, LineChart, Loader2, Search } from 'lucide-react'
 
 const ID = 'advanced-charts'
 
-interface Status {
-  libraryPath: string | null
-  configured: boolean
-  hasMassive: boolean
-  url: string | null
+interface Bar {
+  t: number
+  o: number
+  h: number
+  l: number
+  c: number
+  v: number
+}
+const TFS = ['1D', '5D', '1M', '3M', '1Y'] as const
+type TF = (typeof TFS)[number]
+
+/** Resolve a shell theme token (space-separated RGB, e.g. "34 197 94") to an rgb() string. */
+function cssRGB(varName: string, fallback: string): string {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
+    return v ? `rgb(${v})` : fallback
+  } catch {
+    return fallback
+  }
 }
 
 export default function AdvancedCharts(): React.JSX.Element {
-  const [status, setStatus] = useState<Status | null>(null)
-  const [url, setUrl] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+
+  const [symbol, setSymbol] = useState('SPY')
+  const [input, setInput] = useState('SPY')
+  const [tf, setTf] = useState<TF>('1D')
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [hasMassive, setHasMassive] = useState(true)
 
-  const refresh = async (): Promise<void> => {
-    const res = (await window.wicked.invoke(`${ID}:status`)) as Partial<Status> & { ok?: boolean }
-    if (res.ok) {
-      setStatus({
-        libraryPath: res.libraryPath ?? null,
-        configured: !!res.configured,
-        hasMassive: !!res.hasMassive,
-        url: res.url ?? null
-      })
-      if (res.url) setUrl(res.url)
-    }
-  }
-
-  const start = async (): Promise<void> => {
-    setBusy(true)
-    setError('')
-    try {
-      const res = (await window.wicked.invoke(`${ID}:start`)) as { ok?: boolean; url?: string; error?: string }
-      if (res.ok && res.url) setUrl(res.url)
-      else setError(res.error ?? 'Could not start the chart host.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const locate = async (): Promise<void> => {
-    setError('')
-    const res = (await window.wicked.invoke(`${ID}:set-library-path`)) as { ok?: boolean; error?: string }
-    if (!res.ok && res.error) setError(res.error)
-    await refresh()
-  }
-
+  // Build the chart once.
   useEffect(() => {
-    void (async () => {
-      await refresh()
-      // auto-start when already configured
-      const res = (await window.wicked.invoke(`${ID}:status`)) as { configured?: boolean }
-      if (res.configured) void start()
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const el = wrapRef.current
+    if (!el) return
+    const edge = cssRGB('--wk-edge', '#233043')
+    const chart = createChart(el, {
+      autoSize: true,
+      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: cssRGB('--wk-muted', '#94a3b8') },
+      grid: { vertLines: { color: edge }, horzLines: { color: edge } },
+      rightPriceScale: { borderColor: edge },
+      timeScale: { borderColor: edge, timeVisible: true, secondsVisible: false },
+      crosshair: { mode: CrosshairMode.Normal }
+    })
+    const up = cssRGB('--wk-ok', '#22c55e')
+    const down = cssRGB('--wk-danger', '#ef4444')
+    const candle = chart.addCandlestickSeries({
+      upColor: up,
+      downColor: down,
+      borderUpColor: up,
+      borderDownColor: down,
+      wickUpColor: up,
+      wickDownColor: down
+    })
+    const vol = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' })
+    vol.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } })
+    chartRef.current = chart
+    candleRef.current = candle
+    volRef.current = vol
+    return () => {
+      chart.remove()
+      chartRef.current = null
+      candleRef.current = null
+      volRef.current = null
+    }
   }, [])
 
-  if (url) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 border-b border-edge px-4 py-2 text-xs text-muted">
-          <LineChart size={14} className="text-accent" />
-          <span className="font-medium text-ink">Advanced Charts</span>
-          <span>· layouts &amp; drawings save via the chart’s own Save menu</span>
-          {status && !status.hasMassive && (
-            <span className="flex items-center gap-1 text-warn">
-              <AlertTriangle size={12} /> no Massive key — charts will be empty
-            </span>
-          )}
-        </div>
-        <webview src={url} className="min-h-0 w-full flex-1" />
-      </div>
-    )
+  // Load candles on symbol / timeframe change.
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      setLoading(true)
+      setError('')
+      const res = (await window.wicked.invoke(`${ID}:candles`, { symbol, timeframe: tf })) as {
+        ok?: boolean
+        bars?: Bar[]
+        error?: string
+        note?: string
+      }
+      if (!alive) return
+      setLoading(false)
+      const bars = res?.bars ?? []
+      if (res?.error && /massive|api key/i.test(res.error)) setHasMassive(false)
+      if (!bars.length) {
+        setError(res?.error || res?.note || 'No data.')
+        candleRef.current?.setData([])
+        volRef.current?.setData([])
+        return
+      }
+      const up = cssRGB('--wk-ok', '#22c55e')
+      const down = cssRGB('--wk-danger', '#ef4444')
+      candleRef.current?.setData(
+        bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c }))
+      )
+      volRef.current?.setData(
+        bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, value: b.v, color: b.c >= b.o ? up : down }))
+      )
+      chartRef.current?.timeScale().fitContent()
+    })()
+    return () => {
+      alive = false
+    }
+  }, [symbol, tf])
+
+  const submit = (): void => {
+    const s = input.trim().toUpperCase()
+    if (s) {
+      setSymbol(s)
+      setError('')
+    }
   }
 
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto p-8">
-      <div className="w-full max-w-lg rounded-2xl border border-edge bg-surface p-8">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-raised text-accent">
-            <LineChart size={20} />
-          </span>
-          <h1 className="text-xl font-bold tracking-tight">Advanced Charts</h1>
+    <div className="flex h-full flex-col bg-bg">
+      <div className="flex flex-wrap items-center gap-2 border-b border-edge px-4 py-2">
+        <LineChart size={16} className="text-accent" />
+        <div className="flex items-center rounded-lg border border-edge bg-raised pl-2">
+          <Search size={13} className="text-muted" />
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit()
+            }}
+            placeholder="Symbol"
+            className="w-24 bg-transparent px-2 py-1.5 text-sm outline-none"
+          />
         </div>
-
-        <p className="mt-4 text-sm text-muted">
-          Full TradingView charting workspace — candlesticks, every drawing tool, indicators, and
-          saved layouts (drawings included), fed by your Massive market data.
-        </p>
-
-        <div className="mt-4 rounded-lg border border-edge bg-raised/40 p-4 text-sm">
-          <p className="font-medium">One-time setup — the charting library is licensed by TradingView:</p>
-          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-muted">
-            <li>
-              Request free access at{' '}
-              <button
-                className="text-accent hover:underline"
-                onClick={() => void window.wicked.invoke('shell:open-external', 'https://www.tradingview.com/advanced-charts/')}
-              >
-                tradingview.com/advanced-charts <ExternalLink size={11} className="inline" />
-              </button>{' '}
-              (they grant a private GitHub repo).
-            </li>
-            <li>
-              Download it and keep the <code className="text-xs">charting_library</code> folder somewhere permanent.
-            </li>
-            <li>Point WICKED at that folder below.</li>
-          </ol>
+        <span className="text-sm font-semibold text-ink">{symbol}</span>
+        <div className="ml-2 flex items-center gap-1">
+          {TFS.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTf(t)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${t === tf ? 'bg-accent text-accent-ink' : 'bg-raised text-muted hover:text-ink'}`}
+            >
+              {t}
+            </button>
+          ))}
         </div>
+        {loading && <Loader2 size={14} className="animate-spin text-muted" />}
+        <span className="ml-auto text-[11px] text-muted">Lightweight Charts · Massive data</span>
+      </div>
 
-        {status?.libraryPath && !status.configured && (
-          <p className="mt-3 text-xs text-warn">
-            Saved path has no charting_library.standalone.js — pick the folder again.
-          </p>
+      <div className="relative min-h-0 flex-1">
+        <div ref={wrapRef} className="absolute inset-0" />
+        {!hasMassive && (
+          <div className="absolute inset-0 flex items-center justify-center bg-bg/80 p-8 text-center">
+            <div className="max-w-sm text-sm text-muted">
+              <AlertTriangle size={22} className="mx-auto mb-2 text-warn" />
+              Add your <strong className="text-ink">Massive/Polygon</strong> key in Settings → API Keys to load charts.
+            </div>
+          </div>
         )}
-        {error && <p className="mt-3 rounded-lg bg-danger/10 p-2 text-xs text-danger">{error}</p>}
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            onClick={() => void locate()}
-            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90"
-          >
-            <FolderOpen size={15} /> Locate library…
-          </button>
-          <button
-            onClick={() => void start()}
-            disabled={busy || !status?.configured}
-            className="flex items-center gap-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
-          >
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Open charts
-          </button>
-        </div>
-        {status?.configured && (
-          <p className="mt-2 truncate text-xs text-ok" title={status.libraryPath ?? ''}>
-            Library found: {status.libraryPath}
-          </p>
+        {hasMassive && error && (
+          <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-lg bg-danger/10 px-3 py-1.5 text-xs text-danger">
+            {error}
+          </div>
         )}
       </div>
     </div>

@@ -1,30 +1,24 @@
 # Advanced Charts
 
-The wickeddash TradingView **Charting Library** workspace as its own tool in
-the **Stocks** folder: candlesticks, all drawing tools, indicators, timeframes,
-with layouts + drawings saved locally.
+A candlestick charting workspace built on **Lightweight Charts** (TradingView's
+free, MIT-licensed library — bundled with the app), fed by the same
+**Massive/Polygon** market data the rest of the Stocks tools use. No licensed
+`charting_library` download or local chart server is required anymore — if your
+**Massive** key is set in Settings → API Keys, charts just work.
 
-## The licensed library (you supply it)
+## Use
 
-TradingView's Advanced Charts library is free but **access-gated and not
-redistributable**, so it is NOT bundled. One-time setup: request access at
-tradingview.com/advanced-charts → download the private repo → point the tool
-at the `charting_library` folder ("Locate library…"). Until then the tool
-shows setup instructions instead of breaking (ported behavior).
+- Type a **symbol** and press Enter.
+- Pick a **timeframe**: `1D`/`5D` (intraday minutes), `1M`/`3M`/`1Y` (daily).
+- Candles + a volume histogram render inline, colored with the app theme
+  (green up / red down). Crosshair, zoom and pan are built in.
 
-## Architecture
+Data comes from `advanced-charts:candles` → the Massive aggregates endpoint
+(`getAggregates`). Empty results (unknown symbol, or a plan/session with no bars
+yet) are shown as a small notice rather than a blank chart.
 
-`ipc/server.ts` runs an express host on 127.0.0.1 (random port, started when
-the tool opens) serving: the chart page (widget config ported: AAPL/15m/dark,
-ET timezone, header_saveload on, localstorage settings off, #0b1022/#21d4fd
-loading colors, small-screen toolbar rules), the user's library folder, the
-Massive-backed datafeed (`/api/search`, `/api/history` — resolution mapping in
-`ipc/udf.ts`: 60→1h, 240→4h, 1D/1W/1M, else minutes; unit-tested), and layout
-CRUD (JSON files under `userData/modules/advanced-charts/layouts/`, 8MB cap,
-templates stubbed empty). The renderer embeds it in a `<webview>` — same
-browser-side-library + local-routes architecture as the web app, and the shell
-CSP stays intact.
+## MCP
 
-Ported honestly: `subscribeBars` POLLS every 30s (no websocket exists in the
-source; `data_status: delayed_streaming`). `pricescale` is 100 (2 decimals),
-so sub-penny stocks render coarsely — same limitation as the original.
+`advanced-charts__status` reports whether the Massive key is present (charts
+render when it is). The raw market data is exposed by Stock Planner's read-only
+tools; this module is the visual surface.
