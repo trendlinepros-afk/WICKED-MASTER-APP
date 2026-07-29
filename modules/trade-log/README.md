@@ -6,6 +6,9 @@ AI coach): this one is purely your own narrative — one entry per trade.
 
 ## What an entry holds
 
+- **Name** — an optional free-text title for the trade (e.g. "NVDA earnings
+  swing"). It's what shows in the list and header; leave it blank and the entry
+  falls back to the ticker, then to "Untitled".
 - **Entry** — the stock, when you bought, how many shares, the buy price, and a
   **"Why I bought"** note (setup / thesis / plan).
 - **Exit** — the sold price, when you sold, and a **"Why I left the trade"**

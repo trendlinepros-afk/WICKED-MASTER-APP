@@ -9,6 +9,7 @@ import type { McpModuleContext, McpToolDef } from '@shared/mcp'
 const ID = 'trade-log'
 
 const FIELDS = {
+  name: z.string().optional().describe('Free-text name/title for the trade (optional; falls back to the ticker).'),
   symbol: z.string().optional().describe('Ticker traded, e.g. NVDA.'),
   buyAt: z.string().optional().describe('Datetime bought, "YYYY-MM-DDTHH:mm" (local).'),
   shares: z.number().optional().describe('Shares bought.'),

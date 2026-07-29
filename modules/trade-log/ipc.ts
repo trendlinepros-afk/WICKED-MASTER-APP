@@ -44,6 +44,7 @@ const shareCount = (v: unknown): number => {
 function normalizeDraft(raw: unknown): JournalDraft {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
   return {
+    name: str(r.name, 120),
     symbol: sym(r.symbol),
     buyAt: str(r.buyAt, 40),
     shares: shareCount(r.shares),

@@ -9,7 +9,7 @@ import {
   Trash2
 } from 'lucide-react'
 import { useTradeLog } from './store'
-import { entryPnl, isClosed, type JournalEntry } from './types'
+import { entryPnl, entryTitle, isClosed, type JournalEntry } from './types'
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -53,9 +53,12 @@ function EntryRow({ e, active, onClick }: { e: JournalEntry; active: boolean; on
       }`}
     >
       <div className="flex items-center gap-2">
-        <span className="truncate font-semibold">{e.symbol || 'Untitled'}</span>
+        <span className="truncate font-semibold">{entryTitle(e)}</span>
+        {e.name?.trim() && e.symbol && (
+          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[10px] font-semibold text-muted">{e.symbol}</span>
+        )}
         <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
             closed ? 'bg-muted/15 text-muted' : 'bg-accent/15 text-accent'
           }`}
         >
@@ -94,7 +97,7 @@ function Editor(): React.JSX.Element | null {
       {/* header */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-bold tracking-tight">{draft.symbol || 'New trade'}</h2>
+          <h2 className="truncate text-xl font-bold tracking-tight">{entryTitle(draft, 'New trade')}</h2>
           <p className="text-xs text-muted">
             {isClosed(draft) ? 'Closed trade' : 'Open trade'}
             {pl && (
@@ -127,8 +130,19 @@ function Editor(): React.JSX.Element | null {
         </div>
       </div>
 
+      {/* NAME */}
+      <div className="mt-5">
+        <label className={labelCls}>Name this trade</label>
+        <input
+          value={draft.name ?? ''}
+          onChange={(e) => edit({ name: e.target.value })}
+          placeholder="e.g. NVDA earnings swing — leave blank to use the ticker"
+          className={`${inputCls} text-base font-semibold`}
+        />
+      </div>
+
       {/* ENTRY */}
-      <section className="mt-5 rounded-xl border border-edge bg-surface p-4">
+      <section className="mt-4 rounded-xl border border-edge bg-surface p-4">
         <h3 className="text-sm font-semibold text-accent">Entry — why you got in</h3>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="col-span-2 sm:col-span-1">
@@ -136,7 +150,7 @@ function Editor(): React.JSX.Element | null {
             <input
               value={draft.symbol}
               onChange={(e) => edit({ symbol: e.target.value.toUpperCase().replace(/[^A-Z0-9.\-]/g, '') })}
-              placeholder="NVDA"
+              placeholder="e.g. NVDA"
               className={`${inputCls} font-semibold`}
             />
           </div>
@@ -146,7 +160,7 @@ function Editor(): React.JSX.Element | null {
               inputMode="decimal"
               value={draft.shares === 0 ? '' : String(draft.shares)}
               onChange={(e) => edit({ shares: Math.max(0, parseNum(e.target.value) ?? 0) })}
-              placeholder="100"
+              placeholder="e.g. 100"
               className={inputCls}
             />
           </div>

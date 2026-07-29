@@ -1,6 +1,8 @@
 /** One hand-written trade journal entry. Shared by the main (ipc) + renderer. */
 export interface JournalEntry {
   id: string
+  /** optional free-text name/title for the trade; falls back to symbol in the UI */
+  name: string
   /** ticker traded, upper-cased */
   symbol: string
 
@@ -49,4 +51,16 @@ export function entryPnl(e: Pick<JournalEntry, 'shares' | 'buyPrice' | 'sellPric
 /** A trade is "closed" once a sold price is recorded. */
 export function isClosed(e: Pick<JournalEntry, 'sellPrice'>): boolean {
   return e.sellPrice != null
+}
+
+/**
+ * Display title for an entry: the trade's name if given, else the ticker, else
+ * a fallback. `name` may be absent on entries created before the field existed.
+ */
+export function entryTitle(
+  e: Partial<Pick<JournalEntry, 'name' | 'symbol'>>,
+  fallback = 'Untitled'
+): string {
+  const name = typeof e.name === 'string' ? e.name.trim() : ''
+  return name || e.symbol || fallback
 }
