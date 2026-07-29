@@ -99,16 +99,64 @@ export interface PullOut {
   error?: string
 }
 
-/** Download the manifest + encrypted blob from the repo (raw, large-file safe). */
-export async function pullRemote(token: string, repo: string, branch: string): Promise<PullOut> {
-  const ref = encodeURIComponent(branch)
-  const man = await gh(token, 'GET', `/repos/${repo}/contents/${MANIFEST_PATH}?ref=${ref}`, undefined, 'application/vnd.github.raw')
+/** Download the manifest + encrypted blob at a git ref (branch OR commit sha). */
+async function pullAtRef(token: string, repo: string, ref: string): Promise<PullOut> {
+  const r = encodeURIComponent(ref)
+  const man = await gh(token, 'GET', `/repos/${repo}/contents/${MANIFEST_PATH}?ref=${r}`, undefined, 'application/vnd.github.raw')
   if (man.status === 404) return { ok: true, notFound: true }
   if (!man.ok) return { ok: false, error: man.error }
-  const blob = await gh(token, 'GET', `/repos/${repo}/contents/${BLOB_PATH}?ref=${ref}`, undefined, 'application/vnd.github.raw')
+  const blob = await gh(token, 'GET', `/repos/${repo}/contents/${BLOB_PATH}?ref=${r}`, undefined, 'application/vnd.github.raw')
   if (blob.status === 404) return { ok: true, notFound: true }
   if (!blob.ok) return { ok: false, error: blob.error }
   return { ok: true, manifestText: man.text ?? '', blobText: blob.text ?? '' }
+}
+
+/** Download the manifest + encrypted blob from the tip of `branch`. */
+export async function pullRemote(token: string, repo: string, branch: string): Promise<PullOut> {
+  return pullAtRef(token, repo, branch)
+}
+
+/** Download the manifest + encrypted blob as they were at a specific commit. */
+export async function pullSnapshotAt(token: string, repo: string, commitSha: string): Promise<PullOut> {
+  return pullAtRef(token, repo, commitSha)
+}
+
+export interface RawSnapshot {
+  commitSha: string
+  commitDate: string
+  /** the manifest JSON as it existed at that commit, or null if it couldn't be read */
+  manifestText: string | null
+}
+
+/**
+ * List past snapshots by walking the commits that touched the manifest — every
+ * push is a commit, so the whole history is restorable. Fetches each commit's
+ * manifest (in parallel) so the caller gets version/device/time per snapshot.
+ */
+export async function listSnapshots(
+  token: string,
+  repo: string,
+  branch: string,
+  limit = 40
+): Promise<{ ok: boolean; items?: RawSnapshot[]; error?: string }> {
+  const ref = encodeURIComponent(branch)
+  const per = Math.min(Math.max(limit, 1), 100)
+  const commitsRes = await gh(token, 'GET', `/repos/${repo}/commits?sha=${ref}&path=${encodeURIComponent(MANIFEST_PATH)}&per_page=${per}`)
+  if (commitsRes.status === 404 || commitsRes.status === 409) return { ok: true, items: [] } // empty repo / no history yet
+  if (!commitsRes.ok) return { ok: false, error: commitsRes.error }
+  const commits = Array.isArray(commitsRes.json)
+    ? (commitsRes.json as Array<{ sha?: string; commit?: { committer?: { date?: string }; author?: { date?: string } } }>)
+    : []
+  const items = await Promise.all(
+    commits.map(async (c): Promise<RawSnapshot | null> => {
+      const sha = c.sha ?? ''
+      if (!sha) return null
+      const commitDate = c.commit?.committer?.date ?? c.commit?.author?.date ?? ''
+      const man = await gh(token, 'GET', `/repos/${repo}/contents/${MANIFEST_PATH}?ref=${sha}`, undefined, 'application/vnd.github.raw')
+      return { commitSha: sha, commitDate, manifestText: man.ok ? man.text ?? null : null }
+    })
+  )
+  return { ok: true, items: items.filter((x): x is RawSnapshot => x !== null) }
 }
 
 /** Fetch just the plaintext manifest (to preview a pull without downloading the blob). */

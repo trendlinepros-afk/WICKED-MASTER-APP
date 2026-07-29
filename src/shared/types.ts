@@ -232,6 +232,10 @@ export const SHELL_IPC = {
   syncCheckRemote: 'shell:sync-check-remote',
   /** () => SyncResult — pull, stage, and relaunch to apply (destructive: replaces local) */
   syncPullNow: 'shell:sync-pull-now',
+  /** () => SyncSnapshotList — list restorable snapshots from the repo history */
+  syncListSnapshots: 'shell:sync-list-snapshots',
+  /** (commitSha: string) => SyncResult — restore a chosen snapshot (stage + relaunch, destructive) */
+  syncRestoreSnapshot: 'shell:sync-restore-snapshot',
   /** main → renderer broadcast of sync activity (SyncStatus payload) */
   syncEvent: 'shell:sync-event',
 
@@ -269,6 +273,8 @@ export interface SyncRemoteInfo {
   device: string
   appVersion: string
   sizeBytes: number
+  /** whether the push was automatic (schedule/close) or manual; absent on legacy snapshots */
+  trigger?: 'auto' | 'manual'
 }
 
 export interface SyncStatus extends SyncConfig {
@@ -297,6 +303,29 @@ export interface SyncResult {
   /** pull preview: remote is newer / same / this device is ahead */
   compare?: 'remote-newer' | 'up-to-date' | 'local-ahead' | 'no-remote'
   version?: number
+}
+
+/** One restorable snapshot from the repo's history (a past sync commit). */
+export interface SyncSnapshot {
+  /** git commit that holds this snapshot's blob + manifest */
+  commitSha: string
+  /** commit timestamp (ISO); used as the capture time when the manifest lacks one */
+  commitDate: string
+  version: number
+  updatedUtc: string
+  device: string
+  appVersion: string
+  sizeBytes: number
+  /** how the snapshot was pushed; "unknown" for legacy snapshots without the stamp */
+  trigger: 'auto' | 'manual' | 'unknown'
+  /** true if this is the version THIS device last pushed or pulled */
+  isCurrent: boolean
+}
+
+export interface SyncSnapshotList {
+  ok: boolean
+  snapshots?: SyncSnapshot[]
+  error?: string
 }
 
 /** A folder that may hold user data from a previous WICKED version. */

@@ -10,6 +10,7 @@ import {
   FolderOpen,
   GitBranch,
   HardDriveDownload,
+  History,
   KeyRound,
   LayoutGrid,
   Loader2,
@@ -20,7 +21,8 @@ import {
   RotateCcw,
   Save,
   Sun,
-  UploadCloud
+  UploadCloud,
+  X
 } from 'lucide-react'
 import {
   API_PROVIDERS,
@@ -36,6 +38,8 @@ import {
   type ShellSettings,
   type SyncConfig,
   type SyncResult,
+  type SyncSnapshot,
+  type SyncSnapshotList,
   type SyncStatus,
   type UpdateEvent
 } from '@shared/types'
@@ -691,6 +695,10 @@ function SyncSection(): React.JSX.Element {
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [showSnaps, setShowSnaps] = useState(false)
+  const [snaps, setSnaps] = useState<SyncSnapshot[] | null>(null)
+  const [loadingSnaps, setLoadingSnaps] = useState(false)
+  const [snapErr, setSnapErr] = useState<string | null>(null)
   const seeded = useRef(false)
 
   const refresh = async (): Promise<void> => {
@@ -783,6 +791,26 @@ function SyncSection(): React.JSX.Element {
     await window.wicked.invoke(SHELL_IPC.syncClearSecrets)
     setMsg('Token and passphrase forgotten on this device.')
     void refresh()
+  }
+
+  const openSnapshots = async (): Promise<void> => {
+    setShowSnaps(true)
+    setSnaps(null)
+    setSnapErr(null)
+    setLoadingSnaps(true)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncListSnapshots)) as SyncSnapshotList
+    setLoadingSnaps(false)
+    if (res.ok) setSnaps(res.snapshots ?? [])
+    else setSnapErr(res.error ?? 'Could not list snapshots.')
+  }
+
+  const restoreSnap = async (sha: string): Promise<void> => {
+    setBusy('restore')
+    setSnapErr(null)
+    const res = (await window.wicked.invoke(SHELL_IPC.syncRestoreSnapshot, sha)) as SyncResult
+    setBusy('')
+    // On success the app relaunches; we only get here on cancel/failure.
+    if (!res.ok && res.error && res.error !== 'Canceled.') setSnapErr(res.error)
   }
 
   const input = 'w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent'
@@ -883,8 +911,11 @@ function SyncSection(): React.JSX.Element {
           <button onClick={() => void check()} disabled={!status?.repo || !status?.hasToken || !!busy} className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
             {busy === 'check' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Check cloud
           </button>
-          <button onClick={() => void pull()} disabled={!status?.configured || !!busy} title="Download the cloud copy, replace local data and restart" className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
+          <button onClick={() => void pull()} disabled={!status?.configured || !!busy} title="Download the newest cloud copy, replace local data and restart" className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
             {busy === 'pull' ? <Loader2 size={14} className="animate-spin" /> : <DownloadCloud size={14} />} Pull from cloud
+          </button>
+          <button onClick={() => void openSnapshots()} disabled={!status?.configured || !!busy} title="Browse every past snapshot in the cloud and restore any one of them" className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40">
+            <History size={14} /> Restore from a specific snapshot…
           </button>
         </div>
 
@@ -905,6 +936,73 @@ function SyncSection(): React.JSX.Element {
           )}
         </div>
       </div>
+
+      {showSnaps && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowSnaps(false)}>
+          <div className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-2xl border border-edge bg-surface shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-edge px-4 py-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
+                <History size={15} /> Restore from a specific snapshot
+              </h3>
+              <button onClick={() => setShowSnaps(false)} className="rounded-md p-1 text-muted hover:bg-raised hover:text-ink" title="Close">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="border-b border-edge px-4 py-2 text-[11px] text-muted">
+              Every push is kept in the cloud history. Pick any one to restore it to this PC — useful when a device overwrote newer
+              work before you could pull.
+            </p>
+            <div className="max-h-[55vh] overflow-y-auto p-2">
+              {loadingSnaps ? (
+                <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted">
+                  <Loader2 size={15} className="animate-spin" /> Loading snapshot history…
+                </div>
+              ) : snapErr ? (
+                <p className="m-2 rounded-lg bg-danger/10 p-2 text-xs text-danger">{snapErr}</p>
+              ) : !snaps || snaps.length === 0 ? (
+                <p className="p-6 text-center text-xs text-muted">No snapshots found in this repo yet.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {snaps.map((snp) => (
+                    <li key={snp.commitSha} className="flex items-center gap-3 rounded-lg border border-edge bg-raised/40 p-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                          <span>Snapshot v{snp.version || '—'}</span>
+                          {snp.isCurrent && (
+                            <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent">This device</span>
+                          )}
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              snp.trigger === 'manual' ? 'bg-ok/15 text-ok' : snp.trigger === 'auto' ? 'bg-muted/15 text-muted' : 'bg-muted/10 text-muted'
+                            }`}
+                          >
+                            {snp.trigger === 'unknown' ? 'snapshot' : snp.trigger}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-muted">
+                          {snp.device || 'unknown device'} · {fmtWhen(snp.updatedUtc)}
+                          {snp.sizeBytes ? ` · ${fmtBytes(snp.sizeBytes)}` : ''}
+                          {snp.appVersion ? ` · app v${snp.appVersion}` : ''}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => void restoreSnap(snp.commitSha)}
+                        disabled={!!busy}
+                        className="flex shrink-0 items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+                      >
+                        {busy === 'restore' ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />} Restore
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="border-t border-edge px-4 py-2 text-[11px] text-muted">
+              Restoring replaces this PC’s data and restarts. A timestamped local backup is written first.
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

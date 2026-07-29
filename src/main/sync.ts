@@ -4,12 +4,20 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { hostname } from 'os'
 import { join } from 'path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
-import { SHELL_IPC, type SyncConfig, type SyncRemoteInfo, type SyncResult, type SyncStatus } from '@shared/types'
+import {
+  SHELL_IPC,
+  type SyncConfig,
+  type SyncRemoteInfo,
+  type SyncResult,
+  type SyncSnapshot,
+  type SyncSnapshotList,
+  type SyncStatus
+} from '@shared/types'
 import { getAllDecryptedKeys } from './api-keys'
 import { collectEntries, buildBackupZipBuffer, PENDING_MARKER, PORTABLE_KEYS_NAME, STAGED_ZIP } from './backup-core'
 import { stageRestore } from './backup'
 import { decryptBytesWithPassword, encryptBytesWithPassword, encryptWithPassword } from './key-portability'
-import { getRepoInfo, pullManifest, pullRemote, pushSnapshot } from './sync-github'
+import { getRepoInfo, listSnapshots as ghListSnapshots, pullManifest, pullRemote, pullSnapshotAt, pushSnapshot } from './sync-github'
 
 /**
  * Cloud Sync (Settings → Cloud Sync): keep every device's config in a PRIVATE
@@ -84,12 +92,14 @@ export function parseRemoteManifest(text: string): SyncRemoteInfo | null {
   try {
     const j = JSON.parse(text) as Record<string, unknown> & { magic?: string }
     if (j.magic !== MANIFEST_MAGIC) return null
+    const trigger = j.trigger === 'auto' || j.trigger === 'manual' ? j.trigger : undefined
     return {
       version: Number(j.version) || 0,
       updatedUtc: String(j.updatedUtc ?? ''),
       device: String(j.device ?? ''),
       appVersion: String(j.appVersion ?? ''),
-      sizeBytes: Number(j.sizeBytes) || 0
+      sizeBytes: Number(j.sizeBytes) || 0,
+      ...(trigger ? { trigger } : {})
     }
   } catch {
     return null
@@ -189,7 +199,7 @@ function buildEncryptedSnapshot(passphrase: string): string {
   return encryptBytesWithPassword(zip, passphrase)
 }
 
-export async function pushNow(): Promise<SyncResult> {
+export async function pushNow(trigger: 'auto' | 'manual' = 'manual'): Promise<SyncResult> {
   if (busy) return { ok: false, error: 'A sync is already in progress.' }
   const c = getConfig()
   const token = getToken()
@@ -210,7 +220,8 @@ export async function pushNow(): Promise<SyncResult> {
       updatedUtc: new Date().toISOString(),
       device: c.deviceName,
       appVersion: app.getVersion(),
-      sizeBytes: blobText.length
+      sizeBytes: blobText.length,
+      trigger
     }
     const res = await pushSnapshot(token, c.repo, c.branch, blobText, buildManifestText(info))
     if (!res.ok) return fail(res.error ?? 'Push failed.')
@@ -315,6 +326,100 @@ export async function pullNow(getWin: () => BrowserWindow | null): Promise<SyncR
   }
 }
 
+/* --------------------------- snapshot history ---------------------------- */
+
+/** List restorable snapshots from the repo's commit history (newest first). */
+export async function listSnapshotsNow(): Promise<SyncSnapshotList> {
+  const c = getConfig()
+  const token = getToken()
+  if (!c.repo || !token) return { ok: false, error: 'Add a repo and token first.' }
+  const res = await ghListSnapshots(token, c.repo, c.branch, 40)
+  if (!res.ok) return { ok: false, error: res.error }
+  const mine = getState().lastSyncedVersion
+  const snapshots: SyncSnapshot[] = (res.items ?? []).map((it) => {
+    const info = it.manifestText ? parseRemoteManifest(it.manifestText) : null
+    return {
+      commitSha: it.commitSha,
+      commitDate: it.commitDate,
+      version: info?.version ?? 0,
+      updatedUtc: info?.updatedUtc || it.commitDate,
+      device: info?.device ?? '',
+      appVersion: info?.appVersion ?? '',
+      sizeBytes: info?.sizeBytes ?? 0,
+      trigger: info?.trigger ?? 'unknown',
+      isCurrent: !!info && mine > 0 && info.version === mine
+    }
+  })
+  return { ok: true, snapshots }
+}
+
+/**
+ * Restore a chosen past snapshot: fetch it at its commit, decrypt, stage,
+ * relaunch. DESTRUCTIVE — replaces local data (a timestamped backup is written
+ * first by the staged-restore path on boot). Confirmed via a native dialog.
+ */
+export async function restoreSnapshot(getWin: () => BrowserWindow | null, commitSha: string): Promise<SyncResult> {
+  if (busy) return { ok: false, error: 'A sync is already in progress.' }
+  const c = getConfig()
+  const token = getToken()
+  const pass = getPassphrase()
+  if (!c.repo || !token || !pass) return { ok: false, error: 'Cloud Sync isn’t set up yet — add a repo, token and passphrase.' }
+  if (!commitSha || typeof commitSha !== 'string') return { ok: false, error: 'No snapshot selected.' }
+  busy = true
+  lastError = ''
+  broadcast()
+  try {
+    const pulled = await pullSnapshotAt(token, c.repo, commitSha)
+    if (!pulled.ok) return fail(pulled.error ?? 'Could not fetch that snapshot.')
+    if (pulled.notFound || !pulled.blobText || !pulled.manifestText) return fail('That snapshot is missing its data in the repo.')
+    const info = parseRemoteManifest(pulled.manifestText)
+    if (!info) return fail('That snapshot’s manifest is unreadable.')
+
+    const zip = decryptBytesWithPassword(pulled.blobText, pass)
+    if (!zip) return fail('Wrong passphrase — that snapshot could not be decrypted on this device.')
+
+    const kind = info.trigger === 'auto' ? 'automatic' : info.trigger === 'manual' ? 'manual' : 'snapshot'
+    const win = getWin()
+    const detail =
+      `Snapshot: v${info.version} · ${info.device || 'another device'} · ${info.updatedUtc} · ${kind} (app v${info.appVersion})\n\n` +
+      'Your current settings, module data (Trade Journal, Project Board, …) and API keys on THIS PC will be replaced with this snapshot, and WICKED will restart. A timestamped backup of your current data is written first.'
+    const confirmOpts = {
+      type: 'warning' as const,
+      buttons: ['Restore & Restart', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Restore snapshot',
+      message: `Restore snapshot v${info.version} from ${info.device || 'another device'}?`,
+      detail
+    }
+    const confirm = win ? await dialog.showMessageBox(win, confirmOpts) : await dialog.showMessageBox(confirmOpts)
+    if (confirm.response !== 0) {
+      busy = false
+      broadcast()
+      return { ok: false, error: 'Canceled.' }
+    }
+
+    const userData = app.getPath('userData')
+    const tmp = join(userData, DOWNLOAD_TMP)
+    writeFileSync(tmp, zip)
+    const staged = stageRestore(tmp, pass)
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* ignore */
+    }
+    if (!staged.ok) return fail(staged.error ?? 'Could not stage the snapshot.')
+
+    setState({ lastPullUtc: new Date().toISOString(), lastSyncedVersion: info.version })
+    lastRemote = info
+    app.relaunch()
+    app.exit(0)
+    return { ok: true, staged: true, remote: info, version: info.version }
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err))
+  }
+}
+
 function fail(msg: string): SyncResult {
   lastError = msg
   busy = false
@@ -336,7 +441,7 @@ export function scheduleSync(): void {
     const cfg = getConfig()
     if (!cfg.autoPush) return
     if (!buildStatus().configured) return
-    void pushNow().then((r) => {
+    void pushNow('auto').then((r) => {
       if (!r.ok) console.error('[wicked] scheduled sync push failed:', r.error)
       else console.log(`[wicked] scheduled sync push: v${r.version}`)
     })
@@ -444,9 +549,11 @@ export function registerSyncIpc(getWin: () => BrowserWindow | null): void {
     return getRepoInfo(token, c.repo)
   })
 
-  ipcMain.handle(SHELL_IPC.syncPushNow, () => pushNow())
+  ipcMain.handle(SHELL_IPC.syncPushNow, () => pushNow('manual'))
   ipcMain.handle(SHELL_IPC.syncCheckRemote, () => checkRemote())
   ipcMain.handle(SHELL_IPC.syncPullNow, () => pullNow(getWin))
+  ipcMain.handle(SHELL_IPC.syncListSnapshots, () => listSnapshotsNow())
+  ipcMain.handle(SHELL_IPC.syncRestoreSnapshot, (_e, sha: unknown) => restoreSnapshot(getWin, typeof sha === 'string' ? sha : ''))
 
   ipcMain.handle(SHELL_IPC.appLockStatus, () => ({ enabled: appLockEnabled() }))
   ipcMain.handle(SHELL_IPC.appLockSet, (_e, pin: unknown) => setAppLock(typeof pin === 'string' ? pin : ''))

@@ -184,7 +184,7 @@ app.on('before-quit', (e) => {
     e.preventDefault()
     closingPushDone = true
     Promise.race([
-      pushNow().catch(() => undefined),
+      pushNow('auto').catch(() => undefined),
       new Promise((resolve) => setTimeout(resolve, 8000))
     ]).finally(() => {
       stopMcpServer()

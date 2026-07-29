@@ -7,6 +7,7 @@ import {
   BarChart2,
   Bell,
   CandlestickChart,
+  Clock,
   ExternalLink,
   Flame,
   Loader2,
@@ -565,6 +566,22 @@ function TrendingPanel(): React.JSX.Element | null {
           <span className="rounded-full bg-raised px-2 py-0.5 text-[10px] font-medium text-warn" title="Estimated cost of the next scan at ~$0.005 per tweet read">
             Est. cost: {s.xScanSize} tweets ≈ ${cost}
           </span>
+          {s.xGeneratedAt != null && (
+            <span
+              className="ml-auto flex items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5 text-[10px] font-medium text-muted"
+              title={`These cached X results were captured on ${new Date(s.xGeneratedAt).toLocaleString()}`}
+            >
+              <Clock size={11} />
+              Captured{' '}
+              {new Date(s.xGeneratedAt).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
+              })}
+              <span className="text-muted/70">· {agoLabel(s.xGeneratedAt)}</span>
+            </span>
+          )}
         </div>
       )}
 
