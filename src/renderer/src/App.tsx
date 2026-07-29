@@ -49,22 +49,22 @@ function ModuleHost(): React.JSX.Element {
   }
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-edge bg-surface/70 px-1.5">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-edge bg-surface/70 px-3">
         <button
           onClick={goBack}
-          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-muted hover:bg-raised hover:text-ink"
+          className="flex items-center gap-1.5 rounded-lg border border-edge bg-raised px-3.5 py-1.5 text-sm font-semibold text-ink shadow-sm transition-colors hover:border-accent hover:bg-accent hover:text-accent-ink active:translate-y-px"
           title="Back"
         >
-          <ChevronLeft size={14} /> Back
+          <ChevronLeft size={18} /> Back
         </button>
         <button
           onClick={() => navigate('/')}
-          className="flex items-center rounded-md p-1 text-muted hover:bg-raised hover:text-ink"
+          className="flex items-center rounded-lg border border-edge bg-raised p-2 text-muted shadow-sm transition-colors hover:border-accent hover:text-ink"
           title="Home"
         >
-          <HomeIcon size={13} />
+          <HomeIcon size={16} />
         </button>
-        <span className="ml-1 truncate text-xs text-muted">{effectiveName(mod, overrides)}</span>
+        <span className="ml-1 truncate text-sm font-medium text-ink">{effectiveName(mod, overrides)}</span>
       </div>
       <div className="min-h-0 flex-1">
         <ModuleBoundary moduleId={id}>

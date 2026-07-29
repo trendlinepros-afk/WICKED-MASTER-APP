@@ -9,7 +9,7 @@ import {
   Trash2
 } from 'lucide-react'
 import { useTradeLog } from './store'
-import { entryPnl, entryTitle, isClosed, type JournalEntry } from './types'
+import { autoName, effectiveAuto, entryPnl, entryTitle, isClosed, type JournalEntry } from './types'
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -54,7 +54,7 @@ function EntryRow({ e, active, onClick }: { e: JournalEntry; active: boolean; on
     >
       <div className="flex items-center gap-2">
         <span className="truncate font-semibold">{entryTitle(e)}</span>
-        {e.name?.trim() && e.symbol && (
+        {!effectiveAuto(e) && e.symbol && (
           <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[10px] font-semibold text-muted">{e.symbol}</span>
         )}
         <span
@@ -91,6 +91,8 @@ function Editor(): React.JSX.Element | null {
   const remove = useTradeLog((s) => s.remove)
   if (!draft) return null
   const pl = entryPnl(draft)
+  const auto = effectiveAuto(draft)
+  const autoPreview = autoName(draft)
 
   return (
     <div className="mx-auto max-w-3xl p-6">
@@ -134,11 +136,36 @@ function Editor(): React.JSX.Element | null {
       <div className="mt-5">
         <label className={labelCls}>Name this trade</label>
         <input
-          value={draft.name ?? ''}
-          onChange={(e) => edit({ name: e.target.value })}
-          placeholder="e.g. NVDA earnings swing — leave blank to use the ticker"
+          value={auto ? '' : draft.name ?? ''}
+          onChange={(e) => {
+            const v = e.target.value
+            if (v.trim() === '') edit({ name: '', nameAuto: true })
+            else edit({ name: v, nameAuto: false })
+          }}
+          placeholder={autoPreview ? `Auto: ${autoPreview}` : 'Auto-named from ticker + dates — type to override'}
           className={`${inputCls} text-base font-semibold`}
         />
+        <p className="mt-1 text-xs text-muted">
+          {auto ? (
+            <>
+              Auto-named
+              {autoPreview && (
+                <>
+                  {' '}
+                  as <span className="font-medium text-ink">{autoPreview}</span>
+                </>
+              )}
+              {' '}— it updates when you close the trade. Type to set your own.
+            </>
+          ) : (
+            <>
+              Custom name.{' '}
+              <button className="text-accent hover:underline" onClick={() => edit({ name: '', nameAuto: true })}>
+                Use auto name
+              </button>
+            </>
+          )}
+        </p>
       </div>
 
       {/* ENTRY */}

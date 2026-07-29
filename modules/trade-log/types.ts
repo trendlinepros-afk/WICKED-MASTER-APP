@@ -1,8 +1,10 @@
 /** One hand-written trade journal entry. Shared by the main (ipc) + renderer. */
 export interface JournalEntry {
   id: string
-  /** optional free-text name/title for the trade; falls back to symbol in the UI */
+  /** the trade's name/title. Auto-generated while `nameAuto` is true, else user-typed. */
   name: string
+  /** true = keep `name` auto-generated (ticker + dates + green/red); false = user set it. */
+  nameAuto: boolean
   /** ticker traded, upper-cased */
   symbol: string
 
@@ -53,14 +55,47 @@ export function isClosed(e: Pick<JournalEntry, 'sellPrice'>): boolean {
   return e.sellPrice != null
 }
 
+/** "YYYY-MM-DDTHH:mm" (or a date-only prefix) → "MM/DD/YY"; "" if unparseable. */
+function shortDay(local?: string): string {
+  if (!local) return ''
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(local)
+  return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : ''
+}
+
 /**
- * Display title for an entry: the trade's name if given, else the ticker, else
- * a fallback. `name` may be absent on entries created before the field existed.
+ * The auto-generated name: "TICKER - opened → closed - Green/Red".
+ * While open it's "TICKER - opened - Open". Returns "" when there isn't yet
+ * enough to name it (no ticker) so callers can fall back.
  */
-export function entryTitle(
-  e: Partial<Pick<JournalEntry, 'name' | 'symbol'>>,
-  fallback = 'Untitled'
-): string {
+export function autoName(e: Partial<JournalEntry>): string {
+  const tkr = (e.symbol ?? '').trim()
+  if (!tkr) return ''
+  const open = shortDay(e.buyAt)
+  if (!isClosed({ sellPrice: e.sellPrice ?? null })) {
+    return open ? `${tkr} - ${open} - Open` : `${tkr} - Open`
+  }
+  const close = shortDay(e.sellAt)
+  const range = open && close ? `${open} → ${close}` : open || close || ''
+  const pl = entryPnl({ shares: e.shares ?? 0, buyPrice: e.buyPrice ?? null, sellPrice: e.sellPrice ?? null })
+  const color = pl ? (pl.abs >= 0 ? 'Green' : 'Red') : ''
+  return [tkr, range, color].filter(Boolean).join(' - ')
+}
+
+/**
+ * Whether the entry's name should be auto-generated. Honors the stored
+ * `nameAuto` flag; for legacy entries without it, auto = no manual name was set.
+ */
+export function effectiveAuto(e: Partial<Pick<JournalEntry, 'nameAuto' | 'name'>>): boolean {
+  if (typeof e.nameAuto === 'boolean') return e.nameAuto
+  return !(typeof e.name === 'string' && e.name.trim() !== '')
+}
+
+/**
+ * Display title for an entry: the auto name when in auto mode, else the
+ * user-typed name, with a fallback when neither is available yet.
+ */
+export function entryTitle(e: Partial<JournalEntry>, fallback = 'Untitled'): string {
+  if (effectiveAuto(e)) return autoName(e) || fallback
   const name = typeof e.name === 'string' ? e.name.trim() : ''
-  return name || e.symbol || fallback
+  return name || autoName(e) || fallback
 }

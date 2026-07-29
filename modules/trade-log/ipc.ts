@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
-import type { JournalDraft, JournalEntry } from './types'
+import { autoName, type JournalDraft, type JournalEntry } from './types'
 
 /**
  * Trade Log — a hand-written trade journal. Plain CRUD over a list of entries
@@ -43,8 +43,12 @@ const shareCount = (v: unknown): number => {
 /** Coerce arbitrary renderer/agent input into a clean draft. */
 function normalizeDraft(raw: unknown): JournalDraft {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const name = str(r.name, 120)
+  // explicit flag wins; otherwise auto-name unless a manual name was supplied
+  const nameAuto = typeof r.nameAuto === 'boolean' ? r.nameAuto : name.trim() === ''
   return {
-    name: str(r.name, 120),
+    name,
+    nameAuto,
     symbol: sym(r.symbol),
     buyAt: str(r.buyAt, 40),
     shares: shareCount(r.shares),
@@ -73,6 +77,7 @@ export default function register(ctx: ModuleIpcContext): void {
       createdAt: now,
       updatedAt: now
     }
+    if (entry.nameAuto) entry.name = autoName(entry)
     const entries = [entry, ...readAll(ctx)]
     writeAll(ctx, entries)
     return { ok: true, entry, entries: sortEntries(entries) }
@@ -83,7 +88,10 @@ export default function register(ctx: ModuleIpcContext): void {
     const i = entries.findIndex((x) => x.id === String(id))
     if (i === -1) return { ok: false, error: 'Entry not found.' }
     const draft = normalizeDraft({ ...entries[i], ...(typeof patch === 'object' && patch ? patch : {}) })
-    entries[i] = { ...entries[i], ...draft, updatedAt: Date.now() }
+    const next: JournalEntry = { ...entries[i], ...draft, updatedAt: Date.now() }
+    // keep the auto name in sync with the latest data (e.g. once the trade closes)
+    if (next.nameAuto) next.name = autoName(next)
+    entries[i] = next
     writeAll(ctx, entries)
     return { ok: true, entry: entries[i], entries: sortEntries(entries) }
   })

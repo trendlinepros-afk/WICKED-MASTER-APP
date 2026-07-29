@@ -76,6 +76,7 @@ export const useTradeLog = create<State>((set, get) => ({
     if (get().dirty) await get().save()
     const res = await invoke<OneRes>('create', {
       name: '',
+      nameAuto: true,
       symbol: '',
       buyAt: nowLocal(),
       shares: 0,

@@ -6,9 +6,12 @@ AI coach): this one is purely your own narrative — one entry per trade.
 
 ## What an entry holds
 
-- **Name** — an optional free-text title for the trade (e.g. "NVDA earnings
-  swing"). It's what shows in the list and header; leave it blank and the entry
-  falls back to the ticker, then to "Untitled".
+- **Name** — the trade's title (shown in the list + header). By default it's
+  **auto-generated** as `TICKER - opened → closed - Green/Red` (just
+  `TICKER - opened - Open` while the trade is still open), and it **updates
+  itself when you close the trade** — the close date and Green (profit) / Red
+  (loss) are filled in from the sold price. Type your own name to override; clear
+  it (or hit "Use auto name") to go back to auto.
 - **Entry** — the stock, when you bought, how many shares, the buy price, and a
   **"Why I bought"** note (setup / thesis / plan).
 - **Exit** — the sold price, when you sold, and a **"Why I left the trade"**
