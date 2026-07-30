@@ -70,7 +70,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       handler: (args) => {
         const gate = ctx.confirm(
           args.confirm as boolean | undefined,
-          'Delete all imported trade executions from the Trade Analytics database. This clears the local analytics only (your Webull account and CSV files are untouched); you can re-import anytime.'
+          'Delete all imported trade executions from the Trade Journal database. This clears the local analytics only (your Webull account and CSV files are untouched); you can re-import anytime.'
         )
         if (gate) return gate
         return ctx.invoke(`${ID}:clear`)

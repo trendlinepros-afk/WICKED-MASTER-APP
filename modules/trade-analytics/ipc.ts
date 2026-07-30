@@ -917,13 +917,36 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   }
 
+  // MANUAL sector overrides (symbol → sector). These always win over the
+  // auto-classified cache, so a user can correct a wrong sector once and have it
+  // apply to every past and future trade of that symbol. Stored separately so the
+  // auto cache can still be refreshed/re-resolved without losing manual choices.
+  const sectorOverridesPath = join(moduleDir(ctx.app), 'sector-overrides.json')
+  const readSectorOverrides = (): Record<string, string> => {
+    try {
+      const o = JSON.parse(readFileSync(sectorOverridesPath, 'utf8')) as unknown
+      return o && typeof o === 'object' ? (o as Record<string, string>) : {}
+    } catch {
+      return {}
+    }
+  }
+  const writeSectorOverrides = (m: Record<string, string>): void => {
+    try {
+      writeFileSync(sectorOverridesPath, JSON.stringify(m, null, 2))
+    } catch {
+      /* best-effort */
+    }
+  }
+
   ctx.ipcMain.handle(`${ID}:sectors`, async (_e, rawSymbols: unknown) => {
     const symbols = (Array.isArray(rawSymbols) ? rawSymbols : [])
       .filter((s): s is string => typeof s === 'string' && !!s.trim())
       .map((s) => s.trim().toUpperCase())
     const cache = readSectorCache()
+    const overrides = readSectorOverrides()
     const key = ctx.getApiKey('massive')
-    const missing = [...new Set(symbols)].filter((s) => !cache[s])
+    // don't spend API calls resolving symbols the user has manually set
+    const missing = [...new Set(symbols)].filter((s) => !cache[s] && !overrides[s])
 
     let resolved = 0
     if (key && missing.length > 0) {
@@ -949,8 +972,23 @@ export default function register(ctx: ModuleIpcContext): void {
     }
 
     const out: Record<string, string> = {}
-    for (const s of symbols) out[s] = cache[s] ?? 'Unclassified'
-    return { ok: true, sectors: out, hasKey: !!key, resolved, pending: missing.length - resolved }
+    for (const s of symbols) out[s] = overrides[s] || cache[s] || 'Unclassified'
+    return { ok: true, sectors: out, overrides, hasKey: !!key, resolved, pending: missing.length - resolved }
+  })
+
+  // Set (or clear) a manual sector for a symbol. Empty / "auto" clears it and
+  // reverts to auto-classification. Applies to ALL past & future trades of the
+  // symbol because sectors are keyed by symbol.
+  ctx.ipcMain.handle(`${ID}:set-sector`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const symbol = (typeof r.symbol === 'string' ? r.symbol : '').trim().toUpperCase()
+    const sector = (typeof r.sector === 'string' ? r.sector : '').trim()
+    if (!symbol) return { ok: false, error: 'No symbol.' }
+    const overrides = readSectorOverrides()
+    if (!sector || sector.toLowerCase() === 'auto') delete overrides[symbol]
+    else overrides[symbol] = sector
+    writeSectorOverrides(overrides)
+    return { ok: true, overrides }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

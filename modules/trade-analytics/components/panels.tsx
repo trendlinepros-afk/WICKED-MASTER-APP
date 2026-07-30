@@ -15,8 +15,9 @@ import {
   X
 } from 'lucide-react'
 import { useTrades } from '../store'
+import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
-import { money, num, pct, signedMoney } from '../lib/format'
+import { duration, money, num, pct, signedMoney } from '../lib/format'
 import { AggPnlColumns, DrawdownArea, WinLossColumns, type MetricCol } from './charts'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
@@ -321,6 +322,7 @@ export function SectorCard(): React.JSX.Element | null {
   const metrics = useTrades((s) => s.metrics)
   const busy = useTrades((s) => s.sectorsBusy)
   const hasKey = useTrades((s) => s.sectorsHasKey)
+  const setSectorFocus = useTrades((s) => s.setSectorFocus)
   if (!metrics) return null
   const sectors = metrics.bySector.filter((s) => s.trades > 0)
 
@@ -328,7 +330,11 @@ export function SectorCard(): React.JSX.Element | null {
     <div className="rounded-xl border border-edge bg-surface p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Realized P&L by market sector</h3>
-        {busy && <span className="text-xs text-muted">resolving sectors…</span>}
+        {busy ? (
+          <span className="text-xs text-muted">resolving sectors…</span>
+        ) : (
+          sectors.length > 0 && <span className="text-xs text-muted">click a sector to drill in →</span>
+        )}
       </div>
       {sectors.length === 0 ? (
         <p className="text-sm text-muted">
@@ -337,25 +343,142 @@ export function SectorCard(): React.JSX.Element | null {
             : 'Add your Massive / Polygon key in Settings → API Keys to classify each symbol into a market sector.'}
         </p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {sectors.map((s) => {
             const maxAbs = Math.max(1, ...sectors.map((x) => Math.abs(x.pnl)))
             const w = (Math.abs(s.pnl) / maxAbs) * 100
             return (
-              <div key={s.label} className="flex items-center gap-3 text-xs">
-                <div className="w-40 shrink-0 truncate font-medium" title={s.label}>
-                  {s.label}
+              <button
+                key={s.label}
+                onClick={() => setSectorFocus(s.label)}
+                title={`View ${s.label} trades`}
+                className="flex w-full items-center gap-3 rounded-md px-1.5 py-1 text-left text-xs transition-colors hover:bg-raised"
+              >
+                <div className="flex w-40 shrink-0 items-center gap-1 truncate font-medium" title={s.label}>
+                  <ChevronRight size={12} className="shrink-0 text-muted" />
+                  <span className="truncate">{s.label}</span>
                 </div>
                 <div className="relative h-4 min-w-0 flex-1 rounded bg-raised">
                   <div className={`h-full rounded ${s.pnl >= 0 ? 'bg-ok' : 'bg-danger'}`} style={{ width: `${w}%`, opacity: 0.85 }} />
                 </div>
                 <div className={`w-24 shrink-0 text-right tabular-nums ${pos(s.pnl)}`}>{signedMoney(s.pnl)}</div>
                 <div className="w-16 shrink-0 text-right text-muted">{num(s.trades)}t</div>
-              </div>
+              </button>
             )
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+/* ========================== sector drill-down ========================= */
+
+/** The effective sector for a symbol, matching how computeMetrics buckets it. */
+function sectorOfSymbol(sectors: Record<string, string>, symbol: string): string {
+  return sectors[symbol] || 'Unclassified'
+}
+
+/**
+ * A simplified per-sector analytics page: the stocks traded in one market
+ * sector, how profitable each was, and the sector's headline stats. Reached by
+ * clicking a bar in the "Realized P&L by market sector" card.
+ */
+export function SectorDetail(): React.JSX.Element | null {
+  const sector = useTrades((s) => s.sectorFocus)
+  const trades = useTrades((s) => s.trades)
+  const sectors = useTrades((s) => s.sectors)
+  const setSectorFocus = useTrades((s) => s.setSectorFocus)
+  if (!sector) return null
+
+  const inSector = trades.filter((t) => sectorOfSymbol(sectors, t.symbol) === sector)
+  const stats = computeStats(inSector)
+  const openPositions = inSector.filter((t) => t.isOpen)
+  const rows = stats.bySymbol.filter((r) => r.trades > 0 || r.openQty > 0)
+
+  const back = (): void => setSectorFocus(null)
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      {/* header / back */}
+      <div className="mb-4 flex items-center gap-3">
+        <button
+          onClick={back}
+          className="flex items-center gap-1.5 rounded-lg border border-edge bg-surface px-3 py-1.5 text-sm font-medium hover:border-accent/60"
+        >
+          <ChevronLeft size={15} /> Back
+        </button>
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-bold tracking-tight">{sector}</h2>
+          <p className="truncate text-xs text-muted">
+            {rows.length} symbol{rows.length === 1 ? '' : 's'} traded · {stats.closedTrades} closed
+            {openPositions.length > 0 ? ` · ${openPositions.length} open` : ''}
+          </p>
+        </div>
+      </div>
+
+      {/* headline tiles */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-edge bg-surface p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Realized P&L</div>
+          <div className={`mt-0.5 text-lg font-bold tabular-nums ${pos(stats.totalRealized)}`}>{signedMoney(stats.totalRealized)}</div>
+          <div className="text-[10px] text-muted">{stats.closedTrades} closed trades</div>
+        </div>
+        <div className="rounded-xl border border-edge bg-surface p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Win rate</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums">{pct(stats.winRate)}</div>
+          <div className="text-[10px] text-muted">{stats.wins}W · {stats.losses}L · {stats.breakeven}BE</div>
+        </div>
+        <div className="rounded-xl border border-edge bg-surface p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Profit factor</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums">{Number.isFinite(stats.profitFactor) ? stats.profitFactor.toFixed(2) : '∞'}</div>
+          <div className="text-[10px] text-muted">expectancy {money(stats.expectancy)}/trade</div>
+        </div>
+        <div className="rounded-xl border border-edge bg-surface p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Avg hold</div>
+          <div className="mt-0.5 text-lg font-bold tabular-nums">{duration(stats.avgHoldSeconds)}</div>
+          <div className="text-[10px] text-muted">best {stats.bestSymbol?.symbol ?? '—'} · worst {stats.worstSymbol?.symbol ?? '—'}</div>
+        </div>
+      </div>
+
+      {/* per-symbol table */}
+      <div className="mt-4 overflow-hidden rounded-xl border border-edge bg-surface">
+        <div className="grid grid-cols-[80px_1fr_70px_90px_110px_90px] gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+          <div>Symbol</div>
+          <div>Realized P&L</div>
+          <div className="text-right">Trades</div>
+          <div className="text-right">W / L</div>
+          <div className="text-right">Win rate</div>
+          <div className="text-right">Open</div>
+        </div>
+        {rows.length === 0 ? (
+          <div className="p-6 text-sm text-muted">No closed trades in this sector yet.</div>
+        ) : (
+          rows.map((r) => {
+            const maxAbs = Math.max(1, ...rows.map((x) => Math.abs(x.realizedPnl)))
+            const w = (Math.abs(r.realizedPnl) / maxAbs) * 100
+            const decided = r.wins + r.losses
+            const wr = decided > 0 ? (r.wins / decided) * 100 : 0
+            return (
+              <div key={r.symbol} className="grid grid-cols-[80px_1fr_70px_90px_110px_90px] items-center gap-2 border-b border-edge/60 px-3 py-2 text-xs last:border-0">
+                <div className="font-semibold">{r.symbol}</div>
+                <div className="flex items-center gap-2">
+                  <div className="relative h-3.5 min-w-0 flex-1 rounded bg-raised">
+                    <div className={`h-full rounded ${r.realizedPnl >= 0 ? 'bg-ok' : 'bg-danger'}`} style={{ width: `${w}%`, opacity: 0.85 }} />
+                  </div>
+                  <span className={`w-20 shrink-0 text-right tabular-nums ${pos(r.realizedPnl)}`}>{signedMoney(r.realizedPnl)}</span>
+                </div>
+                <div className="text-right tabular-nums text-muted">{num(r.trades)}</div>
+                <div className="text-right tabular-nums">
+                  <span className="text-ok">{r.wins}</span> / <span className="text-danger">{r.losses}</span>
+                </div>
+                <div className="text-right tabular-nums">{decided > 0 ? pct(wr) : '—'}</div>
+                <div className="text-right tabular-nums text-muted">{r.openQty > 0 ? num(r.openQty) : '—'}</div>
+              </div>
+            )
+          })
+        )}
+      </div>
     </div>
   )
 }

@@ -1,4 +1,7 @@
-# Trade Analytics
+# Trade Journal
+
+_(module id `trade-analytics` — the route, data folder and MCP tool prefix keep that
+id; the tool is named **Trade Journal** everywhere it's shown.)_
 
 Import your **Webull order-records CSV** and get an analytics dashboard: realized
 P&L, win rate, profit factor, expectancy, an equity curve, per-symbol and timing
@@ -17,6 +20,22 @@ reports that overlap ones you already imported.
   fingerprint as the PRIMARY KEY and inserted with `INSERT OR IGNORE`, so a row
   already present is skipped. The status bar shows `N new · M dupes skipped`.
 - Multiple files can be imported at once.
+
+## Market sectors
+
+The Overview shows **Realized P&L by market sector**. Each symbol is classified
+into a broad sector (`lib/sector.ts`) from Polygon/Massive fundamentals, cached in
+`sectors.json`.
+
+- **Drill in.** Click any sector row to open a simplified per-sector page: its
+  headline stats (realized P&L, win rate, profit factor, avg hold) and a table of
+  every symbol you traded in that sector with per-symbol P&L, trade count, W/L and
+  win rate. **Back** returns to the dashboard.
+- **Fix a wrong sector.** In **Edit trade**, the **Market sector** field defaults to
+  **Auto-detect** but can be set by hand. A manual pick is stored per-symbol
+  (`sector-overrides.json`) and **always wins over auto-detection**, so it applies to
+  **every past and future trade of that symbol**. Choose *Auto-detect* again to clear
+  it. Overrides are included in Backup & Cloud Sync.
 
 ## How trades are built (`lib/analytics.ts`)
 

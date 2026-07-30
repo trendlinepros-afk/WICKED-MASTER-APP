@@ -29,7 +29,7 @@ import type { Trade } from './lib/analytics'
 import { etInputToEpoch, etInputValue } from './lib/et'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
-import { AccountsBar, BreakdownTab, CalendarTab, ImportModal, ManageAccountsModal, SectorCard, StatsTab } from './components/panels'
+import { AccountsBar, BreakdownTab, CalendarTab, ImportModal, ManageAccountsModal, SectorCard, SectorDetail, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -225,15 +225,38 @@ function TradesTab(): React.JSX.Element {
 
 /* ---------------------------- add / edit a trade ------------------------- */
 
+/** Broad market sectors a user can hand-assign (mirrors lib/sector.ts + Auto). */
+const SECTORS = [
+  'Communication Services',
+  'Consumer Discretionary',
+  'Consumer Staples',
+  'Energy',
+  'Financials',
+  'Healthcare',
+  'Industrials',
+  'Materials',
+  'Real Estate',
+  'Technology',
+  'Utilities',
+  'Other',
+  'Unclassified'
+] as const
+
 function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => void }): React.JSX.Element {
   const accounts = useTrades((s) => s.accounts)
   const importAccount = useTrades((s) => s.importAccount)
   const saveTrade = useTrades((s) => s.saveTrade)
+  const sectorsMap = useTrades((s) => s.sectors)
+  const sectorOverrides = useTrades((s) => s.sectorOverrides)
+  const setSectorOverride = useTrades((s) => s.setSector)
 
   const editing = trade != null
   const closed = !!trade && !trade.isOpen
   const [account, setAccount] = useState(trade?.account ?? importAccount)
   const [symbol, setSymbol] = useState(trade?.symbol ?? '')
+  // 'auto' = keep auto-detecting; otherwise a manual per-symbol override.
+  const initialSector = (trade?.symbol && sectorOverrides[trade.symbol]) || 'auto'
+  const [sector, setSector] = useState<string>(initialSector)
   const [direction, setDirection] = useState<'long' | 'short'>(trade?.direction ?? 'long')
   const [qty, setQty] = useState(trade ? String(round4(trade.qty)) : '')
   const [entryPrice, setEntryPrice] = useState(trade ? String(round4(trade.avgEntry)) : '')
@@ -287,9 +310,16 @@ function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => v
     setBusy(true)
     setErr('')
     const error = await saveTrade(draft)
+    if (error) {
+      setBusy(false)
+      setErr(error)
+      return
+    }
+    // Persist a manual sector override for this symbol if the user set/changed it
+    // (applies to every past & future trade of the symbol).
+    if (sector !== initialSector) await setSectorOverride(sym, sector === 'auto' ? '' : sector)
     setBusy(false)
-    if (error) setErr(error)
-    else onClose()
+    onClose()
   }
 
   const multiFill = !!trade && trade.fills.length > 2
@@ -351,6 +381,23 @@ function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => v
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* market sector — Auto self-detects; a manual pick applies to ALL trades of this symbol */}
+          <div>
+            <label className={labelCls}>
+              Market sector{symbol.trim() ? ` — applies to all ${symbol.trim().toUpperCase()} trades` : ''}
+            </label>
+            <select value={sector} onChange={(e) => setSector(e.target.value)} className={inputCls}>
+              <option value="auto">
+                Auto-detect{sector === 'auto' && symbol.trim() && sectorsMap[symbol.trim().toUpperCase()] ? ` (currently: ${sectorsMap[symbol.trim().toUpperCase()]})` : ''}
+              </option>
+              {SECTORS.map((sec) => (
+                <option key={sec} value={sec}>
+                  {sec}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -696,7 +743,7 @@ export default function TradeAnalytics(): React.JSX.Element {
           <CandlestickChart size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Trade Analytics</h1>
+          <h1 className="text-base font-bold tracking-tight">Trade Journal</h1>
           <p className="truncate text-xs text-muted">
             {s.executions.length > 0 ? `${num(s.executions.length)} executions · ${num(s.trades.length)} trades · ${s.stats?.openTrades ?? 0} open` : 'Import your Webull order records'}
           </p>
@@ -744,8 +791,8 @@ export default function TradeAnalytics(): React.JSX.Element {
         </div>
       )}
 
-      {/* tabs */}
-      {!empty && (
+      {/* tabs (hidden while drilling into a sector — that page has its own Back) */}
+      {!empty && !s.sectorFocus && (
         <div className="flex items-center gap-1 overflow-x-auto border-b border-edge px-4 pt-2">
           {TABS.map((t) => (
             <button
@@ -800,6 +847,8 @@ export default function TradeAnalytics(): React.JSX.Element {
               </button>
             </div>
           </div>
+        ) : s.sectorFocus ? (
+          <SectorDetail />
         ) : (
           <>
             {s.tab === 'overview' && <OverviewTab />}

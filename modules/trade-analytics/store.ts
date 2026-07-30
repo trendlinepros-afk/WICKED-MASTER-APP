@@ -111,8 +111,12 @@ interface State {
 
   // sectors (symbol → broad sector)
   sectors: Record<string, string>
+  /** manual per-symbol sector overrides (symbol → sector); these win over auto */
+  sectorOverrides: Record<string, string>
   sectorsBusy: boolean
   sectorsHasKey: boolean
+  /** when set, the body shows the drill-down page for this market sector */
+  sectorFocus: string | null
 
   // AI coach
   hasAiKey: boolean
@@ -122,6 +126,8 @@ interface State {
   aiError: string
 
   setTab: (t: Tab) => void
+  setSectorFocus: (sector: string | null) => void
+  setSector: (symbol: string, sector: string) => Promise<void>
   dismissError: () => void
   setHasAiKey: (v: boolean) => void
   setDragOver: (v: boolean) => void
@@ -204,8 +210,10 @@ export const useTrades = create<State>((set, get) => {
     importAccount: 'default',
 
     sectors: {},
+    sectorOverrides: {},
     sectorsBusy: false,
     sectorsHasKey: false,
+    sectorFocus: null,
 
     hasAiKey: false,
     aiBusy: false,
@@ -213,7 +221,17 @@ export const useTrades = create<State>((set, get) => {
     aiProvider: '',
     aiError: '',
 
-    setTab: (t) => set({ tab: t }),
+    setTab: (t) => set({ tab: t, sectorFocus: null }),
+    setSectorFocus: (sector) => set({ sectorFocus: sector }),
+    setSector: async (symbol, sector) => {
+      const res = (await invoke('set-sector', { symbol: symbol.trim().toUpperCase(), sector })) as Res & {
+        overrides?: Record<string, string>
+      }
+      if (res.ok === true) {
+        set({ sectorOverrides: res.overrides ?? get().sectorOverrides })
+        await get().loadSectors() // re-merge overrides + recompute sector metrics
+      }
+    },
     dismissError: () => set({ error: '' }),
     setHasAiKey: (v) => set({ hasAiKey: v }),
     setDragOver: (v) => set({ dragOver: v }),
@@ -380,11 +398,12 @@ export const useTrades = create<State>((set, get) => {
       try {
         const res = (await invoke('sectors', symbols)) as Res & {
           sectors?: Record<string, string>
+          overrides?: Record<string, string>
           hasKey?: boolean
         }
         if (res.ok === true) {
           const sectors = res.sectors ?? {}
-          set({ sectors, sectorsHasKey: !!res.hasKey })
+          set({ sectors, sectorOverrides: res.overrides ?? {}, sectorsHasKey: !!res.hasKey })
           recompute(get().allExecutions, get().selectedAccounts, sectors)
         }
       } finally {
