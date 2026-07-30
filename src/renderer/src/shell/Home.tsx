@@ -94,6 +94,7 @@ export default function Home(): React.JSX.Element {
                 onRename={() => openFolderRename(f.group.id)}
                 onDropModule={(moduleId) => moveToFolder(moduleId, f.group.id)}
                 onNestFolder={(draggedId) => nestFolder(draggedId, f.group.id)}
+                commitReorder={commitReorder}
               />
             ))}
           </div>

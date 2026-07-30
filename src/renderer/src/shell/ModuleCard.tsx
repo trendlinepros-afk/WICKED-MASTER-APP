@@ -132,6 +132,7 @@ export function GroupCard({
   onRename,
   onDropModule,
   onNestFolder,
+  commitReorder,
   size
 }: {
   group: { id: string; name: string; icon: string; description?: string }
@@ -141,14 +142,31 @@ export function GroupCard({
   onRename: () => void
   onDropModule?: (moduleId: string) => void
   onNestFolder?: (draggedGroupId: string) => void
+  /** reorder the dragged tile to this folder's position (when dropped off-center) */
+  commitReorder?: (targetToken: string) => void
   size?: CardSize
 }): React.JSX.Element {
   const { dragId, setDragId } = useShellUi()
-  const [over, setOver] = useState(false)
+  const [mode, setMode] = useState<'none' | 'nest' | 'reorder'>('none')
   const spec = cardSpec(size)
   const token = groupDragToken(group.id)
   const groupDrag = isGroupDrag(dragId)
-  const canAccept = Boolean(dragId && dragId !== token && (groupDrag ? onNestFolder : onDropModule))
+  const isSelf = dragId === token
+  const canNest = Boolean(dragId && !isSelf && (groupDrag ? onNestFolder : onDropModule))
+  const canReorder = Boolean(dragId && !isSelf && commitReorder)
+
+  // Center of the card = drop INTO the folder (nest/file); off-center (toward an
+  // edge) = REARRANGE the tile to this position. Lets folders be reordered past
+  // one another instead of always nesting.
+  const evalMode = (e: React.DragEvent<HTMLDivElement>): 'none' | 'nest' | 'reorder' => {
+    if (!dragId || isSelf) return 'none'
+    const rect = e.currentTarget.getBoundingClientRect()
+    const frac = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5
+    const centered = frac >= 0.3 && frac <= 0.7
+    if (centered && canNest) return 'nest'
+    if (canReorder) return 'reorder'
+    return canNest ? 'nest' : 'none'
+  }
 
   return (
     <div
@@ -159,27 +177,40 @@ export function GroupCard({
       }}
       onDragEnd={() => {
         setDragId(null)
-        setOver(false)
+        setMode('none')
       }}
       onClick={onOpen}
       onDragOver={(e) => {
-        if (!canAccept) return
+        const m = evalMode(e)
+        if (m === 'none') {
+          setMode('none')
+          return
+        }
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
-        setOver(true)
+        setMode(m)
       }}
-      onDragLeave={() => setOver(false)}
+      onDragLeave={() => setMode('none')}
       onDrop={(e) => {
-        if (!canAccept || !dragId) return
+        const m = evalMode(e)
+        if (m === 'none' || !dragId) return
         e.preventDefault()
         e.stopPropagation()
-        setOver(false)
-        if (isGroupDrag(dragId)) onNestFolder?.(dragId.slice(GROUP_DRAG_PREFIX.length))
-        else onDropModule?.(dragId)
+        setMode('none')
+        if (m === 'nest') {
+          if (isGroupDrag(dragId)) onNestFolder?.(dragId.slice(GROUP_DRAG_PREFIX.length))
+          else onDropModule?.(dragId)
+        } else {
+          commitReorder?.(token)
+        }
         setDragId(null)
       }}
       className={`group relative cursor-pointer overflow-hidden rounded-xl border bg-surface ${spec.pad} transition-colors ${
-        over ? 'border-warn ring-2 ring-warn/40' : 'border-edge hover:border-warn/60'
+        mode === 'nest'
+          ? 'border-warn ring-2 ring-warn/40'
+          : mode === 'reorder'
+            ? 'border-accent ring-2 ring-accent/30'
+            : 'border-edge hover:border-warn/60'
       } ${dragId === token ? 'opacity-40' : ''}`}
     >
       <div className={`flex items-center ${spec.inner}`}>
@@ -196,11 +227,13 @@ export function GroupCard({
         </div>
       </div>
       <p className="mt-3 line-clamp-2 text-sm text-muted">
-        {over
+        {mode === 'nest'
           ? groupDrag
             ? 'Drop to nest this folder inside'
             : 'Drop to move it into this folder'
-          : (group.description ?? `Open the ${group.name} folder`)}
+          : mode === 'reorder'
+            ? 'Drop to rearrange'
+            : (group.description ?? `Open the ${group.name} folder`)}
       </p>
 
       <button
