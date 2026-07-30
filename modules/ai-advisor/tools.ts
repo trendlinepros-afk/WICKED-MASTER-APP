@@ -125,7 +125,9 @@ export async function runTool(tool: AdvisorTool, input: unknown): Promise<ToolRu
     }
     const text = typeof r === 'string' ? r : JSON.stringify(r)
     const ok = !(r && typeof r === 'object' && (r as { ok?: boolean }).ok === false)
-    return { text: truncate(text, 8000), status: ok ? 'ok' : 'error' }
+    // Cap generously: computed summaries are tiny, but a full trade/execution list
+    // must not be clipped so hard the agent only sees a fraction of the data.
+    return { text: truncate(text, 24000), status: ok ? 'ok' : 'error' }
   } catch (e) {
     return { text: `Error: ${e instanceof Error ? e.message : String(e)}`, status: 'error' }
   }

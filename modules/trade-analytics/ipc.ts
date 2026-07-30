@@ -7,6 +7,7 @@ import type { ModuleDataPath } from '@shared/types'
 import { parseWebullCsv, type Execution, type Side } from './lib/parse'
 import { etParts } from './lib/et'
 import { classifySector } from './lib/sector'
+import { buildTrades, buildTradesByAccount, computeStats, type Trade } from './lib/analytics'
 import { getTickerDetails } from '../stock-planner/ipc/market/massive'
 
 /* ------------------------------------------------------------------------ *
@@ -214,6 +215,94 @@ function allExecutions(database: Database.Database): Execution[] {
   return rows.map(rowToExecution)
 }
 
+/* -------------------- computed reports (for MCP / the AI) ----------------- *
+ *  The renderer computes round-trips + stats from raw executions for the UI.
+ *  These helpers run the SAME pure engine (lib/analytics) in main so the MCP
+ *  tools hand agents precise, pre-computed, ACCOUNT-SCOPED numbers that match the
+ *  app exactly — instead of a wall of raw fills the agent has to (mis)add up.
+ * ------------------------------------------------------------------------- */
+
+const round2 = (n: number, d = 2): number => {
+  if (!Number.isFinite(n)) return 0
+  const f = 10 ** d
+  return Math.round(n * f) / f
+}
+const isoOrNull = (ms: number | null): string | null => (ms == null ? null : new Date(ms).toISOString())
+const execsForAccount = (all: Execution[], id: string): Execution[] =>
+  all.filter((e) => (e.account || 'default') === id)
+
+/** null → all accounts; undefined → the ref was given but matched nothing. */
+function matchAccount(accounts: AccountRow[], raw: unknown): AccountRow | null | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const q = raw.trim().toLowerCase()
+  return accounts.find((a) => a.id.toLowerCase() === q || a.name.toLowerCase() === q)
+}
+
+function compactTrade(t: Trade): Record<string, unknown> {
+  return {
+    symbol: t.symbol,
+    account: t.account,
+    direction: t.direction,
+    status: t.isOpen ? 'open' : 'closed',
+    qty: round2(t.qty, 4),
+    closedQty: round2(t.closedQty, 4),
+    openQty: round2(t.openQty, 4),
+    avgEntry: round2(t.avgEntry),
+    avgExit: round2(t.avgExit),
+    realizedPnl: round2(t.realizedPnl),
+    realizedPct: round2(t.realizedPct),
+    openedAt: isoOrNull(t.openedAt),
+    closedAt: isoOrNull(t.closedAt),
+    holdSeconds: t.holdSeconds
+  }
+}
+
+/** A compact, UI-matching P&L + stats summary for one set of already-built trades. */
+function summaryFromTrades(account: string, accountName: string, trades: Trade[]): Record<string, unknown> {
+  const s = computeStats(trades)
+  const openPositions = trades
+    .filter((t) => t.isOpen)
+    .map((t) => ({
+      symbol: t.symbol,
+      direction: t.direction,
+      openQty: round2(t.openQty, 4),
+      avgEntry: round2(t.avgEntry),
+      costBasis: round2(t.avgEntry * t.openQty),
+      openedAt: isoOrNull(t.openedAt)
+    }))
+  return {
+    account,
+    accountName,
+    realizedPnl: round2(s.totalRealized),
+    closedTrades: s.closedTrades,
+    openTrades: s.openTrades,
+    wins: s.wins,
+    losses: s.losses,
+    breakeven: s.breakeven,
+    winRate: round2(s.winRate, 1),
+    profitFactor: Number.isFinite(s.profitFactor) ? round2(s.profitFactor) : null,
+    expectancy: round2(s.expectancy),
+    avgWin: round2(s.avgWin),
+    avgLoss: round2(s.avgLoss),
+    grossProfit: round2(s.grossProfit),
+    grossLoss: round2(s.grossLoss),
+    largestWin: round2(s.largestWin),
+    largestLoss: round2(s.largestLoss),
+    openCostBasis: round2(s.openCostBasis),
+    bestSymbol: s.bestSymbol ? { symbol: s.bestSymbol.symbol, realizedPnl: round2(s.bestSymbol.realizedPnl) } : null,
+    worstSymbol: s.worstSymbol ? { symbol: s.worstSymbol.symbol, realizedPnl: round2(s.worstSymbol.realizedPnl) } : null,
+    bySymbol: s.bySymbol.slice(0, 40).map((x) => ({
+      symbol: x.symbol,
+      trades: x.trades,
+      realizedPnl: round2(x.realizedPnl),
+      wins: x.wins,
+      losses: x.losses,
+      openQty: round2(x.openQty, 4)
+    })),
+    openPositions
+  }
+}
+
 /**
  * Build a single filled execution for a MANUAL (hand-entered) trade. Manual
  * rows carry a UUID hash so they never collide with — or get de-duped against —
@@ -381,9 +470,101 @@ async function callAi(
 export default function register(ctx: ModuleIpcContext): void {
   let aiAbort: AbortController | null = null
 
-  ctx.ipcMain.handle(`${ID}:executions`, () => {
+  // Raw executions. Optional account ref (id or name) scopes the result; the
+  // renderer calls this with no arg and still gets every row (back-compatible).
+  ctx.ipcMain.handle(`${ID}:executions`, (_e, rawAccount: unknown) => {
     try {
-      return { ok: true, executions: allExecutions(getDb(ctx.app)) }
+      const database = getDb(ctx.app)
+      const all = allExecutions(database)
+      const accounts = listAccounts(database)
+      const picked = matchAccount(accounts, rawAccount)
+      if (picked === undefined) {
+        return {
+          ok: true,
+          note: `No account matches "${String(rawAccount)}". Showing all rows; scope with one of the listed ids/names.`,
+          accounts: accounts.map((a) => ({ id: a.id, name: a.name, executions: a.executions })),
+          count: all.length,
+          executions: all
+        }
+      }
+      const executions = picked ? execsForAccount(all, picked.id) : all
+      return { ok: true, scopedTo: picked ? picked.id : 'all', count: executions.length, executions }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // Precise, UI-matching P&L + stats. Optional account ref scopes it; otherwise
+  // every account is reported independently plus a combined (accounts kept FIFO-
+  // separate) view. THE tool an agent should use for "how much did I make".
+  ctx.ipcMain.handle(`${ID}:summary`, (_e, rawAccount: unknown) => {
+    try {
+      const database = getDb(ctx.app)
+      const all = allExecutions(database)
+      const accounts = listAccounts(database)
+      const picked = matchAccount(accounts, rawAccount)
+      const perAccount = (): Record<string, unknown>[] =>
+        accounts.map((a) => summaryFromTrades(a.id, a.name, buildTrades(execsForAccount(all, a.id))))
+      const combined = (): Record<string, unknown> =>
+        summaryFromTrades(
+          'all',
+          accounts.length === 1 ? accounts[0].name : `All accounts (${accounts.length})`,
+          buildTradesByAccount(all)
+        )
+      if (picked === undefined) {
+        return {
+          ok: true,
+          note: `No account matches "${String(rawAccount)}". Showing every account plus a combined view; pass one of the listed ids/names to scope.`,
+          scopedTo: 'all',
+          accounts: perAccount(),
+          combined: combined()
+        }
+      }
+      if (picked) {
+        const only = summaryFromTrades(picked.id, picked.name, buildTrades(execsForAccount(all, picked.id)))
+        return { ok: true, scopedTo: picked.id, accounts: [only], combined: only }
+      }
+      return { ok: true, scopedTo: 'all', accounts: perAccount(), combined: combined() }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // The matched round-trip trades (and open positions), FIFO per symbol per
+  // account — each with entry/exit, realized P&L, % return, hold time, status.
+  ctx.ipcMain.handle(`${ID}:trades`, (_e, raw: unknown) => {
+    try {
+      const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+      const database = getDb(ctx.app)
+      const all = allExecutions(database)
+      const accounts = listAccounts(database)
+      const picked = matchAccount(accounts, r.account)
+      if (picked === undefined) {
+        return {
+          ok: true,
+          note: `No account matches "${String(r.account)}". Pass one of the listed ids/names to scope.`,
+          accounts: accounts.map((a) => ({ id: a.id, name: a.name, executions: a.executions })),
+          count: 0,
+          returned: 0,
+          trades: []
+        }
+      }
+      const status = r.status === 'open' ? 'open' : r.status === 'closed' ? 'closed' : 'all'
+      const rawLimit = typeof r.limit === 'number' && Number.isFinite(r.limit) ? Math.floor(r.limit) : 100
+      const limit = Math.max(1, Math.min(500, rawLimit))
+      const built = picked ? buildTrades(execsForAccount(all, picked.id)) : buildTradesByAccount(all)
+      const filtered = built.filter((t) =>
+        status === 'open' ? t.isOpen : status === 'closed' ? !t.isOpen && t.closedQty > 0 : true
+      )
+      const trades = filtered.slice(0, limit).map(compactTrade)
+      return {
+        ok: true,
+        scopedTo: picked ? picked.id : 'all',
+        status,
+        count: filtered.length,
+        returned: trades.length,
+        trades
+      }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }

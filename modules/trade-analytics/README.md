@@ -76,6 +76,20 @@ they track light/dark automatically.
 
 - Data: `%APPDATA%/WICKED-Suite/modules/trade-analytics/trades.db` (SQLite; picked
   up by the shell's Backup & Restore automatically).
-- MCP tools: `trade-analytics__list-executions` (read-only),
-  `trade-analytics__import` (by path, de-duplicated), `trade-analytics__clear`
-  (destructive, confirm-gated).
+- MCP tools (read-only unless noted):
+  - `trade-analytics__accounts` — list accounts (id, name, execution count) to scope the others.
+  - `trade-analytics__summary` — **precise, UI-matching P&L + stats** (realized P&L,
+    win rate, profit factor, expectancy, per-symbol P&L, open positions), computed with
+    the same FIFO engine as the dashboard. Optional `account` (id or name); omit for every
+    account + a combined view. This is the tool an agent should use for P&L — **not** raw
+    executions.
+  - `trade-analytics__trades` — matched round-trip trades / open positions with entry, exit,
+    realized P&L, % return, hold time and status. Optional `account`, `status`, `limit`.
+  - `trade-analytics__list-executions` — the raw execution audit trail (optional `account`).
+    Large and low-level; prefer `__summary`/`__trades`.
+  - `trade-analytics__import` (by path, de-duplicated), `trade-analytics__clear`
+    (destructive, confirm-gated).
+
+  The renderer computes analytics client-side for the UI; these tools run the **same pure
+  engine** (`lib/analytics.ts`) in the main process, so what an agent reads is identical to
+  what you see on screen — and is account-scoped, so accounts never bleed together.

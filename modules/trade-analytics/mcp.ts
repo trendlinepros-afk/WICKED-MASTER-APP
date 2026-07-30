@@ -12,11 +12,43 @@ const ID = 'trade-analytics'
 export default function register(ctx: McpModuleContext): McpToolDef[] {
   return [
     {
+      name: `${ID}__accounts`,
+      description:
+        'List the trading accounts (id, name, execution count). Use an account id OR name to scope the summary / trades / list-executions tools. Read-only.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:accounts-list`)
+    },
+    {
+      name: `${ID}__summary`,
+      description:
+        'PRECISE account P&L and stats, computed exactly like the app UI (FIFO round-trips per symbol, accounts kept fully separate). Returns realized P&L, closed/open trade counts, win rate, profit factor, expectancy, gross/avg win & loss, largest win/loss, best/worst symbol, per-symbol P&L, and current open positions with cost basis. This is the correct tool for "how much did I make / how am I doing" — do NOT sum raw executions yourself. Optionally scope with `account` (id or name); omit to get every account reported independently plus a combined view. Read-only.',
+      inputSchema: {
+        account: z
+          .string()
+          .optional()
+          .describe('Account id or name to scope to, e.g. "Webull - TrendLine Trading". Omit for all accounts + combined.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:summary`, args.account)
+    },
+    {
+      name: `${ID}__trades`,
+      description:
+        'The matched round-trip trades and open positions, computed FIFO per symbol per account — each with direction, quantity, average entry & exit price, realized P&L, % return, entry/exit timestamps, hold time and status (closed/open). Use this to inspect or list individual trades. Read-only.',
+      inputSchema: {
+        account: z.string().optional().describe('Account id or name to scope to. Omit for all accounts (kept FIFO-separate).'),
+        status: z.enum(['all', 'open', 'closed']).optional().describe('Filter by trade status (default all).'),
+        limit: z.number().optional().describe('Max trades to return, newest first (default 100, max 500).')
+      },
+      handler: (args) => ctx.invoke(`${ID}:trades`, args)
+    },
+    {
       name: `${ID}__list-executions`,
       description:
-        'Return every imported Webull execution (symbol, side, qty, price, status, filled/placed times, de-dup hash). Read-only. Round-trip trades and open positions can be derived from these (buy = +qty, sell/short = −qty, FIFO per symbol; a symbol left net non-zero is an open position).',
-      inputSchema: {},
-      handler: () => ctx.invoke(`${ID}:executions`)
+        'Raw imported executions — the low-level audit trail (symbol, side, qty, price, status, filled/placed times, de-dup hash). Large and unaggregated: for P&L or trade lists use trade-analytics__summary or trade-analytics__trades instead, which match the app exactly. Optionally scope with `account` (id or name). Read-only.',
+      inputSchema: {
+        account: z.string().optional().describe('Account id or name to scope to. Omit for all executions.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:executions`, args.account)
     },
     {
       name: `${ID}__import`,
