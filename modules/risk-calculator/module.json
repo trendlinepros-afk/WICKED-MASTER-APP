@@ -1,0 +1,14 @@
+{
+  "id": "risk-calculator",
+  "name": "Risk Calculator",
+  "icon": "Calculator",
+  "version": "1.0.0",
+  "description": "Position sizing, risk/reward, options risk and expectancy/Kelly — size every stock & options trade to a fixed risk",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
