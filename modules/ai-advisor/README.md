@@ -52,8 +52,14 @@ the gap. Nothing X-related is spent without your click.
 - **Read-only.** Destructive tools (clearing the journal, deleting entries) and
   writes (create/update/import) are filtered out — the advisor can't place
   trades or modify your data. It advises; you act.
-- Runs on **Claude** via your central vault key. Add an **Anthropic** key in
-  **Settings → API Keys**; without it the advisor shows a prompt to add one.
+- **Pick your model** from the header dropdown to control cost:
+  **Claude Sonnet** (best reasoning, priciest), **Claude Haiku** (~5× cheaper),
+  **Gemini Flash** (cheapest, great for daily use) or **Gemini Pro**. All of them
+  drive the same tools and emit the same inline charts. Your choice is saved.
+- Needs the matching vault key for the selected model — an **Anthropic** key for
+  the Claude models or a **Gemini** key for the Gemini models (**Settings → API
+  Keys**). If the current model's key is missing, the header banner says so and
+  you can switch models.
 
 ## Conversations
 

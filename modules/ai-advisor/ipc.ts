@@ -14,9 +14,28 @@ import { stocksTools, runTool, type AdvisorTool } from './tools'
 
 const ID = 'ai-advisor'
 const KEY = `${ID}.conversations`
-const MODEL = 'claude-sonnet-5'
 const MAX_TOKENS = 4096
 const MAX_ROUNDS = 8
+const MODEL_KEY = `${ID}.model`
+
+/** Selectable engines. Cheaper options let the advisor run sustainably. */
+export const MODELS = [
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet', provider: 'anthropic', hint: 'Best reasoning · highest cost' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku', provider: 'anthropic', hint: 'Fast · ~5× cheaper than Sonnet' },
+  { id: 'gemini-2.5-flash', label: 'Gemini Flash', provider: 'gemini', hint: 'Cheapest · great for daily use' },
+  { id: 'gemini-2.5-pro', label: 'Gemini Pro', provider: 'gemini', hint: 'Strong · mid cost' }
+] as const
+
+type ModelDef = (typeof MODELS)[number]
+const DEFAULT_MODEL: ModelDef = MODELS[0]
+
+function getModel(ctx: ModuleIpcContext): ModelDef {
+  const stored = ctx.storeGet<string>(MODEL_KEY, DEFAULT_MODEL.id)
+  return MODELS.find((m) => m.id === stored) ?? DEFAULT_MODEL
+}
+function providerKey(ctx: ModuleIpcContext, provider: string): string | null {
+  return ctx.getApiKey(provider === 'gemini' ? 'gemini' : 'anthropic')
+}
 const CONVO_CAP = 60
 
 /* ------------------------------ error/retry ------------------------------ */
@@ -140,8 +159,45 @@ interface AgentOut {
 
 const activeStreams = new Map<string, { abort: () => void }>()
 
+/** Run one tool call (shared across providers): X-gate → execute → trace. */
+async function handleToolCall(
+  emit: (e: AdvisorEvent) => void,
+  requestId: string,
+  byName: Map<string, AdvisorTool>,
+  name: string,
+  input: unknown,
+  traces: ToolTrace[]
+): Promise<{ content: string; isError: boolean }> {
+  const tool = byName.get(name)
+  const label = tool?.label ?? name
+  emit({ requestId, type: 'tool', name, label, phase: 'start' })
+  if (!tool) {
+    traces.push({ name, label, status: 'error', summary: 'unknown tool' })
+    emit({ requestId, type: 'tool', name, label, phase: 'error' })
+    return { content: `Unknown tool "${name}".`, isError: true }
+  }
+  if (tool.paidX) {
+    const approved = await askXApproval(emit, requestId, tool)
+    if (!approved) {
+      traces.push({ name, label, status: 'declined', summary: 'user declined (paid X API)' })
+      emit({ requestId, type: 'tool', name, label, phase: 'declined' })
+      return {
+        content:
+          'The user DECLINED to use the paid X/Twitter API for this request. Do not retry X tools; answer using other data and note that X sentiment was not checked.',
+        isError: false
+      }
+    }
+  }
+  const run = await runTool(tool, input)
+  traces.push({ name, label, status: run.status, summary: run.status === 'error' ? run.text.slice(0, 140) : undefined })
+  emit({ requestId, type: 'tool', name, label, phase: run.status })
+  return { content: run.text, isError: run.status === 'error' }
+}
+
+/** Dispatch to the provider loop for the chosen model. */
 async function runAgent(
   ctx: ModuleIpcContext,
+  model: ModelDef,
   apiKey: string,
   requestId: string,
   prior: ChatMessage[],
@@ -151,10 +207,24 @@ async function runAgent(
     const win = ctx.getMainWindow()
     if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, e)
   }
-
-  const client = new Anthropic({ apiKey, maxRetries: 3 })
   const tools = stocksTools()
   const byName = new Map(tools.map((t) => [t.def.name, t]))
+  return model.provider === 'gemini'
+    ? runGeminiAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText)
+    : runAnthropicAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText)
+}
+
+async function runAnthropicAgent(
+  emit: (e: AdvisorEvent) => void,
+  apiKey: string,
+  modelId: string,
+  requestId: string,
+  tools: AdvisorTool[],
+  byName: Map<string, AdvisorTool>,
+  prior: ChatMessage[],
+  userText: string
+): Promise<AgentOut> {
+  const client = new Anthropic({ apiKey, maxRetries: 3 })
   const anthropicTools: Anthropic.Tool[] = tools.map((t) => ({
     name: t.def.name,
     description: t.def.description,
@@ -175,7 +245,7 @@ async function runAgent(
     let final: Anthropic.Message | undefined
     for (let attempt = 0; ; attempt++) {
       const stream = client.messages.stream({
-        model: MODEL,
+        model: modelId,
         max_tokens: MAX_TOKENS,
         system: systemPrompt(),
         messages,
@@ -239,35 +309,8 @@ async function runAgent(
 
     const results: Anthropic.ToolResultBlockParam[] = []
     for (const tu of toolUses) {
-      const tool = byName.get(tu.name)
-      const label = tool?.label ?? tu.name
-      emit({ requestId, type: 'tool', name: tu.name, label, phase: 'start' })
-
-      if (!tool) {
-        results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool "${tu.name}".`, is_error: true })
-        traces.push({ name: tu.name, label, status: 'error', summary: 'unknown tool' })
-        emit({ requestId, type: 'tool', name: tu.name, label, phase: 'error' })
-        continue
-      }
-
-      if (tool.paidX) {
-        const approved = await askXApproval(emit, requestId, tool)
-        if (!approved) {
-          results.push({
-            type: 'tool_result',
-            tool_use_id: tu.id,
-            content: 'The user DECLINED to use the paid X/Twitter API for this request. Do not retry X tools; answer using other data and note that X sentiment was not checked.'
-          })
-          traces.push({ name: tu.name, label, status: 'declined', summary: 'user declined (paid X API)' })
-          emit({ requestId, type: 'tool', name: tu.name, label, phase: 'declined' })
-          continue
-        }
-      }
-
-      const run = await runTool(tool, tu.input)
-      results.push({ type: 'tool_result', tool_use_id: tu.id, content: run.text, ...(run.status === 'error' ? { is_error: true } : {}) })
-      traces.push({ name: tu.name, label, status: run.status, summary: run.status === 'error' ? run.text.slice(0, 140) : undefined })
-      emit({ requestId, type: 'tool', name: tu.name, label, phase: run.status })
+      const { content, isError } = await handleToolCall(emit, requestId, byName, tu.name, tu.input, traces)
+      results.push({ type: 'tool_result', tool_use_id: tu.id, content, ...(isError ? { is_error: true } : {}) })
     }
     messages.push({ role: 'user', content: results })
 
@@ -280,15 +323,185 @@ async function runAgent(
   return { text: assembled.trim() || '(no response)', tools: traces }
 }
 
+/* -------------------------------- gemini --------------------------------- */
+
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+interface GeminiPart {
+  text?: string
+  functionCall?: { name: string; args?: Record<string, unknown> }
+  functionResponse?: { name: string; response: Record<string, unknown> }
+}
+interface GeminiContent {
+  role: 'user' | 'model'
+  parts: GeminiPart[]
+}
+
+/** JSON Schema → Gemini function-declaration parameter schema (OpenAPI subset). */
+function sanitizeForGemini(schema: unknown): Record<string, unknown> | undefined {
+  if (!schema || typeof schema !== 'object') return undefined
+  const s = schema as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  if (s.type) out.type = String(s.type).toUpperCase()
+  if (typeof s.description === 'string') out.description = s.description
+  if (Array.isArray(s.enum)) out.enum = s.enum
+  if (s.properties && typeof s.properties === 'object') {
+    const props: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(s.properties as Record<string, unknown>)) {
+      const ps = sanitizeForGemini(v)
+      if (ps) props[k] = ps
+    }
+    out.properties = props
+  }
+  if (Array.isArray(s.required)) out.required = s.required
+  if (s.items) out.items = sanitizeForGemini(s.items)
+  return out
+}
+
+async function geminiGenerate(
+  apiKey: string,
+  modelId: string,
+  body: unknown,
+  requestId: string,
+  emit: (e: AdvisorEvent) => void,
+  assembled: string
+): Promise<GeminiContent> {
+  for (let attempt = 0; ; attempt++) {
+    let resp: Response
+    try {
+      resp = await fetch(`${GEMINI_BASE}/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60_000)
+      })
+    } catch (err) {
+      if (isTransientErr(err) && attempt < 3) {
+        emit({ requestId, type: 'text', text: `${assembled}\n\n_Model is busy — retrying (${attempt + 1}/3)…_` })
+        await sleep(Math.min(8000, 800 * 2 ** attempt))
+        continue
+      }
+      throw err
+    }
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => '')
+      const err = Object.assign(new Error(`Gemini ${resp.status}: ${t.slice(0, 300)}`), { status: resp.status })
+      if (isTransientErr(err) && attempt < 3) {
+        emit({ requestId, type: 'text', text: `${assembled}\n\n_Model is busy — retrying (${attempt + 1}/3)…_` })
+        await sleep(Math.min(8000, 800 * 2 ** attempt))
+        continue
+      }
+      throw err
+    }
+    const data = (await resp.json()) as { candidates?: { content?: GeminiContent }[] }
+    return data.candidates?.[0]?.content ?? { role: 'model', parts: [] }
+  }
+}
+
+async function runGeminiAgent(
+  emit: (e: AdvisorEvent) => void,
+  apiKey: string,
+  modelId: string,
+  requestId: string,
+  tools: AdvisorTool[],
+  byName: Map<string, AdvisorTool>,
+  prior: ChatMessage[],
+  userText: string
+): Promise<AgentOut> {
+  const functionDeclarations = tools.map((t) => {
+    const params = sanitizeForGemini(t.jsonSchema)
+    const decl: Record<string, unknown> = { name: t.def.name, description: t.def.description }
+    if (params && params.properties && Object.keys(params.properties as object).length > 0) decl.parameters = params
+    return decl
+  })
+
+  const contents: GeminiContent[] = []
+  for (const m of prior)
+    if (m.text.trim()) contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })
+  contents.push({ role: 'user', parts: [{ text: userText }] })
+
+  const traces: ToolTrace[] = []
+  let assembled = ''
+  let repairs = 0
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const body = {
+      systemInstruction: { parts: [{ text: systemPrompt() }] },
+      contents,
+      ...(functionDeclarations.length ? { tools: [{ functionDeclarations }] } : {}),
+      generationConfig: { maxOutputTokens: MAX_TOKENS }
+    }
+    const content = await geminiGenerate(apiKey, modelId, body, requestId, emit, assembled)
+    const parts = content.parts ?? []
+    const textPart = parts
+      .filter((p) => typeof p.text === 'string')
+      .map((p) => p.text)
+      .join('')
+    const calls = parts.filter((p): p is GeminiPart & { functionCall: NonNullable<GeminiPart['functionCall']> } => !!p.functionCall)
+
+    if (calls.length === 0) {
+      if (textPart.trim()) {
+        assembled += textPart
+        emit({ requestId, type: 'text', text: assembled })
+        break
+      }
+      if (repairs < 2) {
+        repairs++
+        continue
+      }
+      assembled += '_The model returned an empty response. Please try asking again._'
+      emit({ requestId, type: 'text', text: assembled })
+      break
+    }
+
+    if (textPart) {
+      assembled += `${textPart}\n\n`
+      emit({ requestId, type: 'text', text: assembled })
+    }
+    contents.push({ role: 'model', parts })
+    const responseParts: GeminiPart[] = []
+    for (const call of calls) {
+      const { content: result } = await handleToolCall(emit, requestId, byName, call.functionCall.name, call.functionCall.args ?? {}, traces)
+      responseParts.push({ functionResponse: { name: call.functionCall.name, response: { result } } })
+    }
+    contents.push({ role: 'user', parts: responseParts })
+
+    if (round === MAX_ROUNDS - 1) {
+      assembled += '\n\n_(Reached the tool-step limit for this turn — ask a follow-up if you need me to keep going.)_'
+      emit({ requestId, type: 'text', text: assembled })
+    }
+  }
+  return { text: assembled.trim() || '(no response)', tools: traces }
+}
+
 /* --------------------------------- ipc ----------------------------------- */
 
 export default function register(ctx: ModuleIpcContext): void {
-  ctx.ipcMain.handle(`${ID}:status`, () => ({
-    ok: true,
-    hasKey: ctx.getApiKey('anthropic') !== null,
-    toolCount: stocksTools().length,
-    model: MODEL
-  }))
+  ctx.ipcMain.handle(`${ID}:status`, () => {
+    const m = getModel(ctx)
+    return {
+      ok: true,
+      model: m.id,
+      modelLabel: m.label,
+      provider: m.provider,
+      hasKey: providerKey(ctx, m.provider) !== null,
+      toolCount: stocksTools().length,
+      models: MODELS.map((x) => ({
+        id: x.id,
+        label: x.label,
+        provider: x.provider,
+        hint: x.hint,
+        hasKey: providerKey(ctx, x.provider) !== null
+      }))
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:set-model`, (_e, id: unknown) => {
+    const found = MODELS.find((m) => m.id === String(id))
+    if (found) ctx.storeSet(MODEL_KEY, found.id)
+    const m = getModel(ctx)
+    return { ok: !!found, model: m.id, modelLabel: m.label, provider: m.provider, hasKey: providerKey(ctx, m.provider) !== null }
+  })
 
   ctx.ipcMain.handle(`${ID}:list`, () => ({ ok: true, conversations: sortConvos(readAll(ctx)).map(metaOf) }))
 
@@ -351,8 +564,12 @@ export default function register(ctx: ModuleIpcContext): void {
 
     const userText = String(text ?? '').trim()
     if (!userText) return emitErr('Empty message.')
-    const apiKey = ctx.getApiKey('anthropic')
-    if (!apiKey) return emitErr('No Anthropic API key set. Add one in Settings → API Keys to use the AI Advisor.')
+    const model = getModel(ctx)
+    const apiKey = providerKey(ctx, model.provider)
+    if (!apiKey)
+      return emitErr(
+        `No ${model.provider === 'gemini' ? 'Gemini' : 'Anthropic'} API key set for ${model.label}. Add one in Settings → API Keys, or switch models in the header.`
+      )
 
     const convos = readAll(ctx)
     const i = convos.findIndex((x) => x.id === String(conversationId))
@@ -366,7 +583,7 @@ export default function register(ctx: ModuleIpcContext): void {
     writeAll(ctx, convos)
 
     try {
-      const out = await runAgent(ctx, apiKey, rid, prior, userText)
+      const out = await runAgent(ctx, model, apiKey, rid, prior, userText)
       const assistantMsg: ChatMessage = { role: 'assistant', text: out.text, tools: out.tools, ts: Date.now() }
       const after = readAll(ctx)
       const j = after.findIndex((x) => x.id === convos[i].id)

@@ -190,6 +190,7 @@ export default function AiAdvisor(): React.JSX.Element {
 
   const fontPx = Math.round(Math.max(14, Math.min(20, paneW / 62)))
   const colMax = Math.round(Math.max(720, Math.min(1180, paneW * 0.84)))
+  const currentHint = s.models.find((m) => m.id === s.model)?.hint ?? ''
   const active = s.metas.filter((m) => !m.archived)
   const archived = s.metas.filter((m) => m.archived)
 
@@ -299,15 +300,33 @@ export default function AiAdvisor(): React.JSX.Element {
           <Bot size={18} className="text-accent" />
           <div className="min-w-0">
             <h1 className="text-sm font-bold tracking-tight">AI Advisor</h1>
-            <p className="truncate text-[11px] text-muted">
-              Reads your Stocks tools · {s.toolCount} tools · {s.model || 'Claude'}
-            </p>
+            <p className="truncate text-[11px] text-muted">Reads your Stocks tools · {s.toolCount} tools</p>
           </div>
+          <label className="ml-auto flex items-center gap-1.5" title="AI model — pick a cheaper one to lower cost">
+            <span className="text-[10px] text-muted">Model</span>
+            <select
+              value={s.model}
+              onChange={(e) => void s.setModel(e.target.value)}
+              disabled={s.streaming}
+              className="rounded-lg border border-edge bg-raised px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50"
+            >
+              {(s.models.length ? s.models : [{ id: s.model, label: s.model || 'Claude', hint: '', provider: 'anthropic', hasKey: true }]).map(
+                (m) => (
+                  <option key={m.id} value={m.id} disabled={!m.hasKey}>
+                    {m.label}
+                    {m.hasKey ? '' : ' — no key'}
+                  </option>
+                )
+              )}
+            </select>
+          </label>
         </header>
 
         {!s.hasKey && (
           <div className="flex items-center gap-2 border-b border-edge bg-warn/10 px-4 py-2 text-xs text-warn">
-            <AlertTriangle size={14} /> Add an <strong>Anthropic</strong> API key in Settings → API Keys to use the AI Advisor.
+            <AlertTriangle size={14} /> {s.modelLabel || 'This model'} needs a{' '}
+            <strong>{s.provider === 'gemini' ? 'Gemini' : 'Anthropic'}</strong> API key — add one in Settings → API Keys, or pick
+            another model above.
           </div>
         )}
 
@@ -421,9 +440,10 @@ export default function AiAdvisor(): React.JSX.Element {
             </span>
             <span
               className="flex shrink-0 items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5 font-medium"
-              title="The AI model answering in this chat"
+              title="Current model — change it in the header"
             >
-              <Bot size={10} /> {s.model || 'Claude'}
+              <Bot size={10} /> {s.modelLabel || s.model || 'Claude'}
+              {currentHint ? <span className="text-muted/70">· {currentHint}</span> : null}
             </span>
           </div>
         </div>

@@ -11,11 +11,21 @@ const ID = 'ai-advisor'
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   window.wicked.invoke(`${ID}:${channel}`, ...args) as Promise<T>
 
+export interface ModelOption {
+  id: string
+  label: string
+  provider: string
+  hint: string
+  hasKey: boolean
+}
 interface StatusRes {
   ok: boolean
   hasKey: boolean
   toolCount: number
   model: string
+  modelLabel?: string
+  provider?: string
+  models?: ModelOption[]
 }
 interface ListRes {
   ok: boolean
@@ -48,6 +58,9 @@ interface State {
   hasKey: boolean
   toolCount: number
   model: string
+  modelLabel: string
+  provider: string
+  models: ModelOption[]
   input: string
   streaming: boolean
   liveText: string
@@ -58,6 +71,7 @@ interface State {
 
   init: () => Promise<void>
   refreshMetas: () => Promise<void>
+  setModel: (id: string) => Promise<void>
   select: (id: string) => Promise<void>
   newChat: () => Promise<void>
   rename: (id: string, title: string) => Promise<void>
@@ -77,6 +91,9 @@ export const useAdvisor = create<State>((set, get) => ({
   hasKey: true,
   toolCount: 0,
   model: '',
+  modelLabel: '',
+  provider: 'anthropic',
+  models: [],
   input: '',
   streaming: false,
   liveText: '',
@@ -87,7 +104,14 @@ export const useAdvisor = create<State>((set, get) => ({
 
   init: async () => {
     const st = await invoke<StatusRes>('status')
-    set({ hasKey: !!st.hasKey, toolCount: st.toolCount ?? 0, model: st.model ?? '' })
+    set({
+      hasKey: !!st.hasKey,
+      toolCount: st.toolCount ?? 0,
+      model: st.model ?? '',
+      modelLabel: st.modelLabel ?? st.model ?? '',
+      provider: st.provider ?? 'anthropic',
+      models: st.models ?? []
+    })
     const list = await invoke<ListRes>('list')
     const metas = list.conversations ?? []
     set({ metas })
@@ -99,6 +123,18 @@ export const useAdvisor = create<State>((set, get) => ({
   refreshMetas: async () => {
     const list = await invoke<ListRes>('list')
     set({ metas: list.conversations ?? [] })
+  },
+
+  setModel: async (id) => {
+    await invoke('set-model', id)
+    const st = await invoke<StatusRes>('status')
+    set({
+      model: st.model ?? id,
+      modelLabel: st.modelLabel ?? st.model ?? '',
+      provider: st.provider ?? get().provider,
+      hasKey: !!st.hasKey,
+      models: st.models ?? get().models
+    })
   },
 
   select: async (id) => {
