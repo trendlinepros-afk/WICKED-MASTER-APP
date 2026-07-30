@@ -35,6 +35,20 @@ function ago(ts: number): string {
   return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`
 }
 
+function fmtTok(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
+}
+function fmtCost(n: number): string {
+  return n > 0 && n < 0.01 ? '<$0.01' : `$${n.toFixed(n < 1 ? 3 : 2)}`
+}
+function modelShort(id: string): string {
+  if (id.includes('sonnet')) return 'Sonnet'
+  if (id.includes('haiku')) return 'Haiku'
+  if (id.includes('flash')) return 'Gemini Flash'
+  if (id.includes('pro')) return 'Gemini Pro'
+  return id
+}
+
 const mdCls =
   'leading-relaxed [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 ' +
   '[&_code]:rounded [&_code]:bg-raised [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.85em] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg ' +
@@ -134,6 +148,12 @@ function Bubble({ msg }: { msg: ChatMessage }): React.JSX.Element {
         >
           {isUser ? msg.text : renderRich(msg.text)}
         </div>
+        {!isUser && msg.costUsd != null && msg.usage && (
+          <div className="mt-1 text-[10px] text-muted" title="Estimated tokens + cost for this reply">
+            {fmtTok(msg.usage.input)} in · {fmtTok(msg.usage.output)} out · ~{fmtCost(msg.costUsd)}
+            {msg.model ? ` · ${modelShort(msg.model)}` : ''}
+          </div>
+        )}
       </div>
       {isUser && (
         <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
@@ -191,6 +211,7 @@ export default function AiAdvisor(): React.JSX.Element {
   const fontPx = Math.round(Math.max(14, Math.min(20, paneW / 62)))
   const colMax = Math.round(Math.max(720, Math.min(1180, paneW * 0.84)))
   const currentHint = s.models.find((m) => m.id === s.model)?.hint ?? ''
+  const sessionCost = messages.reduce((a, m) => a + (m.costUsd ?? 0), 0)
   const active = s.metas.filter((m) => !m.archived)
   const archived = s.metas.filter((m) => m.archived)
 
@@ -302,7 +323,15 @@ export default function AiAdvisor(): React.JSX.Element {
             <h1 className="text-sm font-bold tracking-tight">AI Advisor</h1>
             <p className="truncate text-[11px] text-muted">Reads your Stocks tools · {s.toolCount} tools</p>
           </div>
-          <label className="ml-auto flex items-center gap-1.5" title="AI model — pick a cheaper one to lower cost">
+          {sessionCost > 0 && (
+            <span className="ml-auto text-[10px] text-muted" title="Estimated total for this chat">
+              Chat ~{fmtCost(sessionCost)}
+            </span>
+          )}
+          <label
+            className={`${sessionCost > 0 ? '' : 'ml-auto'} flex items-center gap-1.5`}
+            title="AI model — pick a cheaper one to lower cost"
+          >
             <span className="text-[10px] text-muted">Model</span>
             <select
               value={s.model}

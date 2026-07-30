@@ -60,6 +60,10 @@ the gap. Nothing X-related is spent without your click.
   the Claude models or a **Gemini** key for the Gemini models (**Settings → API
   Keys**). If the current model's key is missing, the header banner says so and
   you can switch models.
+- **Cost readout**: each reply shows its tokens (in/out) and an estimated cost,
+  and the header shows a running **Chat ~$** total for the conversation. Costs are
+  estimates from published per-model rates (see `MODELS` in `ipc.ts`) — use them
+  to compare models, not for exact billing.
 
 ## Conversations
 

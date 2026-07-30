@@ -16,6 +16,12 @@ export interface ChatMessage {
   text: string
   /** tools used to produce an assistant message */
   tools?: ToolTrace[]
+  /** token usage for an assistant turn, summed across all tool rounds */
+  usage?: { input: number; output: number }
+  /** estimated USD cost for the turn */
+  costUsd?: number
+  /** model id that produced the message */
+  model?: string
   ts: number
 }
 

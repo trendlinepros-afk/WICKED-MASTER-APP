@@ -18,12 +18,15 @@ const MAX_TOKENS = 4096
 const MAX_ROUNDS = 8
 const MODEL_KEY = `${ID}.model`
 
-/** Selectable engines. Cheaper options let the advisor run sustainably. */
+/**
+ * Selectable engines. Cheaper options let the advisor run sustainably.
+ * inPer/outPer are approximate USD prices per 1M tokens (for the cost estimate).
+ */
 export const MODELS = [
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet', provider: 'anthropic', hint: 'Best reasoning · highest cost' },
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku', provider: 'anthropic', hint: 'Fast · ~5× cheaper than Sonnet' },
-  { id: 'gemini-2.5-flash', label: 'Gemini Flash', provider: 'gemini', hint: 'Cheapest · great for daily use' },
-  { id: 'gemini-2.5-pro', label: 'Gemini Pro', provider: 'gemini', hint: 'Strong · mid cost' }
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet', provider: 'anthropic', hint: 'Best reasoning · highest cost', inPer: 3, outPer: 15 },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku', provider: 'anthropic', hint: 'Fast · ~5× cheaper than Sonnet', inPer: 1, outPer: 5 },
+  { id: 'gemini-2.5-flash', label: 'Gemini Flash', provider: 'gemini', hint: 'Cheapest · great for daily use', inPer: 0.3, outPer: 2.5 },
+  { id: 'gemini-2.5-pro', label: 'Gemini Pro', provider: 'gemini', hint: 'Strong · mid cost', inPer: 1.25, outPer: 10 }
 ] as const
 
 type ModelDef = (typeof MODELS)[number]
@@ -155,6 +158,7 @@ function askXApproval(emit: (e: AdvisorEvent) => void, requestId: string, tool: 
 interface AgentOut {
   text: string
   tools: ToolTrace[]
+  usage: { input: number; output: number }
 }
 
 const activeStreams = new Map<string, { abort: () => void }>()
@@ -239,6 +243,8 @@ async function runAnthropicAgent(
   const traces: ToolTrace[] = []
   let assembled = ''
   let repairs = 0
+  let usageIn = 0
+  let usageOut = 0
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Stream one round, retrying transient API errors (overloaded / rate-limit / 5xx).
@@ -262,7 +268,7 @@ async function runAnthropicAgent(
       } catch (err) {
         activeStreams.delete(requestId)
         if (isAbortErr(err)) {
-          if (assembled.trim()) return { text: assembled.trim(), tools: traces }
+          if (assembled.trim()) return { text: assembled.trim(), tools: traces, usage: { input: usageIn, output: usageOut } }
           throw err
         }
         if (isTransientErr(err) && attempt < 3) {
@@ -270,12 +276,14 @@ async function runAnthropicAgent(
           await sleep(Math.min(8000, 800 * 2 ** attempt))
           continue
         }
-        if (assembled.trim()) return { text: assembled.trim(), tools: traces }
+        if (assembled.trim()) return { text: assembled.trim(), tools: traces, usage: { input: usageIn, output: usageOut } }
         throw err
       }
     }
     activeStreams.delete(requestId)
     if (!final) throw new Error('No response from Claude.')
+    usageIn += final.usage?.input_tokens ?? 0
+    usageOut += final.usage?.output_tokens ?? 0
 
     const textPart = final.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -320,7 +328,7 @@ async function runAnthropicAgent(
     }
   }
 
-  return { text: assembled.trim() || '(no response)', tools: traces }
+  return { text: assembled.trim() || '(no response)', tools: traces, usage: { input: usageIn, output: usageOut } }
 }
 
 /* -------------------------------- gemini --------------------------------- */
@@ -365,7 +373,7 @@ async function geminiGenerate(
   requestId: string,
   emit: (e: AdvisorEvent) => void,
   assembled: string
-): Promise<GeminiContent> {
+): Promise<{ content: GeminiContent; usage: { input: number; output: number } }> {
   for (let attempt = 0; ; attempt++) {
     let resp: Response
     try {
@@ -393,8 +401,14 @@ async function geminiGenerate(
       }
       throw err
     }
-    const data = (await resp.json()) as { candidates?: { content?: GeminiContent }[] }
-    return data.candidates?.[0]?.content ?? { role: 'model', parts: [] }
+    const data = (await resp.json()) as {
+      candidates?: { content?: GeminiContent }[]
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+    }
+    return {
+      content: data.candidates?.[0]?.content ?? { role: 'model', parts: [] },
+      usage: { input: data.usageMetadata?.promptTokenCount ?? 0, output: data.usageMetadata?.candidatesTokenCount ?? 0 }
+    }
   }
 }
 
@@ -423,6 +437,8 @@ async function runGeminiAgent(
   const traces: ToolTrace[] = []
   let assembled = ''
   let repairs = 0
+  let usageIn = 0
+  let usageOut = 0
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const body = {
@@ -431,8 +447,10 @@ async function runGeminiAgent(
       ...(functionDeclarations.length ? { tools: [{ functionDeclarations }] } : {}),
       generationConfig: { maxOutputTokens: MAX_TOKENS }
     }
-    const content = await geminiGenerate(apiKey, modelId, body, requestId, emit, assembled)
-    const parts = content.parts ?? []
+    const res = await geminiGenerate(apiKey, modelId, body, requestId, emit, assembled)
+    usageIn += res.usage.input
+    usageOut += res.usage.output
+    const parts = res.content.parts ?? []
     const textPart = parts
       .filter((p) => typeof p.text === 'string')
       .map((p) => p.text)
@@ -471,7 +489,7 @@ async function runGeminiAgent(
       emit({ requestId, type: 'text', text: assembled })
     }
   }
-  return { text: assembled.trim() || '(no response)', tools: traces }
+  return { text: assembled.trim() || '(no response)', tools: traces, usage: { input: usageIn, output: usageOut } }
 }
 
 /* --------------------------------- ipc ----------------------------------- */
@@ -584,7 +602,16 @@ export default function register(ctx: ModuleIpcContext): void {
 
     try {
       const out = await runAgent(ctx, model, apiKey, rid, prior, userText)
-      const assistantMsg: ChatMessage = { role: 'assistant', text: out.text, tools: out.tools, ts: Date.now() }
+      const costUsd = (out.usage.input / 1e6) * model.inPer + (out.usage.output / 1e6) * model.outPer
+      const assistantMsg: ChatMessage = {
+        role: 'assistant',
+        text: out.text,
+        tools: out.tools,
+        usage: out.usage,
+        costUsd,
+        model: model.id,
+        ts: Date.now()
+      }
       const after = readAll(ctx)
       const j = after.findIndex((x) => x.id === convos[i].id)
       if (j !== -1) {
