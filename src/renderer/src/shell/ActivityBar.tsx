@@ -73,13 +73,18 @@ export default function ActivityBar(): React.JSX.Element {
     ? decodeURIComponent(location.pathname.slice(4))
     : ''
 
-  const commitReorder = (targetToken: string): void => {
+  const commitReorder = (targetToken: string, after = false): void => {
     if (dragId && dragId !== targetToken) {
-      const next = reorderNav(settings, dragId, targetToken)
+      const next = reorderNav(settings, dragId, targetToken, after)
       if (next) update({ moduleOrder: next })
     }
     setDragId(null)
     setDropTarget(null)
+  }
+  // In the vertical nav, "after" = dropped past the row's vertical midpoint.
+  const droppedAfter = (e: React.DragEvent<HTMLElement>): boolean => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return r.height > 0 && (e.clientY - r.top) / r.height > 0.5
   }
 
   /** One module row (used at top level and nested inside a folder). */
@@ -106,7 +111,7 @@ export default function ActivityBar(): React.JSX.Element {
         onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
         onDrop={(e) => {
           e.preventDefault()
-          commitReorder(id)
+          commitReorder(id, droppedAfter(e))
         }}
         onDragEnd={() => {
           setDragId(null)
@@ -207,7 +212,7 @@ export default function ActivityBar(): React.JSX.Element {
                   onDragLeave={() => setDropTarget((t) => (t === token ? null : t))}
                   onDrop={(e2) => {
                     e2.preventDefault()
-                    commitReorder(token)
+                    commitReorder(token, droppedAfter(e2))
                   }}
                   onDragEnd={() => {
                     setDragId(null)

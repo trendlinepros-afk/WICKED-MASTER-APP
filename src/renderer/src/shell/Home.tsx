@@ -29,9 +29,9 @@ export default function Home(): React.JSX.Element {
   const folderCount = allGroups(settings).length
   const spec = cardSpec(cardSize)
 
-  const commitReorder = (targetToken: string): void => {
+  const commitReorder = (targetToken: string, after = false): void => {
     if (dragId && dragId !== targetToken) {
-      const next = reorderNav(settings, dragId, targetToken)
+      const next = reorderNav(settings, dragId, targetToken, after)
       if (next) update({ moduleOrder: next })
     }
     setDragId(null)

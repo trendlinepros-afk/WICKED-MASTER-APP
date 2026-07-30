@@ -11,8 +11,7 @@ import {
   descendantGroupIds,
   groupById,
   groupPath,
-  orderedModules,
-  reorderIds,
+  reorderNav,
   scopeSections
 } from './moduleView'
 
@@ -39,15 +38,11 @@ export default function GroupView(): React.JSX.Element {
 
   // Reordering uses the global module order (group membership comes from the
   // manifest / overrides, not the order), so dropping a card only moves it.
-  const commitReorder = (targetId: string): void => {
-    if (dragId && dragId !== targetId) {
-      update({
-        moduleOrder: reorderIds(
-          orderedModules(settings.moduleOrder, overrides).map((m) => m.manifest.id),
-          dragId,
-          targetId
-        )
-      })
+  // `after` = dropped past the target's center, so any slot (incl. last) is reachable.
+  const commitReorder = (targetToken: string, after = false): void => {
+    if (dragId && dragId !== targetToken) {
+      const next = reorderNav(settings, dragId, targetToken, after)
+      if (next) update({ moduleOrder: next })
     }
     setDragId(null)
     setDropTarget(null)

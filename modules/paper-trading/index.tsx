@@ -20,9 +20,13 @@ const signed = (n: number): string => `${n >= 0 ? '+' : ''}${money(n)}`
 const tone = (n: number): string => (n > 0 ? 'text-ok' : n < 0 ? 'text-danger' : 'text-ink')
 const fmtDate = (ts: number): string => new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 function cssRGB(v: string, fb: string): string {
+  // Theme tokens are space-separated RGB ("148 155 170"); lightweight-charts only
+  // parses comma-separated rgb(), so join with commas.
   try {
     const s = getComputedStyle(document.documentElement).getPropertyValue(v).trim()
-    return s ? `rgb(${s})` : fb
+    if (!s) return fb
+    const p = s.split(/[\s,]+/).filter(Boolean)
+    return p.length >= 3 ? `rgb(${p[0]}, ${p[1]}, ${p[2]})` : s.startsWith('#') || s.startsWith('rgb') ? s : fb
   } catch {
     return fb
   }

@@ -361,11 +361,18 @@ export function isGroupDrag(token: string | null): boolean {
 
 /**
  * Token-aware reorder for the Home grid / nav. The target token anchors the
- * insertion point (a module id, or a folder token = before that folder's first
- * member). Returns the new moduleOrder, or null when the drop is a no-op
- * (self-drop, empty folder, anchor inside the dragged block…).
+ * insertion point (a module id, or a folder token = that folder's member block).
+ * `after` drops the dragged tile *after* the target instead of before it, so the
+ * natural "drag right/down past a tile" gesture works and the very last slot is
+ * reachable. Returns the new moduleOrder, or null when the drop is a no-op
+ * (self-drop, empty folder, anchor inside the dragged block, or no change).
  */
-export function reorderNav(s: GroupSettings, dragToken: string, targetToken: string): string[] | null {
+export function reorderNav(
+  s: GroupSettings,
+  dragToken: string,
+  targetToken: string,
+  after = false
+): string[] | null {
   if (dragToken === targetToken) return null
   const ordered = orderedModules(s.moduleOrder, s.moduleOverrides)
   const ids = ordered.map((m) => m.manifest.id)
@@ -383,14 +390,19 @@ export function reorderNav(s: GroupSettings, dragToken: string, targetToken: str
       : []
   if (block.length === 0) return null
 
-  const anchor = isGroupDrag(targetToken)
-    ? membersOf(targetToken.slice(GROUP_DRAG_PREFIX.length))[0]
-    : targetToken
+  // A folder target moves as a member block: anchor before its first member, or
+  // (when dropping past it) after its last, so a whole folder can be stepped over.
+  const targetMembers = isGroupDrag(targetToken)
+    ? membersOf(targetToken.slice(GROUP_DRAG_PREFIX.length))
+    : [targetToken]
+  const anchor = after ? targetMembers[targetMembers.length - 1] : targetMembers[0]
   if (!anchor || block.includes(anchor)) return null
 
   const without = ids.filter((id) => !block.includes(id))
   const ti = without.indexOf(anchor)
   if (ti === -1) return null
-  without.splice(ti, 0, ...block)
-  return without
+  without.splice(after ? ti + 1 : ti, 0, ...block)
+  // Signal a no-op (e.g. dropping just before the tile it already precedes) so
+  // callers can skip a pointless write.
+  return without.length === ids.length && without.every((id, i) => id === ids[i]) ? null : without
 }

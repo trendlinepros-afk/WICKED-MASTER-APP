@@ -22,11 +22,14 @@ interface Bar {
 const TFS = ['1D', '5D', '1M', '3M', '1Y'] as const
 type TF = (typeof TFS)[number]
 
-/** Resolve a shell theme token (space-separated RGB, e.g. "34 197 94") to an rgb() string. */
+/** Resolve a shell theme token to an rgb() string. Tokens are space-separated RGB
+ *  ("34 197 94"); lightweight-charts only parses comma-separated rgb(), so join with commas. */
 function cssRGB(varName: string, fallback: string): string {
   try {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
-    return v ? `rgb(${v})` : fallback
+    const s = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
+    if (!s) return fallback
+    const p = s.split(/[\s,]+/).filter(Boolean)
+    return p.length >= 3 ? `rgb(${p[0]}, ${p[1]}, ${p[2]})` : s.startsWith('#') || s.startsWith('rgb') ? s : fallback
   } catch {
     return fallback
   }

@@ -32,16 +32,22 @@ export function ModuleCard({
   overrides: ShellSettings['moduleOverrides']
   dropTarget: string | null
   setDropTarget: (fn: (t: string | null) => string | null) => void
-  commitReorder: (targetId: string) => void
+  commitReorder: (targetId: string, after?: boolean) => void
   size?: CardSize
 }): React.JSX.Element {
   const navigate = useNavigate()
   const { openMenu, openEdit, dragId, setDragId } = useShellUi()
+  const [side, setSide] = useState<'before' | 'after' | null>(null)
   const { manifest } = m
   const id = manifest.id
   const spec = cardSpec(size)
   const color = moduleColor(id, overrides)
   const isDrop = dropTarget === id
+  // Which half of the tile the cursor is over → insert before / after it.
+  const afterOf = (e: React.DragEvent<HTMLDivElement>): boolean => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return r.width > 0 && (e.clientX - r.left) / r.width > 0.5
+  }
 
   // A chosen color tints the tile; the drop-target highlight (accent) always
   // wins so filing/reordering stays legible.
@@ -60,16 +66,24 @@ export function ModuleCard({
       }}
       onDragOver={(e) => {
         e.preventDefault()
-        if (dragId && dragId !== id) setDropTarget(() => id)
+        if (dragId && dragId !== id) {
+          setDropTarget(() => id)
+          setSide(afterOf(e) ? 'after' : 'before')
+        }
       }}
-      onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
+      onDragLeave={() => {
+        setDropTarget((t) => (t === id ? null : t))
+        setSide(null)
+      }}
       onDrop={(e) => {
         e.preventDefault()
-        commitReorder(id)
+        commitReorder(id, afterOf(e))
+        setSide(null)
       }}
       onDragEnd={() => {
         setDragId(null)
         setDropTarget(() => null)
+        setSide(null)
       }}
       onClick={() => navigate(`/m/${id}`)}
       onContextMenu={(e) => {
@@ -82,6 +96,13 @@ export function ModuleCard({
       } ${dragId === id ? 'opacity-40' : ''}`}
     >
       {color && <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: color }} />}
+      {isDrop && side && (
+        <span
+          className={`pointer-events-none absolute inset-y-1 z-10 w-1 rounded bg-accent ${
+            side === 'before' ? 'left-0' : 'right-0'
+          }`}
+        />
+      )}
       <div className={`flex items-center ${spec.inner}`}>
         <span
           className={`flex ${spec.chip} items-center justify-center rounded-lg ${color ? '' : 'bg-raised text-accent'}`}
@@ -143,11 +164,12 @@ export function GroupCard({
   onDropModule?: (moduleId: string) => void
   onNestFolder?: (draggedGroupId: string) => void
   /** reorder the dragged tile to this folder's position (when dropped off-center) */
-  commitReorder?: (targetToken: string) => void
+  commitReorder?: (targetToken: string, after?: boolean) => void
   size?: CardSize
 }): React.JSX.Element {
   const { dragId, setDragId } = useShellUi()
   const [mode, setMode] = useState<'none' | 'nest' | 'reorder'>('none')
+  const [side, setSide] = useState<'before' | 'after' | null>(null)
   const spec = cardSpec(size)
   const token = groupDragToken(group.id)
   const groupDrag = isGroupDrag(dragId)
@@ -178,30 +200,42 @@ export function GroupCard({
       onDragEnd={() => {
         setDragId(null)
         setMode('none')
+        setSide(null)
       }}
       onClick={onOpen}
       onDragOver={(e) => {
         const m = evalMode(e)
         if (m === 'none') {
           setMode('none')
+          setSide(null)
           return
         }
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
         setMode(m)
+        if (m === 'reorder') {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setSide(rect.width > 0 && (e.clientX - rect.left) / rect.width > 0.5 ? 'after' : 'before')
+        } else setSide(null)
       }}
-      onDragLeave={() => setMode('none')}
+      onDragLeave={() => {
+        setMode('none')
+        setSide(null)
+      }}
       onDrop={(e) => {
         const m = evalMode(e)
         if (m === 'none' || !dragId) return
         e.preventDefault()
         e.stopPropagation()
+        const rect = e.currentTarget.getBoundingClientRect()
+        const after = rect.width > 0 && (e.clientX - rect.left) / rect.width > 0.5
         setMode('none')
+        setSide(null)
         if (m === 'nest') {
           if (isGroupDrag(dragId)) onNestFolder?.(dragId.slice(GROUP_DRAG_PREFIX.length))
           else onDropModule?.(dragId)
         } else {
-          commitReorder?.(token)
+          commitReorder?.(token, after)
         }
         setDragId(null)
       }}
@@ -213,6 +247,13 @@ export function GroupCard({
             : 'border-edge hover:border-warn/60'
       } ${dragId === token ? 'opacity-40' : ''}`}
     >
+      {mode === 'reorder' && side && (
+        <span
+          className={`pointer-events-none absolute inset-y-1 z-10 w-1 rounded bg-accent ${
+            side === 'before' ? 'left-0' : 'right-0'
+          }`}
+        />
+      )}
       <div className={`flex items-center ${spec.inner}`}>
         <span className={`flex ${spec.chip} items-center justify-center rounded-lg bg-warn/15 text-warn`}>
           <ModuleIcon name={group.icon} size={spec.icon} strokeWidth={1.8} />
