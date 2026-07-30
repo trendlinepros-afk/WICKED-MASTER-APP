@@ -2,7 +2,7 @@
   "id": "ai-advisor",
   "name": "AI Advisor",
   "icon": "Bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "An AI trading advisor that can read everything in your Stocks tools — journals, screens, live market data and news — and reason about your trades",
   "status": "stable",
   "group": {

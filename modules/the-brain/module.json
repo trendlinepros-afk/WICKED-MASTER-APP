@@ -1,0 +1,8 @@
+{
+  "id": "the-brain",
+  "name": "The Brain",
+  "icon": "BrainCircuit",
+  "version": "1.0.0",
+  "description": "The app's own local Obsidian-style memory vault — every AI chat auto-saves here, personas live here, and all of it travels with Backup & Cloud Sync",
+  "status": "stable"
+}

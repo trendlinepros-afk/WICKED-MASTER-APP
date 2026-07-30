@@ -19,6 +19,7 @@ import * as mcp from './ipc/mcp';
 import type { McpServerConfig } from './ipc/mcp';
 import * as providers from './ipc/providers';
 import * as webPortal from './ipc/webPortal';
+import * as brainSync from './ipc/brainSync';
 
 /**
  * ai-chat module IPC registration (port of the standalone app's main.ts
@@ -42,6 +43,18 @@ export default function register(ctx: ModuleIpcContext): void {
 
   db.initDb();
   providers.initKeyResolver(ctx.getApiKey);
+
+  // One-time backfill of existing chats + personas into The Brain (the app's
+  // local markdown vault that syncs). Personas get copied in and re-pointed so
+  // they stop depending on an external C:\ Obsidian folder.
+  try {
+    if (!ctx.storeGet<boolean>('ai-chat.brainPorted', false)) {
+      brainSync.portAllToBrain(app);
+      ctx.storeSet('ai-chat.brainPorted', true);
+    }
+  } catch {
+    /* Brain is optional */
+  }
 
   // Explicit channel → handler registry: one handler per channel, mirrored by
   // the LAN portal (ipc/webPortal.ts) so the two surfaces can't drift apart.
@@ -76,14 +89,20 @@ export default function register(ctx: ModuleIpcContext): void {
   // ----- Chats -----
   handle(C.getChats, () => db.getChats());
   handle(C.createChat, (_e, data) => db.createChat(data));
-  handle(C.updateChatTitle, (_e, id: string, title: string) => db.updateChatTitle(id, title));
+  handle(C.updateChatTitle, (_e, id: string, title: string) => {
+    db.updateChatTitle(id, title);
+    brainSync.syncChatToBrain(app, id); // rename the note on disk to match
+  });
   handle(C.updateChatFolder, (_e, id: string, folderId: string | null) =>
     db.updateChatFolder(id, folderId)
   );
   handle(C.updateChatModel, (_e, id: string, provider: Provider, modelVersion: string) =>
     db.updateChatModel(id, provider, modelVersion)
   );
-  handle(C.deleteChat, (_e, id: string) => db.deleteChat(id));
+  handle(C.deleteChat, (_e, id: string) => {
+    db.deleteChat(id);
+    brainSync.removeChatFromBrain(app, id); // delete the note from The Brain too
+  });
   handle(C.updateChatSystemPrompt, (_e, id: string, prompt: string) =>
     db.updateChatSystemPrompt(id, prompt)
   );
@@ -94,16 +113,27 @@ export default function register(ctx: ModuleIpcContext): void {
   handle(C.setChatNoMemory, (_e, id: string, v: boolean) => db.updateChatNoMemory(id, v));
   handle(C.setChatCommitted, (_e, id: string, ts: number) => db.updateChatCommitted(id, ts));
   handle(C.getDeletedChats, () => db.getDeletedChats());
-  handle(C.restoreChat, (_e, id: string) => db.restoreChat(id));
-  handle(C.purgeChat, (_e, id: string) => db.purgeChat(id));
+  handle(C.restoreChat, (_e, id: string) => {
+    db.restoreChat(id);
+    brainSync.syncChatToBrain(app, id); // bring its note back on restore
+  });
+  handle(C.purgeChat, (_e, id: string) => {
+    db.purgeChat(id);
+    brainSync.removeChatFromBrain(app, id);
+  });
 
   // ----- Messages (edit/branch) + global search -----
   handle(C.getMessages, (_e, chatId: string) => db.getMessages(chatId));
-  handle(C.saveMessage, (_e, msg) => db.saveMessage(msg));
+  handle(C.saveMessage, (_e, msg) => {
+    const saved = db.saveMessage(msg);
+    brainSync.syncChatToBrain(app, msg.chatId); // mirror the turn into The Brain
+    return saved;
+  });
   handle(C.deleteMessage, (_e, id: string) => db.deleteMessage(id));
-  handle(C.deleteMessagesFrom, (_e, chatId: string, createdAt: number) =>
-    db.deleteMessagesFrom(chatId, createdAt)
-  );
+  handle(C.deleteMessagesFrom, (_e, chatId: string, createdAt: number) => {
+    db.deleteMessagesFrom(chatId, createdAt);
+    brainSync.syncChatToBrain(app, chatId); // keep the note in step after edit/regenerate
+  });
   handle(C.searchMessages, (_e, query: string) => db.searchMessages(query));
 
   // ----- Prompt templates -----
@@ -127,9 +157,22 @@ export default function register(ctx: ModuleIpcContext): void {
 
   // ----- Agent personas (vault-backed brains) -----
   handle(C.agentGetPersonas, () => db.agentGetPersonas());
-  handle(C.agentCreatePersona, (_e, data) => db.agentCreatePersona(data));
-  handle(C.agentUpdatePersona, (_e, id: string, patch) => db.agentUpdatePersona(id, patch));
-  handle(C.agentDeletePersona, (_e, id: string) => db.agentDeletePersona(id));
+  handle(C.agentCreatePersona, (_e, data) => {
+    // Create, then copy its brain docs into the vault and re-point it there so
+    // the persona lives in the app (and syncs) instead of on a local C:\ folder.
+    const persona = db.agentCreatePersona(data);
+    return brainSync.syncPersonaToBrain(app, persona);
+  });
+  handle(C.agentUpdatePersona, (_e, id: string, patch) => {
+    db.agentUpdatePersona(id, patch);
+    const persona = db.agentGetPersona(id);
+    if (persona) brainSync.syncPersonaToBrain(app, persona);
+  });
+  handle(C.agentDeletePersona, (_e, id: string) => {
+    const persona = db.agentGetPersona(id);
+    db.agentDeletePersona(id);
+    brainSync.removePersonaFromBrain(app, persona); // remove its folder from the vault
+  });
   handle(C.brainFolderDigest, (_e, folderPath: string) => brainFolder.digest(folderPath));
   handle(C.brainFolderSearch, (_e, folderPath: string, query: string, limit?: number) =>
     brainFolder.search(folderPath, query, limit)

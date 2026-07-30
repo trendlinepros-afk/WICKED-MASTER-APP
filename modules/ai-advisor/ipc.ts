@@ -5,6 +5,7 @@ import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { AI_ADVISOR_EVENT, type AdvisorEvent, type ChatMessage, type Conversation, type ToolTrace } from './types'
 import { stocksTools, runTool, type AdvisorTool } from './tools'
+import { deleteChat as brainDeleteChat, saveChat as brainSaveChat, type SimpleMsg } from '../the-brain/lib/brainStore'
 
 /**
  * AI Advisor — an agentic Claude chat that can read every stocks-folder tool.
@@ -107,6 +108,61 @@ function sortConvos(convos: Conversation[]): Conversation[] {
 }
 function metaOf(c: Conversation): { id: string; title: string; updatedAt: number; count: number; archived: boolean } {
   return { id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length, archived: !!c.archived }
+}
+
+/* --------------------------- The Brain sync ------------------------------ *
+ * Every conversation is mirrored into the app's local markdown vault (The
+ * Brain) under Chats/AI Advisor/, updated as it grows and removed when deleted.
+ * Failures are swallowed — the Brain is a nice-to-have, never a blocker.
+ * ------------------------------------------------------------------------- */
+const BRAIN_SOURCE = 'AI Advisor'
+
+function convoToBrain(ctx: ModuleIpcContext, convo: Conversation): void {
+  try {
+    if (!convo.messages.length) return // don't clutter the vault with empty chats
+    const messages: SimpleMsg[] = convo.messages.map((m) => {
+      let sub: string | undefined
+      if (m.role === 'assistant') {
+        const bits: string[] = []
+        const label = MODELS.find((x) => x.id === m.model)?.label
+        if (label) bits.push(label)
+        if (typeof m.costUsd === 'number') bits.push(`~$${m.costUsd.toFixed(m.costUsd < 0.01 ? 4 : 3)}`)
+        if (m.tools && m.tools.length) bits.push(`${m.tools.length} tool${m.tools.length === 1 ? '' : 's'}`)
+        sub = bits.join(' · ') || undefined
+      }
+      return { role: m.role, text: m.text, ts: m.ts, sub }
+    })
+    brainSaveChat(ctx.app, {
+      source: BRAIN_SOURCE,
+      id: convo.id,
+      title: convo.title,
+      messages,
+      createdAt: convo.createdAt,
+      updatedAt: convo.updatedAt
+    })
+  } catch {
+    /* Brain is optional */
+  }
+}
+
+function convoDeleteBrain(ctx: ModuleIpcContext, id: string): void {
+  try {
+    brainDeleteChat(ctx.app, BRAIN_SOURCE, id)
+  } catch {
+    /* Brain is optional */
+  }
+}
+
+/** One-time backfill of every existing conversation into The Brain. */
+function portConversationsToBrain(ctx: ModuleIpcContext): void {
+  const flag = `${ID}.brainPorted`
+  if (ctx.storeGet<boolean>(flag, false)) return
+  try {
+    for (const c of readAll(ctx)) convoToBrain(ctx, c)
+  } catch {
+    /* ignore */
+  }
+  ctx.storeSet(flag, true)
 }
 
 /* ---------------------------- system prompt ------------------------------ */
@@ -495,6 +551,9 @@ async function runGeminiAgent(
 /* --------------------------------- ipc ----------------------------------- */
 
 export default function register(ctx: ModuleIpcContext): void {
+  // Backfill existing conversations into The Brain once (no-op after the first run).
+  portConversationsToBrain(ctx)
+
   ctx.ipcMain.handle(`${ID}:status`, () => {
     const m = getModel(ctx)
     return {
@@ -541,6 +600,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (i === -1) return { ok: false, error: 'Not found.' }
     convos[i] = { ...convos[i], title: String(title ?? '').slice(0, 80) || convos[i].title, updatedAt: Date.now() }
     writeAll(ctx, convos)
+    convoToBrain(ctx, convos[i]) // rename the note on disk to match
     return { ok: true, conversation: convos[i] }
   })
 
@@ -555,6 +615,7 @@ export default function register(ctx: ModuleIpcContext): void {
 
   ctx.ipcMain.handle(`${ID}:delete`, (_e, id: unknown) => {
     writeAll(ctx, readAll(ctx).filter((x) => x.id !== String(id)))
+    convoDeleteBrain(ctx, String(id)) // remove the note from The Brain too
     return { ok: true, conversations: sortConvos(readAll(ctx)).map(metaOf) }
   })
 
@@ -617,6 +678,7 @@ export default function register(ctx: ModuleIpcContext): void {
       if (j !== -1) {
         after[j] = { ...after[j], messages: [...after[j].messages, assistantMsg], updatedAt: Date.now() }
         writeAll(ctx, after)
+        convoToBrain(ctx, after[j]) // mirror the completed turn into The Brain
       }
       const win = ctx.getMainWindow()
       if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, { requestId: rid, type: 'done' } as AdvisorEvent)
