@@ -76,6 +76,8 @@ export interface ShellSettings {
   mcpEnabled: boolean
   /** activity bar shows text labels next to icons when expanded */
   navExpanded: boolean
+  /** width (px) of the expanded sidebar; user-draggable */
+  navWidth: number
   /** user's custom module order (module ids); ids not listed sort after, by name */
   moduleOrder: string[]
   /**
@@ -109,6 +111,7 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   update: { autoCheck: true, intervalHours: 4 },
   mcpEnabled: false,
   navExpanded: true,
+  navWidth: 224,
   moduleOrder: [],
   moduleOverrides: {},
   cardSize: 'md',

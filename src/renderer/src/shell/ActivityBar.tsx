@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   ChevronDown,
@@ -36,7 +36,31 @@ export default function ActivityBar(): React.JSX.Element {
   const checking = updatePhase === 'checking' || updatePhase === 'available'
   const { openMenu, dragId, setDragId } = useShellUi()
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const navRef = useRef<HTMLElement>(null)
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const navWidth = dragWidth ?? settings.navWidth ?? 224
   const location = useLocation()
+
+  // Drag the right edge to resize the expanded sidebar (persisted).
+  const startResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const left = navRef.current?.getBoundingClientRect().left ?? 0
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    const onMove = (ev: MouseEvent): void => setDragWidth(Math.max(180, Math.min(440, ev.clientX - left)))
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      setDragWidth((w) => {
+        if (w != null) update({ navWidth: w })
+        return null
+      })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
   // folders the user has manually expanded (the active one auto-expands)
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
 
@@ -115,10 +139,23 @@ export default function ActivityBar(): React.JSX.Element {
 
   return (
     <nav
-      className={`flex h-full shrink-0 flex-col border-r border-edge bg-surface px-2 py-2 transition-[width] duration-200 ${
-        expanded ? 'w-56' : 'w-14'
-      }`}
+      ref={navRef}
+      style={expanded ? { width: navWidth } : undefined}
+      className={`relative flex h-full shrink-0 flex-col border-r border-edge bg-surface px-2 py-2 ${
+        dragWidth == null ? 'transition-[width] duration-200' : ''
+      } ${expanded ? '' : 'w-14'}`}
     >
+      {/* drag-to-resize handle (expanded only) */}
+      {expanded && (
+        <div
+          onMouseDown={startResize}
+          onDoubleClick={() => update({ navWidth: 224 })}
+          title="Drag to resize · double-click to reset"
+          className="group absolute -right-1 top-0 z-20 h-full w-2 cursor-col-resize"
+        >
+          <span className="absolute right-1 top-0 h-full w-0.5 bg-transparent transition-colors group-hover:bg-accent/60" />
+        </div>
+      )}
       {/* Home / brand button */}
       <NavLink
         to="/"

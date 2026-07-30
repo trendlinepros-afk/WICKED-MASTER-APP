@@ -171,10 +171,36 @@ export default function AiAdvisor(): React.JSX.Element {
   const endRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const mainRef = useRef<HTMLElement>(null)
+  const railRef = useRef<HTMLElement>(null)
   const [paneW, setPaneW] = useState(900)
+  const [railWidth, setRailWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ai-advisor.railWidth'))
+    return Number.isFinite(v) && v >= 200 ? v : 256
+  })
   const [showArchived, setShowArchived] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
+
+  // Drag the rail's right edge to resize the conversation list (persisted).
+  const startRailResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const left = railRef.current?.getBoundingClientRect().left ?? 0
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    const onMove = (ev: MouseEvent): void => setRailWidth(Math.max(200, Math.min(480, ev.clientX - left)))
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      setRailWidth((w) => {
+        localStorage.setItem('ai-advisor.railWidth', String(w))
+        return w
+      })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     void s.init()
@@ -283,7 +309,22 @@ export default function AiAdvisor(): React.JSX.Element {
   return (
     <div className="flex h-full">
       {/* conversation rail */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-edge bg-surface">
+      <aside
+        ref={railRef}
+        style={{ width: railWidth }}
+        className="relative flex shrink-0 flex-col border-r border-edge bg-surface"
+      >
+        <div
+          onMouseDown={startRailResize}
+          onDoubleClick={() => {
+            setRailWidth(256)
+            localStorage.setItem('ai-advisor.railWidth', '256')
+          }}
+          title="Drag to resize · double-click to reset"
+          className="group absolute -right-1 top-0 z-20 h-full w-2 cursor-col-resize"
+        >
+          <span className="absolute right-1 top-0 h-full w-0.5 bg-transparent transition-colors group-hover:bg-accent/60" />
+        </div>
         <div className="border-b border-edge p-3">
           <button
             onClick={() => void s.newChat()}
