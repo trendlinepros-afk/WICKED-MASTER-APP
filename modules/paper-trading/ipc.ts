@@ -177,6 +177,7 @@ export default function register(ctx: ModuleIpcContext): void {
       stop: r.stop != null && num(r.stop) > 0 ? num(r.stop) : null,
       takeProfit: r.takeProfit != null && num(r.takeProfit) > 0 ? num(r.takeProfit) : null,
       trailingStop: r.trailingStop != null && num(r.trailingStop) > 0 ? num(r.trailingStop) : null,
+      trailingStopUnit: r.trailingStopUnit === 'pct' ? 'pct' : 'usd',
       ...(kind === 'option'
         ? { optionType: r.optionType === 'put' ? 'put' : 'call', strike: num(r.strike), expiry: str(r.expiry), multiplier: 100 }
         : {})
@@ -199,7 +200,9 @@ export default function register(ctx: ModuleIpcContext): void {
             stop: r.stop === null ? null : num(r.stop) > 0 ? num(r.stop) : p.stop,
             takeProfit: r.takeProfit === null ? null : num(r.takeProfit) > 0 ? num(r.takeProfit) : p.takeProfit,
             trailingStop:
-              r.trailingStop === null ? null : num(r.trailingStop) > 0 ? num(r.trailingStop) : p.trailingStop ?? null
+              r.trailingStop === null ? null : num(r.trailingStop) > 0 ? num(r.trailingStop) : p.trailingStop ?? null,
+            trailingStopUnit:
+              r.trailingStopUnit === 'pct' ? 'pct' : r.trailingStopUnit === 'usd' ? 'usd' : p.trailingStopUnit ?? 'usd'
           }
         : p
     )

@@ -21,8 +21,10 @@ export interface Position {
   stop: number | null
   /** take-profit on the instrument price; null = none */
   takeProfit: number | null
-  /** trailing stop DISTANCE in dollars (follows the peak); null/0 = none. Stock only. */
+  /** trailing stop DISTANCE (follows the peak); null/0 = none. Stock only. */
   trailingStop?: number | null
+  /** unit of trailingStop: 'usd' = $ distance, 'pct' = % of the peak. Default 'usd'. */
+  trailingStopUnit?: 'usd' | 'pct'
   // option-only
   optionType?: OptionType
   strike?: number

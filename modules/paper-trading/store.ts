@@ -24,6 +24,7 @@ export interface OrderDraft {
   stop?: number | null
   takeProfit?: number | null
   trailingStop?: number | null
+  trailingStopUnit?: 'usd' | 'pct'
   // option
   optionType?: 'call' | 'put'
   strike?: number
@@ -53,7 +54,7 @@ interface State {
   closePosition: (positionId: string, qty?: number, price?: number) => Promise<void>
   updatePosition: (
     positionId: string,
-    patch: { stop?: number | null; takeProfit?: number | null; trailingStop?: number | null }
+    patch: { stop?: number | null; takeProfit?: number | null; trailingStop?: number | null; trailingStopUnit?: 'usd' | 'pct' }
   ) => Promise<void>
   setChartSymbol: (s: string) => void
   setTimeframe: (t: Timeframe) => void

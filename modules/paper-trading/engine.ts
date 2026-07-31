@@ -39,6 +39,7 @@ export interface OpenOrder {
   stop?: number | null
   takeProfit?: number | null
   trailingStop?: number | null
+  trailingStopUnit?: 'usd' | 'pct'
   optionType?: 'call' | 'put'
   strike?: number
   expiry?: string
@@ -83,7 +84,8 @@ export function openPosition(
       entryPrice: avgEntry,
       stop: order.stop != null ? order.stop : ex.stop,
       takeProfit: order.takeProfit != null ? order.takeProfit : ex.takeProfit,
-      trailingStop: order.trailingStop != null ? order.trailingStop : ex.trailingStop ?? null
+      trailingStop: order.trailingStop != null ? order.trailingStop : ex.trailingStop ?? null,
+      trailingStopUnit: order.trailingStop != null ? order.trailingStopUnit ?? 'usd' : ex.trailingStopUnit
     }
     const positions = acct.positions.map((p, i) => (i === idx ? merged : p))
     return { ok: true, account: { ...acct, cash, positions } }
@@ -169,15 +171,19 @@ export interface Bar {
  * target within a bar (conservative). Stock positions only.
  */
 export function detectExit(p: Position, bars: Bar[]): { price: number; at: number; reason: CloseReason } | null {
-  const trail = p.trailingStop != null && p.trailingStop > 0 ? p.trailingStop : null
-  if (p.stop == null && p.takeProfit == null && trail == null) return null
+  const trailVal = p.trailingStop != null && p.trailingStop > 0 ? p.trailingStop : null
+  // Trailing distance at a given anchor: a fixed $ amount, or a % of the anchor.
+  const trailDist = (anchor: number): number | null =>
+    trailVal == null ? null : p.trailingStopUnit === 'pct' ? anchor * (trailVal / 100) : trailVal
+  if (p.stop == null && p.takeProfit == null && trailVal == null) return null
   // `peak` tracks the most-favorable extreme so far (running high for a long,
   // running low for a short) — the anchor the trailing stop follows.
   let peak = p.entryPrice
   for (const b of bars) {
     if (b.t <= p.entryAt) continue
     if (p.side === 'long') {
-      const trailLevel = trail != null ? peak - trail : null
+      const d = trailDist(peak)
+      const trailLevel = d != null ? peak - d : null
       let floor: number | null = p.stop ?? null
       let reason: CloseReason = 'stop'
       if (trailLevel != null && (floor == null || trailLevel > floor)) {
@@ -188,7 +194,8 @@ export function detectExit(p: Position, bars: Bar[]): { price: number; at: numbe
       if (p.takeProfit != null && b.h >= p.takeProfit) return { price: p.takeProfit, at: b.t, reason: 'take-profit' }
       peak = Math.max(peak, b.h)
     } else {
-      const trailLevel = trail != null ? peak + trail : null
+      const d = trailDist(peak)
+      const trailLevel = d != null ? peak + d : null
       let ceil: number | null = p.stop ?? null
       let reason: CloseReason = 'stop'
       if (trailLevel != null && (ceil == null || trailLevel < ceil)) {

@@ -120,6 +120,7 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
   const [qty, setQty] = useState('100')
   const [stop, setStop] = useState('')
   const [trail, setTrail] = useState('')
+  const [trailUnit, setTrailUnit] = useState<'usd' | 'pct'>('usd')
   const [tp, setTp] = useState('')
   const [optType, setOptType] = useState<'call' | 'put'>('call')
   const [strike, setStrike] = useState('')
@@ -143,6 +144,7 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
       stop: stop ? Number(stop) : null,
       takeProfit: tp ? Number(tp) : null,
       trailingStop: trail ? Number(trail) : null,
+      trailingStopUnit: trailUnit,
       ...(kind === 'option' ? { optionType: optType, strike: Number(strike), expiry, price: Number(premium) } : {})
     }
     await place(o)
@@ -177,8 +179,28 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
             <input inputMode="decimal" value={tp} onChange={(e) => setTp(e.target.value)} placeholder="—" className={inputCls} />
           </label>
           <label>
-            <span className={lblCls}>Trailing stop $ (optional)</span>
-            <input inputMode="decimal" value={trail} onChange={(e) => setTrail(e.target.value)} placeholder="—" className={inputCls} />
+            <span className={lblCls}>Trailing stop (optional)</span>
+            <div className="flex gap-1">
+              <input
+                inputMode="decimal"
+                value={trail}
+                onChange={(e) => setTrail(e.target.value)}
+                placeholder={trailUnit === 'pct' ? 'e.g. 5' : 'e.g. 0.25'}
+                className={`${inputCls} min-w-0 flex-1`}
+              />
+              <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-edge">
+                {(['usd', 'pct'] as const).map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setTrailUnit(u)}
+                    className={`px-2 text-xs font-semibold ${trailUnit === u ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+                  >
+                    {u === 'usd' ? '$' : '%'}
+                  </button>
+                ))}
+              </div>
+            </div>
           </label>
           <div className="col-span-2 flex items-end justify-end pb-0.5 text-xs text-muted">
             Est. cost{' '}
@@ -245,6 +267,43 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
 
 /* ------------------------------- positions ------------------------------- */
 
+/** Inline trailing-stop editor with a $/% unit toggle (position card). */
+function TrailEditor({ p }: { p: Position }): React.JSX.Element {
+  const updatePosition = usePaper((s) => s.updatePosition)
+  const [val, setVal] = useState(p.trailingStop != null ? String(p.trailingStop) : '')
+  const [unit, setUnit] = useState<'usd' | 'pct'>(p.trailingStopUnit === 'pct' ? 'pct' : 'usd')
+  const commit = (v: string, u: 'usd' | 'pct'): void => {
+    void updatePosition(p.id, { trailingStop: v ? Number(v) : null, trailingStopUnit: u })
+  }
+  return (
+    <label className="flex items-center gap-1" title="Trailing stop — $ or % below the peak">
+      trailing
+      <input
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onBlur={() => commit(val, unit)}
+        placeholder="—"
+        className="w-12 rounded border border-edge bg-raised px-1 py-0.5 text-ink outline-none focus:border-accent"
+      />
+      <span className="inline-flex overflow-hidden rounded border border-edge">
+        {(['usd', 'pct'] as const).map((u) => (
+          <button
+            key={u}
+            type="button"
+            onClick={() => {
+              setUnit(u)
+              commit(val, u)
+            }}
+            className={`px-1 text-[10px] font-semibold ${unit === u ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+          >
+            {u === 'usd' ? '$' : '%'}
+          </button>
+        ))}
+      </span>
+    </label>
+  )
+}
+
 function PositionRow({ p, mark }: { p: Position; mark: number }): React.JSX.Element {
   const close = usePaper((s) => s.closePosition)
   const updatePosition = usePaper((s) => s.updatePosition)
@@ -282,15 +341,7 @@ function PositionRow({ p, mark }: { p: Position; mark: number }): React.JSX.Elem
                 className="w-16 rounded border border-edge bg-raised px-1 py-0.5 text-ink outline-none focus:border-accent"
               />
             </label>
-            <label className="flex items-center gap-1" title="Trailing stop — dollar distance below the peak">
-              trailing $
-              <input
-                defaultValue={p.trailingStop ?? ''}
-                onBlur={(e) => void updatePosition(p.id, { trailingStop: e.target.value ? Number(e.target.value) : null })}
-                placeholder="—"
-                className="w-14 rounded border border-edge bg-raised px-1 py-0.5 text-ink outline-none focus:border-accent"
-              />
-            </label>
+            <TrailEditor p={p} />
             <label className="flex items-center gap-1" title="Take-profit price">
               take profit
               <input
