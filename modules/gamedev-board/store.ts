@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { clearStore, del, get, getAll, openDB, put } from './db'
+import { makeZip, type ZipFile } from './zip'
 
 export interface Folder {
   id: string
@@ -145,6 +146,8 @@ interface BoardState {
   deleteCard: (id: string) => Promise<void>
   addImageToCard: (cardId: string, blob: Blob) => Promise<void>
   removeImage: (cardId: string, imageId: string) => Promise<void>
+  /** Download every image on a card as a .zip. Returns how many were included. */
+  exportCardImages: (cardId: string) => Promise<{ ok: boolean; count: number }>
 
   startTimer: () => Promise<void>
   /** stops the timer; returns the pending entry span if it ran >= 1s */
@@ -187,6 +190,34 @@ function blobToDataUrl(blob: Blob): Promise<string> {
     fr.onload = () => r(fr.result as string)
     fr.readAsDataURL(blob)
   })
+}
+
+/** File extension for an image blob's MIME type (png when unknown). */
+function extForMime(type: string): string {
+  switch (type) {
+    case 'image/jpeg':
+      return 'jpg'
+    case 'image/gif':
+      return 'gif'
+    case 'image/webp':
+      return 'webp'
+    case 'image/bmp':
+      return 'bmp'
+    case 'image/svg+xml':
+      return 'svg'
+    default:
+      return 'png'
+  }
+}
+
+/** Filesystem-safe slug from a card title. */
+function slugName(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
 }
 
 export const useBoard = create<BoardState>((set, getState) => ({
@@ -433,6 +464,31 @@ export const useBoard = create<BoardState>((set, getState) => ({
       URL.revokeObjectURL(u)
       objUrls.delete(imageId)
     }
+  },
+
+  exportCardImages: async (cardId) => {
+    const c = getState().cards.find((x) => x.id === cardId)
+    if (!c || c.images.length === 0) return { ok: false, count: 0 }
+    const files: ZipFile[] = []
+    let i = 0
+    for (const imgId of c.images) {
+      const rec = await get<{ id: string; blob: Blob }>('images', imgId)
+      if (!rec?.blob) continue
+      i++
+      const ext = extForMime(rec.blob.type)
+      const buf = new Uint8Array(await rec.blob.arrayBuffer())
+      files.push({ name: `image-${String(i).padStart(2, '0')}.${ext}`, data: buf })
+    }
+    if (files.length === 0) return { ok: false, count: 0 }
+    const blob = makeZip(files)
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${slugName(c.title) || 'card'}-images.zip`
+    document.body.append(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(a.href)
+    return { ok: true, count: files.length }
   },
 
   startTimer: async () => {

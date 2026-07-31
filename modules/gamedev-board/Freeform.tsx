@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GripVertical, ImagePlus, Trash2, Type } from 'lucide-react'
 import { imgUrl, useBoard, type CanvasItem } from './store'
 
@@ -25,6 +25,15 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
   const fileRef = useRef<HTMLInputElement>(null)
   // where the last click / paste landed, so new items appear near the cursor
   const lastPoint = useRef({ x: 60, y: 60 })
+  // id of a freshly-created note to auto-focus so you can type immediately
+  const [focusId, setFocusId] = useState<string | null>(null)
+
+  // Click empty canvas → drop a note there and focus it (no "Add text" needed).
+  const addNoteAt = (clientX: number, clientY: number): void => {
+    const p = pointFromEvent(clientX, clientY)
+    lastPoint.current = p
+    void addText(folderId, p.x, p.y).then((it) => setFocusId(it.id))
+  }
 
   const pointFromEvent = (clientX: number, clientY: number): { x: number; y: number } => {
     const el = scrollRef.current
@@ -88,7 +97,7 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
           }}
         />
         <span className="text-xs text-muted">
-          Double-click empty space to drop a note · paste (Ctrl+V) an image anywhere · drag the grip · resize
+          Click empty space to start a note · paste (Ctrl+V) an image anywhere · drag the grip · resize
           from the corner
         </span>
       </div>
@@ -96,27 +105,26 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
       {/* canvas */}
       <div
         ref={scrollRef}
-        onPointerDown={(e) => {
-          if (e.target === e.currentTarget) lastPoint.current = pointFromEvent(e.clientX, e.clientY)
-        }}
-        onDoubleClick={(e) => {
-          if (e.target !== e.currentTarget) return
-          const p = pointFromEvent(e.clientX, e.clientY)
-          lastPoint.current = p
-          void addText(folderId, p.x, p.y)
-        }}
         className="relative min-h-0 flex-1 overflow-auto rounded-xl border border-dashed border-edge bg-raised/20"
         style={{ backgroundImage: 'radial-gradient(rgb(var(--wk-edge)/0.35) 1px, transparent 1px)', backgroundSize: '22px 22px' }}
       >
-        {/* a big inner surface so items can live far out and the area scrolls */}
-        <div className="relative" style={{ width: 3000, height: 2000 }}>
+        {/* a big inner surface so items can live far out and the area scrolls.
+            Clicking it (never a child note) drops a note at the cursor. */}
+        <div
+          className="relative min-h-full cursor-text"
+          style={{ width: 3000, height: 2000 }}
+          onClick={(e) => {
+            if (e.target !== e.currentTarget) return // ignore clicks on notes
+            addNoteAt(e.clientX, e.clientY)
+          }}
+        >
           {items.length === 0 && (
             <div className="pointer-events-none absolute left-1/2 top-24 -translate-x-1/2 text-center text-sm text-muted">
-              Empty canvas — double-click anywhere to add a note, or paste an image.
+              Empty canvas — click anywhere to start a note, or paste an image.
             </div>
           )}
           {items.map((it) => (
-            <CanvasNode key={it.id} item={it} />
+            <CanvasNode key={it.id} item={it} autoFocus={it.id === focusId} />
           ))}
         </div>
       </div>
@@ -124,13 +132,19 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
   )
 }
 
-function CanvasNode({ item }: { item: CanvasItem }): React.JSX.Element {
+function CanvasNode({ item, autoFocus }: { item: CanvasItem; autoFocus?: boolean }): React.JSX.Element {
   const patch = useBoard((s) => s.patchCanvasItem)
   const persist = useBoard((s) => s.persistCanvasItem)
   const front = useBoard((s) => s.bringCanvasItemFront)
   const del = useBoard((s) => s.deleteCanvasItem)
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
   const resize = useRef<{ px: number; py: number; w: number; h: number } | null>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  // Focus a just-created note so the user can type immediately.
+  useEffect(() => {
+    if (autoFocus) taRef.current?.focus()
+  }, [autoFocus])
 
   const onDragDown = (e: React.PointerEvent): void => {
     e.stopPropagation()
@@ -201,6 +215,7 @@ function CanvasNode({ item }: { item: CanvasItem }): React.JSX.Element {
       <div className="h-[calc(100%-1.5rem)] w-full">
         {item.kind === 'text' ? (
           <textarea
+            ref={taRef}
             defaultValue={item.text}
             onChange={(e) => patch(item.id, { text: e.target.value })}
             onBlur={() => void persist(item.id)}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, FolderOpen, Image as ImageIcon, Plus, Trash2, X } from 'lucide-react'
+import { Archive, Check, FolderOpen, Image as ImageIcon, Plus, Trash2, X } from 'lucide-react'
 import { imgUrl, useBoard, type Card } from './store'
 import { ConfirmModal, Lightbox } from './Modals'
 
@@ -55,10 +55,11 @@ function AutoGrowTextarea({
 }
 
 function CardView({ card, autoFocus }: { card: Card; autoFocus: boolean }): React.JSX.Element {
-  const { folders, activeCardId, setActiveCard, patchCard, persistCard, deleteCard, addImageToCard, removeImage } =
+  const { folders, activeCardId, setActiveCard, patchCard, persistCard, deleteCard, addImageToCard, removeImage, exportCardImages } =
     useBoard()
   const schedulePersist = useDebouncedPersist(card.id)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmExport, setConfirmExport] = useState(false)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
@@ -229,13 +230,25 @@ function CardView({ card, autoFocus }: { card: Card; autoFocus: boolean }): Reac
             </option>
           ))}
         </select>
-        <button
-          onClick={() => setConfirmDelete(true)}
-          className="flex items-center gap-1.5 text-xs text-muted hover:text-danger"
-        >
-          <Trash2 size={13} />
-          Delete
-        </button>
+        <div className="flex items-center gap-3">
+          {card.images.length > 0 && (
+            <button
+              onClick={() => setConfirmExport(true)}
+              title="Download all images on this card as a .zip"
+              className="flex items-center gap-1.5 text-xs text-muted hover:text-accent"
+            >
+              <Archive size={13} />
+              Export images
+            </button>
+          )}
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="flex items-center gap-1.5 text-xs text-muted hover:text-danger"
+          >
+            <Trash2 size={13} />
+            Delete
+          </button>
+        </div>
       </div>
 
       {confirmDelete && (
@@ -246,6 +259,16 @@ function CardView({ card, autoFocus }: { card: Card; autoFocus: boolean }): Reac
           onDone={(ok) => {
             setConfirmDelete(false)
             if (ok) deleteCard(card.id)
+          }}
+        />
+      )}
+      {confirmExport && (
+        <ConfirmModal
+          title="Export images?"
+          message={`Download all ${card.images.length} image${card.images.length === 1 ? '' : 's'} on "${card.title || 'Untitled'}" as a .zip file.`}
+          onDone={(ok) => {
+            setConfirmExport(false)
+            if (ok) void exportCardImages(card.id)
           }}
         />
       )}
