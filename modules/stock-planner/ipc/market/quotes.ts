@@ -49,8 +49,11 @@ export function resolveQuote(
   return { price, volume, change, changePct }
 }
 
-/** Trailing P/E only when there is real positive income — a net loss has none. */
+/**
+ * Trailing P/E = marketCap / net income. A net loss yields a real NEGATIVE P/E
+ * (that's meaningful — not "N/A"); only a zero or missing net income is null.
+ */
 export function computePE(marketCap: unknown, netIncome: unknown): number | null {
-  if (!realPrice(marketCap) || !realNum(netIncome) || netIncome <= 0) return null
+  if (!realPrice(marketCap) || !realNum(netIncome) || netIncome === 0) return null
   return marketCap / netIncome
 }

@@ -20,7 +20,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__ticker-data`,
       description:
-        'Full research snapshot for one ticker: resolved quote (0/negative prices treated as missing), company details, market cap, trailing P/E (null on a net loss), annual revenue/net income, next-earnings date with confirmed/estimated flag ({date,isEstimate,source} or null — never guessed), and recent headlines. Read-only.',
+        'Full research snapshot for one ticker: resolved quote (0/negative prices treated as missing), company details, market cap, trailing P/E (a real NEGATIVE value on a net loss; null only when income data is missing), annual revenue/net income, next-earnings date with confirmed/estimated flag ({date,isEstimate,source} or null — never guessed), and recent headlines. Read-only.',
       inputSchema: { symbol: z.string().describe('Ticker symbol, e.g. JBLU.') },
       handler: (args) => ctx.invoke(`${ID}:ticker-data`, args.symbol)
     },

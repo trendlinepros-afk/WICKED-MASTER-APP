@@ -17,7 +17,7 @@ import {
   type NewsItem,
   type TickerDetails
 } from './massive'
-import { getCompanyNews, getFinnhubEarnings, type EarningsDate } from './finnhub'
+import { getCompanyNews, getFinnhubEarnings, getFinnhubPE, type EarningsDate } from './finnhub'
 import { computePE, resolveQuote, type ResolvedQuote } from './quotes'
 import { etTodayYmd } from './sessions'
 import { yahooEarnings, yahooQuoteFallback } from './yahoo'
@@ -60,7 +60,7 @@ export async function getTickerData(
   const sym = symRaw.trim().toUpperCase()
   const m = keys.massive
 
-  const [details, snapshot, prev, financials, news, earnings] = await Promise.all([
+  const [details, snapshot, prev, financials, news, earnings, finnhubPe] = await Promise.all([
     m ? getTickerDetails(m, sym) : null,
     m ? getSnapshot(m, sym) : null,
     m ? getPrevClose(m, sym) : null,
@@ -72,7 +72,10 @@ export async function getTickerData(
           ? getMassiveNews(m, sym)
           : []
       : [],
-    extras ? earningsCascade(keys, sym) : null
+    extras ? earningsCascade(keys, sym) : null,
+    // Robust P/E: prefer marketCap/net-income (gives a negative on a net loss);
+    // fall back to Finnhub's reported trailing P/E when our fundamentals are thin.
+    extras && keys.finnhub ? getFinnhubPE(keys.finnhub, sym) : null
   ])
 
   let quote = resolveQuote(snapshot, prev)
@@ -86,7 +89,7 @@ export async function getTickerData(
     symbol: sym,
     details,
     quote,
-    pe: computePE(details?.marketCap, financials.netIncome),
+    pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubPe,
     revenue: financials.revenue,
     netIncome: financials.netIncome,
     earnings,

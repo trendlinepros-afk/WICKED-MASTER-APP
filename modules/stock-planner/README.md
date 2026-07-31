@@ -23,10 +23,23 @@ don't duplicate it):
   9:30–16:00, after 16:00–20:00, weekends closed). Unit-tested.
 - `quotes.ts` — the "JBLU bug" quote resolution: 0/negative = missing;
   `lastTrade → minute → day → prevDay → prevClose`; change derived only when
-  both sides are real. P/E only on positive net income. Unit-tested.
+  both sides are real. **P/E = marketCap / net income** — a net loss yields a real
+  NEGATIVE P/E (not "N/A"); only zero/missing income is null. Unit-tested.
 - `tickerdata.ts` — concurrent fan-out assembling the research picture; the
   earnings cascade **Finnhub → Massive/Benzinga → Yahoo** returns
-  `{date, isEstimate, source}` or null — prompts forbid guessing.
+  `{date, isEstimate, source}` or null — prompts forbid guessing. P/E falls back to
+  Finnhub's reported trailing P/E when our fundamentals are thin.
+
+## Report card & PDF
+
+- **Past Earnings** — the AI report injects a real, non-AI section listing the last
+  4 reported quarters (`getEarningsHistory`): each quarter's expected vs reported
+  EPS and the report date, with the beat/miss delta.
+- **Chart** — the PDF embeds the user's trendline screenshots when provided;
+  **when none are given it draws a generated 2-year daily price line** instead
+  (`:price-series` → `lib/pdf.ts`), so every report has a chart.
+- **PDF header** auto-shrinks the title/subtitle to fit the header band, so a long
+  company name is never clipped.
 - `screeners.ts` — session-gated pre-market (requires day volume 0) /
   after-hours / daily / period (7/30/182/365d via grouped closes, walking back
   ≤6 days to real trading days). Filters: price ≥ $1, volume ≥ 1k extended /

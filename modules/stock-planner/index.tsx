@@ -646,8 +646,22 @@ function SummaryStep(): React.JSX.Element {
     if (!s.doc?.report || s.exporting) return
     s.setExporting(true)
     try {
+      // When the user gave no trendline screenshots, embed a generated 2-year
+      // price chart instead so the report always has a chart.
+      let chartBars: { t: number; c: number }[] = []
+      if (!s.doc.images || s.doc.images.length === 0) {
+        try {
+          const pr = (await window.wicked.invoke(`${ID}:price-series`, s.ticker, 730)) as {
+            ok?: boolean
+            bars?: { t: number; c: number }[]
+          }
+          if (pr?.ok && Array.isArray(pr.bars)) chartBars = pr.bars
+        } catch {
+          /* chart is best-effort — export the report either way */
+        }
+      }
       // stamp the real export date/time — the AI-written asOf can be stale/wrong
-      const b64 = buildReportPdf({ ...s.doc.report, asOf: exportStamp() }, s.doc.images)
+      const b64 = buildReportPdf({ ...s.doc.report, asOf: exportStamp() }, s.doc.images, undefined, chartBars)
       const res = (await window.wicked.invoke(`${ID}:save-pdf`, { ticker: s.ticker, data: b64 })) as {
         ok?: boolean
         file?: string
@@ -667,7 +681,7 @@ function SummaryStep(): React.JSX.Element {
         <FileDown size={24} className="mx-auto text-accent" />
         <h3 className="mt-2 text-base font-bold">Export the {s.ticker} report</h3>
         <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-          Builds a styled PDF (report card{s.doc?.images.length ? ` + ${s.doc.images.length} screenshot(s)` : ''}) and
+          Builds a styled PDF (report card{s.doc?.images.length ? ` + ${s.doc.images.length} screenshot(s)` : ' + a 2-year price chart'}) and
           saves it under <code className="text-xs">Documents\Stock Trading\{s.ticker}…</code>
         </p>
         <button

@@ -56,6 +56,38 @@ export async function getFinnhubEarnings(key: string, sym: string): Promise<Earn
   }
 }
 
+/**
+ * Trailing P/E straight from Finnhub's basic financials — a robust fallback when
+ * we can't derive it from marketCap/net-income. Finnhub reports a negative value
+ * for a net loss, which is exactly what we want (never null it out).
+ */
+export async function getFinnhubPE(key: string, sym: string): Promise<number | null> {
+  const j = await finnhubFetch(key, `/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all`)
+  const metric = rec(rec(j).metric)
+  for (const k of ['peTTM', 'peBasicExclExtraTTM', 'peExclExtraTTM', 'peNormalizedAnnual', 'peAnnual']) {
+    const v = numOrNull(metric[k])
+    if (v != null && v !== 0) return v
+  }
+  return null
+}
+
+/** One past earnings report: the quarter end date + expected vs reported EPS. */
+export interface EarningsHistoryRow {
+  period: string
+  estimate: number | null
+  actual: number | null
+}
+
+/** The last `limit` reported quarters (most-recent first) — real numbers, never guessed. */
+export async function getEarningsHistory(key: string, sym: string, limit = 4): Promise<EarningsHistoryRow[]> {
+  const j = await finnhubFetch(key, `/stock/earnings?symbol=${encodeURIComponent(sym)}&limit=${limit}`)
+  return arr(j)
+    .map(rec)
+    .map((r) => ({ period: String(r.period ?? ''), estimate: numOrNull(r.estimate), actual: numOrNull(r.actual) }))
+    .filter((r) => r.period)
+    .slice(0, limit)
+}
+
 /** Per-ticker headlines for the last 30 days (preferred over Massive news). */
 export async function getCompanyNews(key: string, sym: string): Promise<NewsItem[]> {
   const from = etYmdDaysAgo(30)

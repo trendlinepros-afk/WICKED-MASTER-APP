@@ -15,9 +15,25 @@ const PAGE_W = 210
 const PAGE_H = 297
 const MARGIN = 16
 
-export function buildReportPdf(report: ReportSpec, images: string[], brand = 'WICKED · STOCK PLANNER'): string {
+export function buildReportPdf(
+  report: ReportSpec,
+  images: string[],
+  brand = 'WICKED · STOCK PLANNER',
+  chartBars: { t: number; c: number }[] = []
+): string {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
   let y = 0
+
+  /** Shrink a line of text until it fits `maxW`, set that size, and return it. */
+  const fitFont = (text: string, startSize: number, minSize: number, maxW: number): void => {
+    let size = startSize
+    doc.setFontSize(size)
+    while (size > minSize && doc.getTextWidth(text) > maxW) {
+      size -= 0.5
+      doc.setFontSize(size)
+    }
+  }
+  const CONTENT_W = PAGE_W - MARGIN * 2
 
   const footer = (): void => {
     const pages = doc.getNumberOfPages()
@@ -42,22 +58,22 @@ export function buildReportPdf(report: ReportSpec, images: string[], brand = 'WI
   doc.rect(0, 0, PAGE_W, 42, 'F')
   doc.setFillColor(...CYAN)
   doc.rect(0, 42, PAGE_W, 1.5, 'F')
+  // Title — auto-shrink so a long name never runs off the header band.
   doc.setTextColor(255, 255, 255)
-  doc.setFontSize(20)
   doc.setFont('helvetica', 'bold')
-  doc.text(report.title.slice(0, 60), MARGIN, 18)
-  doc.setFontSize(11)
+  fitFont(report.title, 20, 10, CONTENT_W)
+  doc.text(report.title, MARGIN, 18)
+
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(...CYAN)
-  doc.text(
-    [report.ticker, report.company, report.asOf].filter(Boolean).join(' · ').slice(0, 90) || report.subtitle.slice(0, 90),
-    MARGIN,
-    27
-  )
+  const subLine = [report.ticker, report.company, report.asOf].filter(Boolean).join(' · ') || report.subtitle
+  fitFont(subLine, 11, 8, CONTENT_W)
+  doc.text(subLine, MARGIN, 27)
+
   if (report.subtitle) {
     doc.setTextColor(200, 205, 220)
-    doc.setFontSize(9)
-    doc.text(report.subtitle.slice(0, 110), MARGIN, 35)
+    fitFont(report.subtitle, 9, 7, CONTENT_W)
+    doc.text(report.subtitle, MARGIN, 35)
   }
   y = 52
 
@@ -122,16 +138,80 @@ export function buildReportPdf(report: ReportSpec, images: string[], brand = 'WI
     y += 5
   }
 
-  // screenshots
-  for (const img of images.slice(0, 4)) {
-    try {
-      const w = PAGE_W - MARGIN * 2
-      const h = w * 0.56
-      ensure(h + 8)
-      doc.addImage(img, img.includes('image/png') ? 'PNG' : 'JPEG', MARGIN, y, w, h, undefined, 'FAST')
-      y += h + 6
-    } catch {
-      /* skip an unreadable image rather than fail the export */
+  // Chart: the user's trendline screenshots when provided, otherwise a generated
+  // 2-year price line so every report has a chart.
+  if (images.length > 0) {
+    for (const img of images.slice(0, 4)) {
+      try {
+        const w = CONTENT_W
+        const h = w * 0.56
+        ensure(h + 8)
+        doc.addImage(img, img.includes('image/png') ? 'PNG' : 'JPEG', MARGIN, y, w, h, undefined, 'FAST')
+        y += h + 6
+      } catch {
+        /* skip an unreadable image rather than fail the export */
+      }
+    }
+  } else {
+    const bars = chartBars.filter((b) => Number.isFinite(b.t) && Number.isFinite(b.c) && b.c > 0)
+    if (bars.length > 1) {
+      const chartH = 72
+      ensure(chartH + 20)
+      // section heading
+      doc.setFillColor(...CYAN)
+      doc.rect(MARGIN, y - 3.5, 1.6, 5, 'F')
+      doc.setFontSize(13)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(...NAVY)
+      doc.text('2-Year Price', MARGIN + 4, y)
+      doc.setFont('helvetica', 'normal')
+      y += 5
+
+      const cx = MARGIN
+      const cw = CONTENT_W
+      const closes = bars.map((b) => b.c)
+      const min = Math.min(...closes)
+      const max = Math.max(...closes)
+      const range = max - min || 1
+      const px = (i: number): number => cx + (i / (bars.length - 1)) * cw
+      const py = (c: number): number => y + chartH - ((c - min) / range) * chartH
+
+      // frame
+      doc.setDrawColor(225, 229, 240)
+      doc.setFillColor(248, 250, 253)
+      doc.roundedRect(cx, y, cw, chartH, 2, 2, 'FD')
+      // price line
+      doc.setDrawColor(...CYAN)
+      doc.setLineWidth(0.4)
+      let prevX = px(0)
+      let prevY = py(closes[0])
+      for (let i = 1; i < bars.length; i++) {
+        const nx = px(i)
+        const ny = py(closes[i])
+        doc.line(prevX, prevY, nx, ny)
+        prevX = nx
+        prevY = ny
+      }
+      doc.setLineWidth(0.2)
+      // last-price marker
+      doc.setFillColor(...CYAN)
+      doc.circle(px(bars.length - 1), py(closes[closes.length - 1]), 0.9, 'F')
+
+      // axis labels
+      doc.setFontSize(7)
+      doc.setTextColor(...MUTED)
+      doc.text(`$${max.toFixed(2)}`, cx + cw - 1, y + 3, { align: 'right' })
+      doc.text(`$${min.toFixed(2)}`, cx + cw - 1, y + chartH - 1, { align: 'right' })
+      const mLabel = (ms: number): string => {
+        const d = new Date(ms)
+        return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+      }
+      doc.text(mLabel(bars[0].t), cx + 1, y + chartH + 4)
+      doc.setTextColor(...INK)
+      doc.text(`Last $${closes[closes.length - 1].toFixed(2)}`, cx + cw / 2, y + chartH + 4, { align: 'center' })
+      doc.setTextColor(...MUTED)
+      doc.text(mLabel(bars[bars.length - 1].t), cx + cw - 1, y + chartH + 4, { align: 'right' })
+      y += chartH + 10
     }
   }
 

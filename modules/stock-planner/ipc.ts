@@ -7,7 +7,8 @@ import { callAi, type AiKeys, type AiMessage } from './ipc/ai'
 import { extractTickersWithFallback, mentionsIpos } from './ipc/chatContext'
 import { DocStore, type StockDoc } from './ipc/docs'
 import { parseReportSpec, type ReportSpec } from './ipc/report'
-import { getIpos, searchTickers } from './ipc/market/massive'
+import { getAggregates, getIpos, searchTickers } from './ipc/market/massive'
+import { getEarningsHistory } from './ipc/market/finnhub'
 import { marketSession } from './ipc/market/sessions'
 import { getTickerData, type MarketKeys, type TickerData } from './ipc/market/tickerdata'
 import { afterHoursGainers, dailyGainers, periodGainers, preMarketGainers } from './ipc/market/screeners'
@@ -38,10 +39,8 @@ function summaryBlock(td: TickerData): string {
       (q.changePct !== null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}% today)` : ''),
     `Market cap: ${fmtMoney(td.details?.marketCap ?? null)}`,
     td.pe !== null
-      ? `Trailing P/E: ${td.pe.toFixed(1)}`
-      : td.netIncome !== null && td.netIncome <= 0
-        ? 'Trailing P/E: not meaningful (net loss)'
-        : 'Trailing P/E: not available',
+      ? `Trailing P/E: ${td.pe.toFixed(1)}${td.pe < 0 ? ' (negative — reflects a net loss)' : ''}`
+      : 'Trailing P/E: not available',
     `Sector: ${td.details?.sector || 'n/a'}`,
     `Annual revenue: ${fmtMoney(td.revenue)} · Net income: ${fmtMoney(td.netIncome)}`,
     td.earnings
@@ -60,7 +59,7 @@ const REPORT_RULES =
   '"sections":[{"heading","body","bullets":[..up to 6]} 1..20],"disclaimer"}. ' +
   'Mandated sections in order: Overview, Financials, Technical setup, Pros, Cons. ' +
   'Ground every claim in the provided live data; where data is missing say so — never invent numbers, ' +
-  'prices or earnings dates. A trailing P/E is not meaningful for a company with a net loss. ' +
+  'prices or earnings dates. A net loss produces a NEGATIVE trailing P/E — report the negative value, do not call it N/A. ' +
   'End with a short educational disclaimer (not financial advice).'
 
 export default function register(ctx: ModuleIpcContext): void {
@@ -204,6 +203,36 @@ export default function register(ctx: ModuleIpcContext): void {
       if (!report) return { ok: false, error: 'The AI returned an unreadable report — try again.' }
       report.ticker = report.ticker || sym
       report.company = report.company || doc.company
+
+      // Real "Past Earnings" section — last 4 reported quarters, expected vs
+      // reported EPS. Pulled from live data (never AI-guessed) and injected so it
+      // shows in both the on-screen report and the exported PDF.
+      try {
+        const fk = marketKeys().finnhub
+        if (fk && report.sections.length < 20) {
+          const hist = (await getEarningsHistory(fk, sym, 4)).filter((h) => h.estimate != null || h.actual != null)
+          if (hist.length > 0) {
+            const eps = (v: number | null): string => (v == null ? 'n/a' : `$${v.toFixed(2)}`)
+            const bullets = hist.map((h) => {
+              const beat =
+                h.estimate != null && h.actual != null
+                  ? h.actual >= h.estimate
+                    ? ` — beat by $${(h.actual - h.estimate).toFixed(2)}`
+                    : ` — missed by $${(h.estimate - h.actual).toFixed(2)}`
+                  : ''
+              return `${h.period}: expected ${eps(h.estimate)} · reported ${eps(h.actual)}${beat}`
+            })
+            report.sections.push({
+              heading: 'Past Earnings',
+              body: 'Last reported quarters — analyst-expected vs actual EPS (live data, not AI-estimated):',
+              bullets
+            })
+          }
+        }
+      } catch {
+        /* earnings history is best-effort */
+      }
+
       doc.report = report
       docs.save(doc)
       return { ok: true, doc }
@@ -224,6 +253,23 @@ export default function register(ctx: ModuleIpcContext): void {
     const sym = typeof rawSym === 'string' ? rawSym.trim().toUpperCase() : ''
     if (!sym) return { ok: false, error: 'A ticker is required.' }
     return generateReport(sym, true)
+  })
+
+  // Daily closes for the report's fallback price chart (used when the user gave
+  // no trendline screenshots). Defaults to ~2 years.
+  ctx.ipcMain.handle(`${ID}:price-series`, async (_e, rawSym: unknown, rawDays: unknown) => {
+    const sym = typeof rawSym === 'string' ? rawSym.trim().toUpperCase() : ''
+    const days = typeof rawDays === 'number' && rawDays > 0 ? Math.min(1500, Math.floor(rawDays)) : 730
+    const key = marketKeys().massive
+    if (!sym) return { ok: false, error: 'A ticker is required.', bars: [] }
+    if (!key) return { ok: false, error: 'Add your Massive/Polygon key in Settings → API Keys.', bars: [] }
+    try {
+      const to = Date.now()
+      const bars = await getAggregates(key, sym, 1, 'day', to - days * 86_400_000, to)
+      return { ok: true, bars: bars.map((b) => ({ t: b.t, c: b.c })) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err), bars: [] }
+    }
   })
 
   /* --------------------------------- chat --------------------------------- */
