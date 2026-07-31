@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ModuleTitle } from '@/shell/moduleContext'
 import {
   Clock,
   Download,
@@ -215,7 +216,7 @@ export default function GameDevBoard(): React.JSX.Element {
           <span className="flex h-[26px] w-[26px] items-center justify-center rounded-md bg-accent text-[13px] font-bold text-accent-ink">
             GD
           </span>
-          GameDev Project Board
+          <ModuleTitle fallback="Project Board" />
         </div>
         <div className="flex items-center gap-3.5">
           {settings.view === 'board' && (
