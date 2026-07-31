@@ -39,7 +39,7 @@ export function buildReportPdf(
     const pages = doc.getNumberOfPages()
     for (let i = 1; i <= pages; i++) {
       doc.setPage(i)
-      doc.setFontSize(8)
+      doc.setFontSize(9.5)
       doc.setTextColor(...MUTED)
       doc.text(brand, MARGIN, PAGE_H - 8)
       doc.text(`Page ${i} of ${pages}`, PAGE_W - MARGIN, PAGE_H - 8, { align: 'right' })
@@ -61,18 +61,18 @@ export function buildReportPdf(
   // Title — auto-shrink so a long name never runs off the header band.
   doc.setTextColor(...NAVY)
   doc.setFont('helvetica', 'bold')
-  fitFont(report.title, 20, 10, CONTENT_W)
+  fitFont(report.title, 22, 12, CONTENT_W)
   doc.text(report.title, MARGIN, 18)
 
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(...SUBCLR)
   const subLine = [report.ticker, report.company, report.asOf].filter(Boolean).join(' · ') || report.subtitle
-  fitFont(subLine, 11, 8, CONTENT_W)
+  fitFont(subLine, 12.5, 9, CONTENT_W)
   doc.text(subLine, MARGIN, 27)
 
   if (report.subtitle) {
     doc.setTextColor(...MUTED)
-    fitFont(report.subtitle, 9, 7, CONTENT_W)
+    fitFont(report.subtitle, 10.5, 8, CONTENT_W)
     doc.text(report.subtitle, MARGIN, 35)
   }
   y = 52
@@ -80,7 +80,7 @@ export function buildReportPdf(
   // stat cards (3 per row)
   if (report.stats.length > 0) {
     const cardW = (PAGE_W - MARGIN * 2 - 8) / 3
-    const cardH = 16
+    const cardH = 18
     report.stats.slice(0, 12).forEach((s, i) => {
       const col = i % 3
       if (col === 0 && i > 0) y += cardH + 4
@@ -93,16 +93,28 @@ export function buildReportPdf(
       // label — shrink to fit the card width so it never clips
       doc.setFont('helvetica', 'normal')
       doc.setTextColor(...MUTED)
-      fitFont(s.label.toUpperCase(), 7.5, 5.5, innerW)
-      doc.text(s.label.toUpperCase(), x + 3, y + 6)
-      // value — shrink to fit too (long values like a full sector name fit now)
+      fitFont(s.label.toUpperCase(), 9, 6.5, innerW)
+      doc.text(s.label.toUpperCase(), x + 3, y + 6.5)
+      // value — one line at 13pt if it fits, else WRAP to ≤2 lines, shrinking the
+      // font until it fits (so a long sector name wraps instead of clipping).
       doc.setFont('helvetica', 'bold')
       doc.setTextColor(...INK)
-      fitFont(s.value, 11, 6.5, innerW)
-      doc.text(s.value, x + 3, y + 12.5)
+      doc.setFontSize(13)
+      if (doc.getTextWidth(s.value) <= innerW) {
+        doc.text(s.value, x + 3, y + 14)
+      } else {
+        let vs = 10.5
+        let lines = doc.splitTextToSize(s.value, innerW) as string[]
+        while (lines.length > 2 && vs > 7) {
+          vs -= 0.5
+          doc.setFontSize(vs)
+          lines = doc.splitTextToSize(s.value, innerW) as string[]
+        }
+        doc.text(lines.slice(0, 2), x + 3, y + 11.5, { lineHeightFactor: 1.15 })
+      }
       doc.setFont('helvetica', 'normal')
     })
-    y += 16 + 8
+    y += cardH + 8
   }
 
   // sections
@@ -110,36 +122,36 @@ export function buildReportPdf(
     ensure(18)
     doc.setFillColor(...CYAN)
     doc.rect(MARGIN, y - 3.5, 1.6, 5, 'F')
-    doc.setFontSize(13)
+    doc.setFontSize(15)
     doc.setFont('helvetica', 'bold')
     doc.setTextColor(...NAVY)
     doc.text(section.heading.slice(0, 70), MARGIN + 4, y)
     doc.setFont('helvetica', 'normal')
-    y += 6
+    y += 7
     if (section.body) {
-      doc.setFontSize(9.5)
+      doc.setFontSize(11.5)
       doc.setTextColor(...INK)
       const lines = doc.splitTextToSize(section.body, PAGE_W - MARGIN * 2) as string[]
       for (const line of lines) {
-        ensure(5)
+        ensure(6)
         doc.text(line, MARGIN, y)
-        y += 4.6
+        y += 5.4
       }
     }
     for (const bullet of section.bullets) {
-      doc.setFontSize(9.5)
+      doc.setFontSize(11.5)
       doc.setTextColor(...INK)
       const lines = doc.splitTextToSize(bullet, PAGE_W - MARGIN * 2 - 6) as string[]
-      ensure(lines.length * 4.6 + 1)
+      ensure(lines.length * 5.4 + 1)
       doc.setFillColor(...CYAN)
-      doc.circle(MARGIN + 1.5, y - 1.2, 0.9, 'F')
+      doc.circle(MARGIN + 1.7, y - 1.3, 1, 'F')
       lines.forEach((line, i) => {
         doc.text(line, MARGIN + 5, y)
-        y += 4.6
-        if (i < lines.length - 1) ensure(5)
+        y += 5.4
+        if (i < lines.length - 1) ensure(6)
       })
     }
-    y += 5
+    y += 6
   }
 
   // Chart: the user's trendline screenshots when provided, otherwise a generated
@@ -173,15 +185,15 @@ export function buildReportPdf(
       // heading + last price / 2-year change
       doc.setFillColor(...CYAN)
       doc.rect(MARGIN, y - 3.5, 1.6, 5, 'F')
-      doc.setFontSize(13)
+      doc.setFontSize(15)
       doc.setFont('helvetica', 'bold')
       doc.setTextColor(...NAVY)
       doc.text('2-Year Price', MARGIN + 4, y)
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(8.5)
+      doc.setFontSize(9.5)
       doc.setTextColor(...MUTED)
       doc.text(`Last $${last.toFixed(2)} · ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}% / 2y`, MARGIN + CONTENT_W, y, { align: 'right' })
-      y += 5
+      y += 6
 
       const cx = MARGIN
       const axisW = 15 // right gutter reserved for the price scale
@@ -196,7 +208,7 @@ export function buildReportPdf(
 
       // price scale (right) with horizontal gridlines
       const PT = 4
-      doc.setFontSize(6.5)
+      doc.setFontSize(7.5)
       doc.setLineWidth(0.15)
       for (let i = 0; i <= PT; i++) {
         const price = min + (range * i) / PT
@@ -215,7 +227,7 @@ export function buildReportPdf(
         const d = new Date(ms)
         return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(2)}`
       }
-      doc.setFontSize(6)
+      doc.setFontSize(7)
       for (let i = 0; i <= DT; i++) {
         const idx = Math.round(((n - 1) * i) / DT)
         const gx = px(idx)
@@ -252,13 +264,13 @@ export function buildReportPdf(
   // disclaimer
   if (report.disclaimer) {
     ensure(16)
-    doc.setFontSize(7.5)
+    doc.setFontSize(9)
     doc.setTextColor(...MUTED)
     const lines = doc.splitTextToSize(report.disclaimer, PAGE_W - MARGIN * 2) as string[]
     for (const line of lines) {
-      ensure(4)
+      ensure(5)
       doc.text(line, MARGIN, y)
-      y += 3.6
+      y += 4.3
     }
   }
 

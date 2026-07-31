@@ -70,7 +70,7 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
     { label: 'Net income', value: fmtMoney(td.netIncome) },
     { label: 'Analyst research', value: analystValue },
     { label: '52-week range', value: range },
-    { label: 'Sector', value: td.details?.sector || 'n/a' },
+    { label: 'Sector', value: td.details?.sector ? td.details.sector.split(' (')[0].trim().slice(0, 42) : 'n/a' },
     {
       label: 'Next earnings',
       value: td.earnings ? `${td.earnings.date} (${td.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'n/a'
@@ -349,6 +349,20 @@ export default function register(ctx: ModuleIpcContext): void {
     const sym = typeof rawSym === 'string' ? rawSym.trim().toUpperCase() : ''
     if (!sym) return { ok: false, error: 'A ticker is required.' }
     return generateReport(sym, true)
+  })
+
+  // Fresh, app-computed stat cards for a ticker (P/E, analyst, 52-week range, …).
+  // The export refreshes these from live data so even an OLD cached report shows
+  // the current cards, without re-running the (paid) AI generation.
+  ctx.ipcMain.handle(`${ID}:report-stats`, async (_e, rawSym: unknown) => {
+    const sym = typeof rawSym === 'string' ? rawSym.trim().toUpperCase() : ''
+    if (!sym) return { ok: false, stats: [] }
+    try {
+      const td = await getTickerData(marketKeys(), sym, true)
+      return { ok: true, stats: buildStats(td) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err), stats: [] }
+    }
   })
 
   // Daily closes for the report's fallback price chart (used when the user gave

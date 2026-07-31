@@ -661,8 +661,21 @@ function SummaryStep(): React.JSX.Element {
           /* chart is best-effort — export the report either way */
         }
       }
+      // Refresh the stat cards from live data so a cached report still shows the
+      // CURRENT cards (Analyst research / 52-week range, real P/E, …) — the AI
+      // prose stays as-is; only the deterministic stats are recomputed.
+      let stats = s.doc.report.stats
+      try {
+        const sres = (await window.wicked.invoke(`${ID}:report-stats`, s.ticker)) as {
+          ok?: boolean
+          stats?: { label: string; value: string }[]
+        }
+        if (sres?.ok && Array.isArray(sres.stats) && sres.stats.length > 0) stats = sres.stats
+      } catch {
+        /* keep the cached stats if the refresh fails */
+      }
       // stamp the real export date/time — the AI-written asOf can be stale/wrong
-      const b64 = buildReportPdf({ ...s.doc.report, asOf: exportStamp() }, s.doc.images, undefined, chartBars)
+      const b64 = buildReportPdf({ ...s.doc.report, stats, asOf: exportStamp() }, s.doc.images, undefined, chartBars)
       const res = (await window.wicked.invoke(`${ID}:save-pdf`, { ticker: s.ticker, data: b64 })) as {
         ok?: boolean
         file?: string
