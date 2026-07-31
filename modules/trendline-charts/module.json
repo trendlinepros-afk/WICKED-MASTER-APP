@@ -1,0 +1,14 @@
+{
+  "id": "trendline-charts",
+  "name": "Trendline Charts",
+  "icon": "Spline",
+  "version": "1.0.0",
+  "description": "Pull finished support/resistance trendline chart images from TrendlineFinder by ticker, horizon and interval",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
