@@ -2,7 +2,7 @@
   "id": "paper-trading",
   "name": "Paper Trading",
   "icon": "CandlestickChart",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Live paper trading on Polygon/Massive data — buy/sell/short stocks (and log options), stops & targets, multi-account, with Account & Symbol P&L and a built-in review",
   "status": "stable",
   "group": {

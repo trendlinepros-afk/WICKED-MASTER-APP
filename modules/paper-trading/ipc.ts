@@ -176,6 +176,7 @@ export default function register(ctx: ModuleIpcContext): void {
       price,
       stop: r.stop != null && num(r.stop) > 0 ? num(r.stop) : null,
       takeProfit: r.takeProfit != null && num(r.takeProfit) > 0 ? num(r.takeProfit) : null,
+      trailingStop: r.trailingStop != null && num(r.trailingStop) > 0 ? num(r.trailingStop) : null,
       ...(kind === 'option'
         ? { optionType: r.optionType === 'put' ? 'put' : 'call', strike: num(r.strike), expiry: str(r.expiry), multiplier: 100 }
         : {})
@@ -196,7 +197,9 @@ export default function register(ctx: ModuleIpcContext): void {
         ? {
             ...p,
             stop: r.stop === null ? null : num(r.stop) > 0 ? num(r.stop) : p.stop,
-            takeProfit: r.takeProfit === null ? null : num(r.takeProfit) > 0 ? num(r.takeProfit) : p.takeProfit
+            takeProfit: r.takeProfit === null ? null : num(r.takeProfit) > 0 ? num(r.takeProfit) : p.takeProfit,
+            trailingStop:
+              r.trailingStop === null ? null : num(r.trailingStop) > 0 ? num(r.trailingStop) : p.trailingStop ?? null
           }
         : p
     )
@@ -232,7 +235,9 @@ export default function register(ctx: ModuleIpcContext): void {
     const now = Date.now()
     if (!k) return { ok: true, data } // no data key → can't check history
     let account = acct
-    const toCheck = acct.positions.filter((p) => p.kind === 'stock' && (p.stop != null || p.takeProfit != null))
+    const toCheck = acct.positions.filter(
+      (p) => p.kind === 'stock' && (p.stop != null || p.takeProfit != null || (p.trailingStop != null && p.trailingStop > 0))
+    )
     let closedCount = 0
     for (const p of toCheck) {
       const from = Math.max(p.entryAt, account.lastReconciledAt || 0)

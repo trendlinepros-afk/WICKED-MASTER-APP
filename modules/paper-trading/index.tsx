@@ -119,11 +119,20 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
   const [kind, setKind] = useState<'stock' | 'option'>('stock')
   const [qty, setQty] = useState('100')
   const [stop, setStop] = useState('')
+  const [trail, setTrail] = useState('')
   const [tp, setTp] = useState('')
   const [optType, setOptType] = useState<'call' | 'put'>('call')
   const [strike, setStrike] = useState('')
   const [expiry, setExpiry] = useState('')
   const [premium, setPremium] = useState('')
+
+  // estimated order cost as you type (shares × mark, or contracts × premium × 100)
+  const estCost =
+    kind === 'option'
+      ? (Number(qty) || 0) * (Number(premium) || 0) * 100
+      : mark != null
+        ? (Number(qty) || 0) * mark
+        : null
 
   const submit = async (side: 'long' | 'short'): Promise<void> => {
     const o: OrderDraft = {
@@ -133,6 +142,7 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
       qty: Number(qty) || 0,
       stop: stop ? Number(stop) : null,
       takeProfit: tp ? Number(tp) : null,
+      trailingStop: trail ? Number(trail) : null,
       ...(kind === 'option' ? { optionType: optType, strike: Number(strike), expiry, price: Number(premium) } : {})
     }
     await place(o)
@@ -159,13 +169,22 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
             <input inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} className={inputCls} />
           </label>
           <label>
-            <span className={lblCls}>Stop (optional)</span>
+            <span className={lblCls}>Stop loss (optional)</span>
             <input inputMode="decimal" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="—" className={inputCls} />
           </label>
           <label>
             <span className={lblCls}>Take profit (optional)</span>
             <input inputMode="decimal" value={tp} onChange={(e) => setTp(e.target.value)} placeholder="—" className={inputCls} />
           </label>
+          <label>
+            <span className={lblCls}>Trailing stop $ (optional)</span>
+            <input inputMode="decimal" value={trail} onChange={(e) => setTrail(e.target.value)} placeholder="—" className={inputCls} />
+          </label>
+          <div className="col-span-2 flex items-end justify-end pb-0.5 text-xs text-muted">
+            Est. cost{' '}
+            <span className="ml-1 font-semibold text-ink">{estCost != null ? money(estCost) : '—'}</span>
+            {mark != null && <span className="ml-1">· {Number(qty) || 0} sh @ mark {price(mark)}</span>}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-2">
@@ -196,13 +215,17 @@ function OrderTicket({ symbol, mark }: { symbol: string; mark: number | null }):
             <input inputMode="decimal" value={premium} onChange={(e) => setPremium(e.target.value)} placeholder="e.g. 1.25" className={inputCls} />
           </label>
           <label>
-            <span className={lblCls}>Stop (premium)</span>
+            <span className={lblCls}>Stop loss (premium)</span>
             <input inputMode="decimal" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="—" className={inputCls} />
           </label>
           <label>
-            <span className={lblCls}>Target (premium)</span>
+            <span className={lblCls}>Take profit (premium)</span>
             <input inputMode="decimal" value={tp} onChange={(e) => setTp(e.target.value)} placeholder="—" className={inputCls} />
           </label>
+          <div className="col-span-3 flex items-center justify-end text-xs text-muted">
+            Est. cost <span className="ml-1 font-semibold text-ink">{estCost != null ? money(estCost) : '—'}</span>
+            <span className="ml-1">· {Number(qty) || 0} × 100 sh</span>
+          </div>
         </div>
       )}
 
@@ -229,6 +252,9 @@ function PositionRow({ p, mark }: { p: Position; mark: number }): React.JSX.Elem
   const pnl = unrealizedPnl(p, mark)
   const [closeQty, setCloseQty] = useState('')
   const isOpt = p.kind === 'option'
+  const m = isOpt ? p.multiplier || 100 : 1
+  const size = p.qty * p.entryPrice * m // total position size (cost basis)
+  const value = p.qty * mark * m // current market value
   return (
     <div className="rounded-lg border border-edge bg-surface p-2.5">
       <div className="flex items-center gap-2">
@@ -237,17 +263,18 @@ function PositionRow({ p, mark }: { p: Position; mark: number }): React.JSX.Elem
           {isOpt ? `${p.optionType} ${p.strike}` : p.side}
         </span>
         <span className="text-xs text-muted">
-          {p.qty} {isOpt ? 'ctr' : 'sh'} @ {price(p.entryPrice)}
+          {p.qty} {isOpt ? 'ctr' : 'sh'} @ {price(p.entryPrice)} · {money(size)}
           {isOpt && p.expiry ? ` · exp ${p.expiry}` : ''}
         </span>
         <span className={`ml-auto text-sm font-bold tabular-nums ${tone(pnl)}`}>{signed(pnl)}</span>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <span>mark {price(mark)}</span>
+        <span>value {money(value)}</span>
         {!isOpt && (
           <>
-            <label className="flex items-center gap-1">
-              stop
+            <label className="flex items-center gap-1" title="Stop-loss price">
+              stop loss
               <input
                 defaultValue={p.stop ?? ''}
                 onBlur={(e) => void updatePosition(p.id, { stop: e.target.value ? Number(e.target.value) : null })}
@@ -255,8 +282,17 @@ function PositionRow({ p, mark }: { p: Position; mark: number }): React.JSX.Elem
                 className="w-16 rounded border border-edge bg-raised px-1 py-0.5 text-ink outline-none focus:border-accent"
               />
             </label>
-            <label className="flex items-center gap-1">
-              target
+            <label className="flex items-center gap-1" title="Trailing stop — dollar distance below the peak">
+              trailing $
+              <input
+                defaultValue={p.trailingStop ?? ''}
+                onBlur={(e) => void updatePosition(p.id, { trailingStop: e.target.value ? Number(e.target.value) : null })}
+                placeholder="—"
+                className="w-14 rounded border border-edge bg-raised px-1 py-0.5 text-ink outline-none focus:border-accent"
+              />
+            </label>
+            <label className="flex items-center gap-1" title="Take-profit price">
+              take profit
               <input
                 defaultValue={p.takeProfit ?? ''}
                 onBlur={(e) => void updatePosition(p.id, { takeProfit: e.target.value ? Number(e.target.value) : null })}

@@ -23,6 +23,7 @@ export interface OrderDraft {
   qty: number
   stop?: number | null
   takeProfit?: number | null
+  trailingStop?: number | null
   // option
   optionType?: 'call' | 'put'
   strike?: number
@@ -50,7 +51,10 @@ interface State {
   deleteAccount: (id: string) => Promise<void>
   placeOrder: (o: OrderDraft) => Promise<string | null>
   closePosition: (positionId: string, qty?: number, price?: number) => Promise<void>
-  updatePosition: (positionId: string, patch: { stop?: number | null; takeProfit?: number | null }) => Promise<void>
+  updatePosition: (
+    positionId: string,
+    patch: { stop?: number | null; takeProfit?: number | null; trailingStop?: number | null }
+  ) => Promise<void>
   setChartSymbol: (s: string) => void
   setTimeframe: (t: Timeframe) => void
   setTab: (t: Tab) => void

@@ -17,8 +17,12 @@ Type a ticker to load its **Lightweight candlestick chart**; the order ticket
 trades that symbol.
 
 - **Stocks** — **Buy (long)** or **Sell / Short**, any share count, with optional
-  **stop-loss** and **take-profit**. Fills at the live price. Stops/targets on
-  open positions can be edited inline.
+  **stop-loss**, **trailing stop** ($ distance below the peak) and **take-profit**.
+  Fills at the live price; the ticket shows the **estimated order cost** as you
+  type. Buying more of a stock you already hold **consolidates into one position**
+  at the share-weighted **average cost**. The position card shows total size
+  (cost basis) and current value, and its stop-loss / trailing / take-profit can
+  be edited inline.
 - **Options** — long **calls/puts** (type, strike, expiry, contracts). Priced
   **manually**: you enter the premium on entry and on close, and P&L is tracked
   against it. (Live option quotes are plan-dependent and deferred; underlying

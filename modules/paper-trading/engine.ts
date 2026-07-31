@@ -38,13 +38,25 @@ export interface OpenOrder {
   price: number
   stop?: number | null
   takeProfit?: number | null
+  trailingStop?: number | null
   optionType?: 'call' | 'put'
   strike?: number
   expiry?: string
   multiplier?: number
 }
 
-/** Open a position; long opens are a debit, short opens a credit. Rejects a buy that exceeds cash. */
+/** True when a new order should merge into an existing position (same instrument + side). */
+function sameInstrument(p: Position, order: OpenOrder): boolean {
+  if (p.symbol !== order.symbol.toUpperCase() || p.side !== order.side || p.kind !== order.kind) return false
+  if (order.kind === 'option') return p.optionType === order.optionType && p.strike === order.strike && p.expiry === order.expiry
+  return true
+}
+
+/**
+ * Open a position; long opens are a debit, short opens a credit. Rejects a buy
+ * that exceeds cash. A new order on an instrument already held (same side)
+ * CONSOLIDATES into that position at a share-weighted average cost.
+ */
 export function openPosition(
   acct: PaperAccount,
   order: OpenOrder,
@@ -58,6 +70,25 @@ export function openPosition(
   const isBuy = order.side === 'long'
   const cash = isBuy ? acct.cash - notional : acct.cash + notional
   if (isBuy && cash < 0) return { ok: false, error: 'Not enough cash for this order.' }
+
+  const idx = acct.positions.findIndex((p) => sameInstrument(p, order))
+  if (idx !== -1) {
+    // add to the existing position → new average cost; keep the earlier entry time
+    const ex = acct.positions[idx]
+    const newQty = ex.qty + order.qty
+    const avgEntry = (ex.qty * ex.entryPrice + order.qty * order.price) / newQty
+    const merged: Position = {
+      ...ex,
+      qty: newQty,
+      entryPrice: avgEntry,
+      stop: order.stop != null ? order.stop : ex.stop,
+      takeProfit: order.takeProfit != null ? order.takeProfit : ex.takeProfit,
+      trailingStop: order.trailingStop != null ? order.trailingStop : ex.trailingStop ?? null
+    }
+    const positions = acct.positions.map((p, i) => (i === idx ? merged : p))
+    return { ok: true, account: { ...acct, cash, positions } }
+  }
+
   const pos: Position = {
     id,
     kind: order.kind,
@@ -68,6 +99,7 @@ export function openPosition(
     entryAt: now,
     stop: order.stop ?? null,
     takeProfit: order.takeProfit ?? null,
+    trailingStop: order.trailingStop ?? null,
     ...(order.kind === 'option'
       ? { optionType: order.optionType, strike: order.strike, expiry: order.expiry, multiplier: m }
       : {})
@@ -137,15 +169,35 @@ export interface Bar {
  * target within a bar (conservative). Stock positions only.
  */
 export function detectExit(p: Position, bars: Bar[]): { price: number; at: number; reason: CloseReason } | null {
-  if (p.stop == null && p.takeProfit == null) return null
+  const trail = p.trailingStop != null && p.trailingStop > 0 ? p.trailingStop : null
+  if (p.stop == null && p.takeProfit == null && trail == null) return null
+  // `peak` tracks the most-favorable extreme so far (running high for a long,
+  // running low for a short) — the anchor the trailing stop follows.
+  let peak = p.entryPrice
   for (const b of bars) {
     if (b.t <= p.entryAt) continue
     if (p.side === 'long') {
-      if (p.stop != null && b.l <= p.stop) return { price: p.stop, at: b.t, reason: 'stop' }
+      const trailLevel = trail != null ? peak - trail : null
+      let floor: number | null = p.stop ?? null
+      let reason: CloseReason = 'stop'
+      if (trailLevel != null && (floor == null || trailLevel > floor)) {
+        floor = trailLevel
+        reason = 'trailing-stop'
+      }
+      if (floor != null && b.l <= floor) return { price: floor, at: b.t, reason }
       if (p.takeProfit != null && b.h >= p.takeProfit) return { price: p.takeProfit, at: b.t, reason: 'take-profit' }
+      peak = Math.max(peak, b.h)
     } else {
-      if (p.stop != null && b.h >= p.stop) return { price: p.stop, at: b.t, reason: 'stop' }
+      const trailLevel = trail != null ? peak + trail : null
+      let ceil: number | null = p.stop ?? null
+      let reason: CloseReason = 'stop'
+      if (trailLevel != null && (ceil == null || trailLevel < ceil)) {
+        ceil = trailLevel
+        reason = 'trailing-stop'
+      }
+      if (ceil != null && b.h >= ceil) return { price: ceil, at: b.t, reason }
       if (p.takeProfit != null && b.l <= p.takeProfit) return { price: p.takeProfit, at: b.t, reason: 'take-profit' }
+      peak = Math.min(peak, b.l)
     }
   }
   return null

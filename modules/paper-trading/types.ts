@@ -3,7 +3,7 @@
 export type PositionKind = 'stock' | 'option'
 export type Side = 'long' | 'short'
 export type OptionType = 'call' | 'put'
-export type CloseReason = 'manual' | 'stop' | 'take-profit'
+export type CloseReason = 'manual' | 'stop' | 'take-profit' | 'trailing-stop'
 
 export interface Position {
   id: string
@@ -21,6 +21,8 @@ export interface Position {
   stop: number | null
   /** take-profit on the instrument price; null = none */
   takeProfit: number | null
+  /** trailing stop DISTANCE in dollars (follows the peak); null/0 = none. Stock only. */
+  trailingStop?: number | null
   // option-only
   optionType?: OptionType
   strike?: number
