@@ -48,6 +48,8 @@ export interface TickerData {
   ratingActions: RatingAction[]
   /** TTM net margin as a fraction (Yahoo, free) — more current than annual filings */
   netMarginTTM: number | null
+  /** forward dividend yield as a fraction (Yahoo, free); null = non-payer/unknown */
+  dividendYield: number | null
 }
 
 export interface MarketKeys {
@@ -122,6 +124,7 @@ export async function getTickerData(
       ? { mean: yahoo.targetMean, high: yahoo.targetHigh, low: yahoo.targetLow, num: yahoo.numAnalysts }
       : null,
     ratingActions: yahoo?.ratingActions ?? [],
-    netMarginTTM: yahoo?.netMarginTTM ?? null
+    netMarginTTM: yahoo?.netMarginTTM ?? null,
+    dividendYield: yahoo?.dividendYield ?? null
   }
 }

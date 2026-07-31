@@ -68,7 +68,7 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
     { label: 'Market cap', value: fmtMoney(cap) },
     { label: 'P/E', value: td.pe !== null ? td.pe.toFixed(1) : 'n/a' },
     { label: 'Annual revenue', value: fmtMoney(td.revenue) },
-    { label: 'Net income', value: fmtMoney(td.netIncome) },
+    { label: 'Dividend yield', value: td.dividendYield != null && td.dividendYield > 0 ? `${(td.dividendYield * 100).toFixed(2)}%` : 'None' },
     { label: 'Analyst research', value: analystValue },
     { label: '52-week range', value: range },
     { label: 'Sector', value: td.details?.sector ? td.details.sector.split(' (')[0].trim().slice(0, 42) : 'n/a' },
@@ -167,6 +167,7 @@ function summaryBlock(td: TickerData, tech?: Technicals | null): string {
       : 'Recent analyst actions: none available',
     `Annual revenue: ${fmtMoney(td.revenue)} · Net income: ${fmtMoney(td.netIncome)}`,
     `Net margin: ${margin !== null ? `${margin.toFixed(1)}%` : 'n/a'} · Price/Sales: ${ps !== null ? `${ps.toFixed(2)}x` : 'n/a'}`,
+    `Dividend yield: ${td.dividendYield != null && td.dividendYield > 0 ? `${(td.dividendYield * 100).toFixed(2)}%` : 'none (non-dividend-payer)'}`,
     td.earnings
       ? `Next earnings: ${td.earnings.date} (${td.earnings.isEstimate ? 'estimated' : 'confirmed'}, via ${td.earnings.source})`
       : 'Next earnings: not available — do NOT guess an earnings date.',

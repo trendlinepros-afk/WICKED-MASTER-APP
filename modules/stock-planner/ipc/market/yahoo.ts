@@ -94,6 +94,8 @@ export interface YahooFundamentals {
   recommendationKey: string | null
   numAnalysts: number | null
   ratingActions: RatingAction[]
+  /** forward/indicated dividend yield as a FRACTION (e.g. 0.023 = 2.3%); null = non-payer/unknown */
+  dividendYield: number | null
 }
 
 export async function yahooFundamentals(sym: string): Promise<YahooFundamentals | null> {
@@ -138,7 +140,8 @@ export async function yahooFundamentals(sym: string): Promise<YahooFundamentals 
       targetLow: yNum(fd.targetLowPrice),
       recommendationKey: typeof fd.recommendationKey === 'string' ? fd.recommendationKey : null,
       numAnalysts: yNum(fd.numberOfAnalystOpinions),
-      ratingActions
+      ratingActions,
+      dividendYield: yNum(sd.dividendYield) ?? yNum(sd.trailingAnnualDividendYield)
     }
   } catch {
     return null

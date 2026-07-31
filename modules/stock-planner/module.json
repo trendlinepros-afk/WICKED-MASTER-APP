@@ -2,7 +2,7 @@
   "id": "stock-planner",
   "name": "Stock Research",
   "icon": "NotebookPen",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Guided stock research: AI report cards, trendline screenshot analysis, screeners, IPOs, compare and a market-aware assistant",
   "status": "stable",
   "group": {
