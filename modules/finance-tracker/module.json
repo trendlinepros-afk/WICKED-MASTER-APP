@@ -1,0 +1,14 @@
+{
+  "id": "finance-tracker",
+  "name": "Finance Tracker",
+  "icon": "Wallet",
+  "version": "1.0.0",
+  "description": "Import credit-card statements (CSV), auto-categorize where your money goes, detect subscriptions, and manage multiple card accounts",
+  "status": "stable",
+  "group": {
+    "id": "finance",
+    "name": "Finance",
+    "icon": "Landmark",
+    "description": "Personal finance — statements, spending and subscriptions"
+  }
+}
