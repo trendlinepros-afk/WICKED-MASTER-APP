@@ -47,7 +47,13 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
   const q = td.quote
   const cap = td.details?.marketCap ?? null
   const a = td.analyst
-  const analystValue = a ? `${a.label} · ${a.strongBuy + a.buy}B / ${a.hold}H / ${a.sell + a.strongSell}S` : 'n/a'
+  const pt = td.priceTarget
+  const ptStr = pt && pt.mean != null ? ` · PT $${pt.mean.toFixed(2)}` : ''
+  const analystValue = a
+    ? `${a.label} · ${a.strongBuy + a.buy}B / ${a.hold}H / ${a.sell + a.strongSell}S${ptStr}`
+    : pt && pt.mean != null
+      ? `PT $${pt.mean.toFixed(2)}${pt.num ? ` (${pt.num} analysts)` : ''}`
+      : 'n/a'
   const range =
     td.week52Low !== null && td.week52High !== null ? `$${td.week52Low.toFixed(2)} – $${td.week52High.toFixed(2)}` : 'n/a'
   return [
@@ -90,8 +96,16 @@ async function weeklyChangePct(key: string, sym: string): Promise<number | null>
 function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
   const q = td.quote
   const cap = td.details?.marketCap ?? null
-  const margin = td.revenue && td.revenue !== 0 && td.netIncome !== null ? (td.netIncome / td.revenue) * 100 : null
+  // Prefer Yahoo's TTM net margin; fall back to (annual net income / annual revenue).
+  const margin =
+    td.netMarginTTM != null
+      ? td.netMarginTTM * 100
+      : td.revenue && td.revenue !== 0 && td.netIncome !== null
+        ? (td.netIncome / td.revenue) * 100
+        : null
   const ps = cap && cap > 0 && td.revenue && td.revenue > 0 ? cap / td.revenue : null
+  const action = (a: string): string =>
+    a === 'up' ? 'upgraded to' : a === 'down' ? 'downgraded to' : a === 'init' ? 'initiated at' : 'rated'
   const lines = [
     `${td.symbol} — ${td.details?.name ?? 'Unknown company'}`,
     `Price: ${q.price !== null ? `$${q.price.toFixed(2)}` : 'not available'}` +
@@ -108,6 +122,13 @@ function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
     td.analyst
       ? `Analyst consensus: ${td.analyst.label} (${td.analyst.strongBuy + td.analyst.buy} buy / ${td.analyst.hold} hold / ${td.analyst.sell + td.analyst.strongSell} sell, ${td.analyst.total} analysts)`
       : 'Analyst consensus: not available',
+    td.priceTarget && td.priceTarget.mean != null
+      ? `Analyst price target: $${td.priceTarget.mean.toFixed(2)}${td.priceTarget.low != null && td.priceTarget.high != null ? ` (range $${td.priceTarget.low.toFixed(2)}–$${td.priceTarget.high.toFixed(2)})` : ''}${td.priceTarget.num ? `, ${td.priceTarget.num} analysts` : ''}`
+      : 'Analyst price target: not available',
+    td.ratingActions.length > 0
+      ? 'Recent analyst actions:\n' +
+        td.ratingActions.slice(0, 4).map((a) => `  - ${a.date}: ${a.firm} ${action(a.action)} ${a.toGrade}`).join('\n')
+      : 'Recent analyst actions: none available',
     `Annual revenue: ${fmtMoney(td.revenue)} · Net income: ${fmtMoney(td.netIncome)}`,
     `Net margin: ${margin !== null ? `${margin.toFixed(1)}%` : 'n/a'} · Price/Sales: ${ps !== null ? `${ps.toFixed(2)}x` : 'n/a'}`,
     td.earnings
@@ -126,7 +147,7 @@ const REPORT_RULES =
   '"sections":[{"heading","body","bullets":[..up to 6]} 1..20],"disclaimer"}. ' +
   'Mandated sections in order: Overview, Financials, Technical setup, Pros, Cons. ' +
   'In "Technical setup", cite the WEEKLY price change (label it "Weekly Price Change"); do NOT feature the daily change there. ' +
-  'The live data includes the 52-week range and the analyst Buy/Hold/Sell consensus — use them (e.g. where price sits within the 52-week range, and what analysts rate the stock). ' +
+  'The live data includes the 52-week range, the analyst Buy/Hold/Sell consensus, the analyst price target, and recent per-firm rating actions — use them (where price sits in its 52-week range, the consensus vs the price target, and any notable upgrades/downgrades). ' +
   'Ground every claim in the provided live data; where data is missing say so — never invent numbers, ' +
   'prices or earnings dates. A net loss produces a NEGATIVE P/E — report the negative value, do not call it N/A. ' +
   'The app fills the stat cards itself, so focus your effort on the section prose. ' +

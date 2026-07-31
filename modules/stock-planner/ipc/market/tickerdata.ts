@@ -27,7 +27,7 @@ import {
 } from './finnhub'
 import { computePE, resolveQuote, type ResolvedQuote } from './quotes'
 import { etTodayYmd } from './sessions'
-import { yahooEarnings, yahooQuoteFallback } from './yahoo'
+import { yahooEarnings, yahooFundamentals, yahooQuoteFallback, type RatingAction } from './yahoo'
 
 export interface TickerData {
   symbol: string
@@ -38,11 +38,16 @@ export interface TickerData {
   netIncome: number | null
   earnings: EarningsDate | null
   news: NewsItem[]
-  /** 52-week price range (Finnhub; Polygon doesn't provide it) */
+  /** 52-week price range (Finnhub, Yahoo fallback) */
   week52High: number | null
   week52Low: number | null
   /** analyst Buy/Hold/Sell consensus (Finnhub) */
   analyst: AnalystConsensus | null
+  /** analyst price target + recent per-firm rating actions (Yahoo, free) */
+  priceTarget: { mean: number | null; high: number | null; low: number | null; num: number | null } | null
+  ratingActions: RatingAction[]
+  /** TTM net margin as a fraction (Yahoo, free) — more current than annual filings */
+  netMarginTTM: number | null
 }
 
 export interface MarketKeys {
@@ -72,7 +77,7 @@ export async function getTickerData(
   const sym = symRaw.trim().toUpperCase()
   const m = keys.massive
 
-  const [details, snapshot, prev, financials, news, earnings, finnhubMetrics, analyst] = await Promise.all([
+  const [details, snapshot, prev, financials, news, earnings, finnhubMetrics, analyst, yahoo] = await Promise.all([
     m ? getTickerDetails(m, sym) : null,
     m ? getSnapshot(m, sym) : null,
     m ? getPrevClose(m, sym) : null,
@@ -88,7 +93,10 @@ export async function getTickerData(
     // Finnhub-only data: a P/E fallback + the 52-week range, and the analyst
     // Buy/Hold/Sell consensus. Polygon/Massive provides none of these.
     extras && keys.finnhub ? getFinnhubMetrics(keys.finnhub, sym) : null,
-    extras && keys.finnhub ? getFinnhubRecommendation(keys.finnhub, sym) : null
+    extras && keys.finnhub ? getFinnhubRecommendation(keys.finnhub, sym) : null,
+    // Yahoo (free, keyless): analyst price target + per-firm upgrade/downgrade
+    // history + TTM margin — none of which Finnhub's free tier exposes.
+    extras ? yahooFundamentals(sym) : null
   ])
 
   let quote = resolveQuote(snapshot, prev)
@@ -102,13 +110,18 @@ export async function getTickerData(
     symbol: sym,
     details,
     quote,
-    pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubMetrics?.pe ?? null,
+    pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubMetrics?.pe ?? yahoo?.trailingPE ?? null,
     revenue: financials.revenue,
     netIncome: financials.netIncome,
     earnings,
     news,
-    week52High: finnhubMetrics?.week52High ?? null,
-    week52Low: finnhubMetrics?.week52Low ?? null,
-    analyst
+    week52High: finnhubMetrics?.week52High ?? yahoo?.week52High ?? null,
+    week52Low: finnhubMetrics?.week52Low ?? yahoo?.week52Low ?? null,
+    analyst,
+    priceTarget: yahoo && (yahoo.targetMean != null || yahoo.numAnalysts != null)
+      ? { mean: yahoo.targetMean, high: yahoo.targetHigh, low: yahoo.targetLow, num: yahoo.numAnalysts }
+      : null,
+    ratingActions: yahoo?.ratingActions ?? [],
+    netMarginTTM: yahoo?.netMarginTTM ?? null
   }
 }
