@@ -14,7 +14,11 @@ const MIN_W = 90
 const MIN_H = 50
 
 export default function Freeform({ folderId }: { folderId: string }): React.JSX.Element {
-  const items = useBoard((s) => s.canvasItems.filter((i) => i.folderId === folderId))
+  // Select the stable array reference, then filter in render. Filtering INSIDE
+  // the selector returns a new array on every call, which makes zustand v5's
+  // useSyncExternalStore see an ever-changing snapshot → infinite re-render
+  // (React #185). Keep derived arrays out of the selector.
+  const items = useBoard((s) => s.canvasItems).filter((i) => i.folderId === folderId)
   const addText = useBoard((s) => s.addCanvasText)
   const addImage = useBoard((s) => s.addCanvasImage)
   const scrollRef = useRef<HTMLDivElement>(null)
