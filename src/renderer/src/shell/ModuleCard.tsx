@@ -63,9 +63,14 @@ export function ModuleCard({
       onDragStart={(e) => {
         setDragId(id)
         e.dataTransfer.effectAllowed = 'move'
+        // Carry data so Chromium/Electron treats this as a real drag — without it
+        // the drop can silently fail (dragend fires instead of drop).
+        e.dataTransfer.setData('text/plain', id)
       }}
       onDragOver={(e) => {
         e.preventDefault()
+        // Force a non-"none" dropEffect so the drop event actually fires here.
+        e.dataTransfer.dropEffect = 'move'
         if (dragId && dragId !== id) {
           setDropTarget(() => id)
           setSide(afterOf(e) ? 'after' : 'before')
@@ -196,6 +201,7 @@ export function GroupCard({
       onDragStart={(e) => {
         setDragId(token)
         e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', token)
       }}
       onDragEnd={() => {
         setDragId(null)

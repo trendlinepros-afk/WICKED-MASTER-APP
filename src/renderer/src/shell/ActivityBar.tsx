@@ -103,9 +103,13 @@ export default function ActivityBar(): React.JSX.Element {
         onDragStart={(e) => {
           setDragId(id)
           e.dataTransfer.effectAllowed = 'move'
+          // Real drag data — without it the drop can silently fail, and it stops
+          // the browser treating this <a> row as a native link-URL drag.
+          e.dataTransfer.setData('text/plain', id)
         }}
         onDragOver={(e) => {
           e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
           if (dragId && dragId !== id) setDropTarget(id)
         }}
         onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
@@ -204,9 +208,11 @@ export default function ActivityBar(): React.JSX.Element {
                   onDragStart={(e2) => {
                     setDragId(token)
                     e2.dataTransfer.effectAllowed = 'move'
+                    e2.dataTransfer.setData('text/plain', token)
                   }}
                   onDragOver={(e2) => {
                     e2.preventDefault()
+                    e2.dataTransfer.dropEffect = 'move'
                     if (dragId && dragId !== token) setDropTarget(token)
                   }}
                   onDragLeave={() => setDropTarget((t) => (t === token ? null : t))}
