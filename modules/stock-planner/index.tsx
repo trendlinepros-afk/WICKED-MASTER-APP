@@ -86,26 +86,91 @@ const SCREENERS: { kind: ScreenerKind; label: string }[] = [
 
 function FindStep(): React.JSX.Element {
   const s = useStockPlanner()
+  const [focused, setFocused] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(-1)
+
+  // Debounced typeahead: fetch suggestions ~220ms after the user stops typing,
+  // for 2+ characters. Shorter queries clear the list. The store guards against
+  // out-of-order responses, so a slow earlier request can't clobber a newer one.
+  useEffect(() => {
+    setActiveIdx(-1)
+    const q = s.query.trim()
+    if (q.length < 2) {
+      s.clearHits()
+      return
+    }
+    const t = setTimeout(() => void s.suggest(), 220)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.query])
+
+  const showDropdown = focused && s.hits.length > 0
 
   return (
     <div className="space-y-4 p-4">
       {/* search / manual entry */}
       <div className="rounded-xl border border-edge bg-surface p-4">
         <label className="text-sm font-semibold">Find a stock</label>
-        <div className="mt-2 flex gap-2">
-          <input
-            value={s.query}
-            onChange={(e) => s.setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter') return
-              const q = s.query.trim()
-              if (/^[A-Za-z.]{1,6}$/.test(q)) void s.startAnalysis(q)
-              else void s.search()
-            }}
-            placeholder="Ticker (JBLU) or company name…"
-            spellCheck={false}
-            className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
-          />
+        <div className="relative mt-2 flex gap-2">
+          <div className="relative min-w-0 flex-1">
+            <input
+              value={s.query}
+              onChange={(e) => s.setQuery(e.target.value)}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setTimeout(() => setFocused(false), 120)}
+              onKeyDown={(e) => {
+                if (showDropdown && e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setActiveIdx((i) => Math.min(i + 1, s.hits.length - 1))
+                  return
+                }
+                if (showDropdown && e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setActiveIdx((i) => Math.max(i - 1, -1))
+                  return
+                }
+                if (e.key === 'Escape') {
+                  setFocused(false)
+                  return
+                }
+                if (e.key !== 'Enter') return
+                // Pick the highlighted suggestion if one is active…
+                if (showDropdown && activeIdx >= 0 && s.hits[activeIdx]) {
+                  void s.startAnalysis(s.hits[activeIdx].ticker)
+                  return
+                }
+                // …otherwise analyze a ticker-like query, or search a name.
+                const q = s.query.trim()
+                if (/^[A-Za-z.]{1,6}$/.test(q)) void s.startAnalysis(q)
+                else void s.search()
+              }}
+              placeholder="Ticker (JBLU) or company name…"
+              spellCheck={false}
+              autoComplete="off"
+              className="w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            {showDropdown && (
+              <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-edge bg-surface shadow-lg">
+                {s.hits.map((h, i) => (
+                  <button
+                    key={h.ticker}
+                    // onMouseDown fires before the input's blur, so the pick isn't lost.
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      void s.startAnalysis(h.ticker)
+                    }}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    className={`flex w-full items-center gap-2 border-b border-edge/50 px-3 py-2 text-left text-sm last:border-b-0 ${
+                      i === activeIdx ? 'bg-raised' : 'hover:bg-raised'
+                    }`}
+                  >
+                    <span className="w-16 shrink-0 font-semibold">{h.ticker}</span>
+                    <span className="min-w-0 truncate text-muted">{h.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={() => void s.search()}
             disabled={s.searching || !s.query.trim()}
@@ -121,20 +186,6 @@ function FindStep(): React.JSX.Element {
             Analyze <ArrowRight size={14} />
           </button>
         </div>
-        {s.hits.length > 0 && (
-          <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-edge">
-            {s.hits.map((h) => (
-              <button
-                key={h.ticker}
-                onClick={() => void s.startAnalysis(h.ticker)}
-                className="flex w-full items-center gap-2 border-b border-edge/50 px-3 py-2 text-left text-sm hover:bg-raised"
-              >
-                <span className="w-16 shrink-0 font-semibold">{h.ticker}</span>
-                <span className="min-w-0 truncate text-muted">{h.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* screeners */}
@@ -387,18 +438,32 @@ function HistoryCard(): React.JSX.Element | null {
 /* ----------------------------- analysis step ----------------------------- */
 
 function DataPanel({ d }: { d: TickerData }): React.JSX.Element {
+  const fund = d.isFund
+  // For ETFs/funds, company fundamentals don't apply — say why instead of "—".
+  const na = (fundMsg: string): string => (fund ? fundMsg : '—')
   const rows: [string, string, string?][] = [
     ['Price', d.quote.price !== null ? `$${d.quote.price.toFixed(2)}` : '—'],
     ['Today', pct(d.quote.changePct), pctCls(d.quote.changePct)],
     ['Volume', d.quote.volume !== null ? d.quote.volume.toLocaleString('en-US') : '—'],
-    ['Market cap', money(d.details?.marketCap ?? null)],
-    ['P/E', d.pe !== null ? d.pe.toFixed(1) : d.netIncome !== null && d.netIncome <= 0 ? 'n/a (net loss)' : '—'],
-    ['Revenue (yr)', money(d.revenue)],
-    ['Net income', money(d.netIncome)],
-    ['Sector', d.sector || '—'],
+    ['Market cap', d.details?.marketCap != null ? money(d.details.marketCap) : na('N/A - ETF (net assets)')],
+    [
+      'P/E',
+      d.pe !== null
+        ? d.pe.toFixed(1)
+        : d.netIncome !== null && d.netIncome <= 0
+          ? 'n/a (net loss)'
+          : na('N/A - not reported for ETFs')
+    ],
+    ['Revenue (yr)', d.revenue != null ? money(d.revenue) : na('N/A - ETFs have no revenue')],
+    ['Net income', d.netIncome != null ? money(d.netIncome) : na('N/A - ETFs have no earnings')],
+    ['Sector', d.sector || na('N/A - ETF holds many stocks')],
     [
       'Next earnings',
-      d.earnings ? `${d.earnings.date} (${d.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'not available'
+      d.earnings
+        ? `${d.earnings.date} (${d.earnings.isEstimate ? 'est.' : 'confirmed'})`
+        : fund
+          ? "N/A - ETFs don't report earnings"
+          : 'not available'
     ]
   ]
   return (

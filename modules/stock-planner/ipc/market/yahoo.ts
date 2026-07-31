@@ -98,6 +98,8 @@ export interface YahooFundamentals {
   dividendYield: number | null
   /** GICS-style sector from assetProfile — the FREE source Polygon lacks for foreign ADRs. */
   sector: string | null
+  /** price.quoteType, e.g. 'EQUITY' | 'ETF' | 'MUTUALFUND' — used to flag funds. */
+  quoteType: string | null
 }
 
 export async function yahooFundamentals(sym: string): Promise<YahooFundamentals | null> {
@@ -145,7 +147,8 @@ export async function yahooFundamentals(sym: string): Promise<YahooFundamentals 
       numAnalysts: yNum(fd.numberOfAnalystOpinions),
       ratingActions,
       dividendYield: yNum(sd.dividendYield) ?? yNum(sd.trailingAnnualDividendYield),
-      sector: typeof ap.sector === 'string' && ap.sector.trim() ? ap.sector.trim() : null
+      sector: typeof ap.sector === 'string' && ap.sector.trim() ? ap.sector.trim() : null,
+      quoteType: typeof pr.quoteType === 'string' && pr.quoteType.trim() ? pr.quoteType.trim().toUpperCase() : null
     }
   } catch {
     return null

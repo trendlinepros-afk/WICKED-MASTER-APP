@@ -28,6 +28,35 @@ const rec = (v: unknown): Record<string, unknown> =>
   typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {}
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
+export interface SymbolHit {
+  ticker: string
+  name: string
+}
+
+/**
+ * Symbol search for the search-box typeahead (`/search?q=`). Finnhub's free tier
+ * allows ~60 req/min — comfortable for as-you-type — and matches on both symbol
+ * and company name, so "Jet" surfaces JBLU and "JB" surfaces JBLU. We keep clean
+ * US listings (plain A–Z symbols, dropping foreign venue suffixes like JBLU.MX)
+ * and cap the list. Fail-soft: any error yields an empty list, never a throw.
+ */
+export async function searchSymbols(key: string, q: string, limit = 8): Promise<SymbolHit[]> {
+  const j = await finnhubFetch(key, `/search?q=${encodeURIComponent(q)}`)
+  const out: SymbolHit[] = []
+  const seen = new Set<string>()
+  for (const r of arr(rec(j).result).map(rec)) {
+    const ticker = String(r.symbol ?? '').trim().toUpperCase()
+    const name = String(r.description ?? '').trim()
+    // Primary US listings only — plain letter symbols (AAPL, JBLU, SOXX);
+    // skips foreign venue suffixes (JBLU.MX, VOD.L) and odd class notations.
+    if (!ticker || !name || !/^[A-Z]{1,6}$/.test(ticker) || seen.has(ticker)) continue
+    seen.add(ticker)
+    out.push({ ticker, name })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 export interface EarningsDate {
   date: string
   isEstimate: boolean

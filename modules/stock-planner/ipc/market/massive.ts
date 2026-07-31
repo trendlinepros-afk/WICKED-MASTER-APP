@@ -149,6 +149,8 @@ export interface TickerDetails {
   listDate: string
   marketCap: number | null
   employees: number | null
+  /** Polygon security type code: CS (common stock), ETF, ETN, ADRC, FUND… */
+  type: string
 }
 
 export async function getTickerDetails(key: string, sym: string): Promise<TickerDetails | null> {
@@ -166,7 +168,8 @@ export async function getTickerDetails(key: string, sym: string): Promise<Ticker
     sector: String(r.sic_description ?? ''),
     listDate: String(r.list_date ?? ''),
     marketCap: Number.isFinite(cap) && cap > 0 ? cap : null,
-    employees: Number.isFinite(emp) && emp > 0 ? emp : null
+    employees: Number.isFinite(emp) && emp > 0 ? emp : null,
+    type: String(r.type ?? '')
   }
 }
 

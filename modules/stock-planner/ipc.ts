@@ -8,7 +8,7 @@ import { extractTickersWithFallback, mentionsIpos } from './ipc/chatContext'
 import { DocStore, type StockDoc } from './ipc/docs'
 import { parseReportSpec, type ReportSpec } from './ipc/report'
 import { getAggregates, getIpos, searchTickers } from './ipc/market/massive'
-import { getEarningsHistory } from './ipc/market/finnhub'
+import { getEarningsHistory, searchSymbols } from './ipc/market/finnhub'
 import { computeTechnicals, type Technicals } from './ipc/market/technicals'
 import { marketSession } from './ipc/market/sessions'
 import { getTickerData, type MarketKeys, type TickerData } from './ipc/market/tickerdata'
@@ -43,18 +43,22 @@ const fmtMoney = (v: number | null): string => {
 
 /** App-computed stat cards for the report — deterministic real data, so P/E
  *  (negative on a loss), net margin and price/sales are always correct rather
- *  than left to the model to (mis)compute. */
+ *  than left to the model to (mis)compute. For ETFs/funds, single-company
+ *  fundamentals don't apply, so those cards say WHY instead of a bare "n/a". */
 function buildStats(td: TickerData): { label: string; value: string }[] {
   const q = td.quote
   const cap = td.details?.marketCap ?? null
   const a = td.analyst
   const pt = td.priceTarget
+  const fund = td.isFund
+  // Per-metric explanation shown when a fund has no value for it.
+  const na = (fundMsg: string): string => (fund ? fundMsg : 'n/a')
   const ptStr = pt && pt.mean != null ? ` · PT $${pt.mean.toFixed(2)}` : ''
   const analystValue = a
     ? `${a.label} · ${a.strongBuy + a.buy}B / ${a.hold}H / ${a.sell + a.strongSell}S${ptStr}`
     : pt && pt.mean != null
       ? `PT $${pt.mean.toFixed(2)}${pt.num ? ` (${pt.num} analysts)` : ''}`
-      : 'n/a'
+      : na("N/A - analysts don't rate ETFs")
   const range =
     td.week52Low !== null && td.week52High !== null ? `$${td.week52Low.toFixed(2)} – $${td.week52High.toFixed(2)}` : 'n/a'
   return [
@@ -65,16 +69,26 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
           ? `$${q.price.toFixed(2)}${q.changePct !== null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}% today)` : ''}`
           : 'n/a'
     },
-    { label: 'Market cap', value: fmtMoney(cap) },
-    { label: 'P/E', value: td.pe !== null ? td.pe.toFixed(1) : 'n/a' },
-    { label: 'Annual revenue', value: fmtMoney(td.revenue) },
-    { label: 'Dividend yield', value: td.dividendYield != null && td.dividendYield > 0 ? `${(td.dividendYield * 100).toFixed(2)}%` : 'None' },
+    { label: 'Market cap', value: cap != null ? fmtMoney(cap) : na('N/A - ETFs report net assets') },
+    { label: 'P/E', value: td.pe !== null ? td.pe.toFixed(1) : na('N/A - not reported for ETFs') },
+    { label: 'Annual revenue', value: td.revenue != null ? fmtMoney(td.revenue) : na('N/A - ETFs have no revenue') },
+    {
+      label: 'Dividend yield',
+      value:
+        td.dividendYield != null && td.dividendYield > 0
+          ? `${(td.dividendYield * 100).toFixed(2)}%`
+          : fund
+            ? 'N/A - see fund distributions'
+            : 'None'
+    },
     { label: 'Analyst research', value: analystValue },
     { label: '52-week range', value: range },
-    { label: 'Sector', value: td.sector ? td.sector.split(' (')[0].trim().slice(0, 42) : 'n/a' },
+    { label: 'Sector', value: td.sector ? td.sector.split(' (')[0].trim().slice(0, 42) : na('N/A - ETF holds many stocks') },
     {
       label: 'Next earnings',
-      value: td.earnings ? `${td.earnings.date} (${td.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'n/a'
+      value: td.earnings
+        ? `${td.earnings.date} (${td.earnings.isEstimate ? 'est.' : 'confirmed'})`
+        : na("N/A - ETFs don't report earnings")
     }
   ].slice(0, 12)
 }
@@ -144,6 +158,9 @@ function summaryBlock(td: TickerData, tech?: Technicals | null): string {
     a === 'up' ? 'upgraded to' : a === 'down' ? 'downgraded to' : a === 'init' ? 'initiated at' : 'rated'
   const lines = [
     `${td.symbol} — ${td.details?.name ?? 'Unknown company'}`,
+    td.isFund
+      ? 'Instrument type: ETF / fund. Single-company fundamentals (P/E, revenue, net margin, earnings dates, analyst Buy/Hold/Sell ratings) DO NOT APPLY - do not invent them; discuss the fund price action, holdings/theme and trend instead.'
+      : 'Instrument type: common stock.',
     `Price: ${q.price !== null ? `$${q.price.toFixed(2)}` : 'not available'}` +
       (q.changePct !== null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}% today)` : ''),
     weeklyPct != null
@@ -227,6 +244,27 @@ export default function register(ctx: ModuleIpcContext): void {
     const key = ctx.getApiKey('massive')
     if (!key) return { ok: false, error: 'Add your Massive/Polygon key in Settings → API Keys first.' }
     return { ok: true, hits: await searchTickers(key, q) }
+  })
+
+  // Live typeahead for the search box — fires as the user types. Finnhub's
+  // symbol search (~60 req/min, matches ticker AND company name) is the primary
+  // source; Polygon is the fallback. Fail-soft: any hiccup yields an empty list,
+  // never an error toast while someone is mid-word.
+  ctx.ipcMain.handle(`${ID}:suggest`, async (_e, rawQ: unknown) => {
+    const q = typeof rawQ === 'string' ? rawQ.trim() : ''
+    if (!q) return { ok: true, hits: [] }
+    try {
+      const fk = ctx.getApiKey('finnhub')
+      if (fk) {
+        const hits = await searchSymbols(fk, q)
+        if (hits.length > 0) return { ok: true, hits }
+      }
+      const mk = ctx.getApiKey('massive')
+      if (mk) return { ok: true, hits: (await searchTickers(mk, q)).slice(0, 8) }
+    } catch {
+      /* typeahead never surfaces errors */
+    }
+    return { ok: true, hits: [] }
   })
 
   ctx.ipcMain.handle(`${ID}:ticker-data`, async (_e, rawSym: unknown) => {

@@ -38,6 +38,9 @@ export interface TickerData {
   netIncome: number | null
   /** Sector: Polygon SIC first, Yahoo assetProfile fallback (covers foreign ADRs). */
   sector: string | null
+  /** True for ETFs / ETNs / funds — company fundamentals (P/E, revenue, earnings,
+   *  analyst ratings) don't apply and should say so instead of a bare "n/a". */
+  isFund: boolean
   earnings: EarningsDate | null
   news: NewsItem[]
   /** 52-week price range (Finnhub, Yahoo fallback) */
@@ -103,6 +106,15 @@ export async function getTickerData(
     extras ? yahooFundamentals(sym) : null
   ])
 
+  // Fund detection: Polygon security type (ETF/ETN/FUND/ETV/ETS), Yahoo's
+  // quoteType, or an "ETF/Fund/Trust" name — any one is enough.
+  const polyType = (details?.type ?? '').toUpperCase()
+  const isFund =
+    /^(ETF|ETN|ETV|ETS|FUND)$/.test(polyType) ||
+    yahoo?.quoteType === 'ETF' ||
+    yahoo?.quoteType === 'MUTUALFUND' ||
+    /\b(ETF|ETN|fund|trust)\b/i.test(details?.name ?? '')
+
   let quote = resolveQuote(snapshot, prev)
   if (quote.price === null) {
     // Yahoo last resort so the panel isn't blank on a Massive gap
@@ -120,6 +132,7 @@ export async function getTickerData(
     revenue: financials.revenue ?? yahoo?.revenueTTM ?? null,
     netIncome: financials.netIncome,
     sector: (details?.sector && details.sector.trim()) || yahoo?.sector || null,
+    isFund,
     earnings,
     news,
     week52High: finnhubMetrics?.week52High ?? yahoo?.week52High ?? null,

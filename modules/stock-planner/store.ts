@@ -38,6 +38,8 @@ export interface TickerData {
   netIncome: number | null
   /** Sector: Polygon SIC first, Yahoo assetProfile fallback (covers foreign ADRs). */
   sector: string | null
+  /** True for ETFs / funds — company fundamentals don't apply. */
+  isFund: boolean
   earnings: { date: string; isEstimate: boolean; source: string } | null
   news: { title: string; url: string; source: string; publishedAt: string }[]
 }
@@ -123,6 +125,8 @@ interface State {
 
   loadStatus: () => Promise<void>
   search: () => Promise<void>
+  suggest: () => Promise<void>
+  clearHits: () => void
   runScreener: (kind: ScreenerKind) => Promise<void>
   runCompare: () => Promise<void>
   startAnalysis: (ticker: string) => Promise<void>
@@ -197,6 +201,22 @@ export const useStockPlanner = create<State>((set, get) => ({
     }
   },
 
+  // Silent live typeahead — no busy spinner, no error toasts. Guards against
+  // stale responses (a slower earlier request resolving after a newer one) by
+  // only applying results when the box still holds the query we searched for.
+  suggest: async () => {
+    const q = get().query.trim()
+    if (!q) {
+      set({ hits: [] })
+      return
+    }
+    const res = await invoke<Res & { hits?: { ticker: string; name: string }[] }>('suggest', q)
+    if (get().query.trim() !== q) return
+    if (res.ok) set({ hits: res.hits ?? [] })
+  },
+
+  clearHits: () => set({ hits: [] }),
+
   runScreener: async (kind) => {
     if (get().screenerBusy) return
     set({ screenerBusy: true, screenerKind: kind, screenerRows: [], ipoRows: [], screenerNote: '', error: '' })
@@ -240,7 +260,7 @@ export const useStockPlanner = create<State>((set, get) => ({
   startAnalysis: async (tickerRaw) => {
     const ticker = tickerRaw.trim().toUpperCase()
     if (!ticker) return
-    set({ ticker, step: 'analysis', doc: null, data: null, statusMsg: `Loading ${ticker}…` })
+    set({ ticker, step: 'analysis', doc: null, data: null, hits: [], statusMsg: `Loading ${ticker}…` })
     const res = await invoke<Res & { doc?: StockDoc }>('doc-get', ticker)
     if (res.ok && res.doc) set({ doc: res.doc })
     await get().refreshData()
