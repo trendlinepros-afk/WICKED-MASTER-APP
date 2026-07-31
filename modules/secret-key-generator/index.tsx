@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import { Copy, KeyRound } from 'lucide-react'
 
@@ -84,7 +85,7 @@ export default function SecretKeyGenerator(): React.JSX.Element {
           <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-raised text-accent">
             <KeyRound size={20} />
           </span>
-          <h1 className="text-xl font-bold tracking-tight">Secret Key Generator</h1>
+          <h1 className="text-xl font-bold tracking-tight"><ModuleTitle fallback="Secret Key Generator" /></h1>
         </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-2 text-sm">

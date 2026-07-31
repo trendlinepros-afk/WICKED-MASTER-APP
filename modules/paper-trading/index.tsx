@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import {
   ColorType,
@@ -443,7 +444,7 @@ export default function PaperTrading(): React.JSX.Element {
     <div className="flex h-full flex-col bg-bg">
       {/* header */}
       <header className="flex flex-wrap items-center gap-3 border-b border-edge px-4 py-2">
-        <span className="text-sm font-bold tracking-tight">Paper Trading</span>
+        <span className="text-sm font-bold tracking-tight"><ModuleTitle fallback="Paper Trading" /></span>
         <select
           value={s.data?.activeId ?? ''}
           onChange={(e) => void s.setActive(e.target.value)}

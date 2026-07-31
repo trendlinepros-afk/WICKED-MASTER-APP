@@ -23,6 +23,7 @@ import UpdateDialog from './shell/UpdateDialog'
 import UpdateToast from './shell/UpdateToast'
 import { moduleById } from './shell/registry'
 import { effectiveName } from './shell/moduleView'
+import { ModuleNameProvider } from './shell/moduleContext'
 import { useSettings } from './stores/settings'
 import { useUpdates } from './stores/updates'
 
@@ -69,7 +70,9 @@ function ModuleHost(): React.JSX.Element {
       <div className="min-h-0 flex-1">
         <ModuleBoundary moduleId={id}>
           <Suspense fallback={<Spinner />}>
-            <Component />
+            <ModuleNameProvider name={effectiveName(mod, overrides)}>
+              <Component />
+            </ModuleNameProvider>
           </Suspense>
         </ModuleBoundary>
       </div>
@@ -95,7 +98,9 @@ function StandaloneModule(): React.JSX.Element {
     <div className="h-full">
       <ModuleBoundary moduleId={id}>
         <Suspense fallback={<Spinner />}>
-          <Component />
+          <ModuleNameProvider name={effectiveName(mod, overrides)}>
+            <Component />
+          </ModuleNameProvider>
         </Suspense>
       </ModuleBoundary>
     </div>

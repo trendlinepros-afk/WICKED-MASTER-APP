@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -274,7 +275,7 @@ export default function TheBrain(): React.JSX.Element {
           <BrainCircuit size={20} />
         </span>
         <div className="min-w-0">
-          <div className="flex items-center gap-2 font-semibold">The Brain</div>
+          <div className="flex items-center gap-2 font-semibold"><ModuleTitle fallback="The Brain" /></div>
           <div className="truncate text-xs text-muted">
             {stats.files} note{stats.files === 1 ? '' : 's'} · {stats.folders} folder{stats.folders === 1 ? '' : 's'} · local
             markdown vault · syncs with Backup &amp; Cloud Sync

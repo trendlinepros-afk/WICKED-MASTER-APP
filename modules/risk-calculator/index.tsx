@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect } from 'react'
 import { AlertTriangle, Calculator } from 'lucide-react'
 import { useRisk, type Inputs, type Tab } from './store'
@@ -298,7 +299,7 @@ export default function RiskCalculator(): React.JSX.Element {
             <Calculator size={20} />
           </span>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Risk Calculator</h1>
+            <h1 className="text-xl font-bold tracking-tight"><ModuleTitle fallback="Risk Calculator" /></h1>
             <p className="text-xs text-muted">Size every trade to a fixed risk — stocks and options.</p>
           </div>
         </div>

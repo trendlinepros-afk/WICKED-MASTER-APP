@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect } from 'react'
 import {
   AlertTriangle,
@@ -641,7 +642,7 @@ export default function EmailCleanup365(): React.JSX.Element {
           <MailCheck size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">365 Email Cleanup</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="365 Email Cleanup" /></h1>
           <p className="flex items-center gap-1.5 truncate text-xs text-muted">
             <ConnDot state={s.conn} />
             {s.conn === 'connected'

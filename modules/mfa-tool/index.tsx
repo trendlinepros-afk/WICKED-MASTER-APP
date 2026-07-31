@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -86,7 +87,7 @@ function Gate(): React.JSX.Element {
           <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-raised text-accent">
             <ShieldCheck size={20} />
           </span>
-          <h1 className="text-xl font-bold tracking-tight">MFA Tool</h1>
+          <h1 className="text-xl font-bold tracking-tight"><ModuleTitle fallback="MFA Tool" /></h1>
           <span className="rounded-full bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">Beta</span>
         </div>
 

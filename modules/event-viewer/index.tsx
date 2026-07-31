@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -386,7 +387,7 @@ export default function EventViewer(): React.JSX.Element {
           <ScrollText size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Event Viewer Analyzer</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Event Viewer Analyzer" /></h1>
           <p className="truncate text-xs text-muted">
             Windows Event Log health reports, powered by DeepSeek
           </p>

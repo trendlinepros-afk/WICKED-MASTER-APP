@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -361,7 +362,7 @@ export default function AiAdvisor(): React.JSX.Element {
         <header className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
           <Bot size={18} className="text-accent" />
           <div className="min-w-0">
-            <h1 className="text-sm font-bold tracking-tight">AI Advisor</h1>
+            <h1 className="text-sm font-bold tracking-tight"><ModuleTitle fallback="AI Advisor" /></h1>
             <p className="truncate text-[11px] text-muted">Reads your Stocks tools · {s.toolCount} tools</p>
           </div>
           {sessionCost > 0 && (

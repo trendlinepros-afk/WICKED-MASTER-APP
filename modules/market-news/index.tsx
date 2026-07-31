@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowUpDown, ExternalLink, Layers, Loader2, Newspaper, RefreshCw, Search, X } from 'lucide-react'
 import { filterBySector, SECTORS, SORTS, sortRows, type NewsRow, type SortId } from './filters'
@@ -50,7 +51,7 @@ export default function MarketNews(): React.JSX.Element {
           <Newspaper size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Market News</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Market News" /></h1>
           <p className="truncate text-xs text-muted">
             {symbol ? `${symbol} company news · last 30 days` : 'Market-wide headlines · refreshes on the 6 AM ET news day'}
           </p>

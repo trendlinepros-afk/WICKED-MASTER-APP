@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useRef } from 'react'
 import {
   AlertTriangle,
@@ -99,7 +100,7 @@ export default function TradeReview(): React.JSX.Element {
           <ScanSearch size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Trade Review</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Trade Review" /></h1>
           <p className="truncate text-xs text-muted">
             {s.stats && !empty
               ? `${s.executions.filter((e) => e.filled).length} fills · realized ${money(s.stats.totalRealized)} · ${s.stats.winRate.toFixed(0)}% win`

@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect } from 'react'
 import {
   AlertTriangle,
@@ -72,7 +73,7 @@ export default function YtDownloader(): React.JSX.Element {
           <Youtube size={20} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">YouTube Downloader</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="YouTube Downloader" /></h1>
           <p className="truncate text-xs text-muted">
             {binReady ? (
               <>

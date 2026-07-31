@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
@@ -568,7 +569,7 @@ function StartPage({
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-raised text-accent">
             <Globe size={24} />
           </span>
-          <h1 className="text-2xl font-bold tracking-tight">Web Browser</h1>
+          <h1 className="text-2xl font-bold tracking-tight"><ModuleTitle fallback="Web Browser" /></h1>
         </div>
         <p className="mt-2 text-center text-sm text-muted">
           Type a URL or search above — or jump back into a bookmark.

@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
@@ -743,7 +744,7 @@ export default function TradeAnalytics(): React.JSX.Element {
           <CandlestickChart size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Trade Journal</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Trade Journal" /></h1>
           <p className="truncate text-xs text-muted">
             {s.executions.length > 0 ? `${num(s.executions.length)} executions · ${num(s.trades.length)} trades · ${s.stats?.openTrades ?? 0} open` : 'Import your Webull order records'}
           </p>

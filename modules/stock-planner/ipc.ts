@@ -27,22 +27,83 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-const fmtMoney = (v: number | null): string =>
-  v === null ? 'n/a' : v >= 1e12 ? `$${(v / 1e12).toFixed(2)}T` : v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : `$${v.toFixed(2)}`
+const fmtMoney = (v: number | null): string => {
+  if (v === null || !Number.isFinite(v)) return 'n/a'
+  const a = Math.abs(v)
+  const sign = v < 0 ? '-' : ''
+  return a >= 1e12
+    ? `${sign}$${(a / 1e12).toFixed(2)}T`
+    : a >= 1e9
+      ? `${sign}$${(a / 1e9).toFixed(2)}B`
+      : a >= 1e6
+        ? `${sign}$${(a / 1e6).toFixed(1)}M`
+        : `${sign}$${a.toFixed(2)}`
+}
+
+/** App-computed stat cards for the report — deterministic real data, so P/E
+ *  (negative on a loss), net margin and price/sales are always correct rather
+ *  than left to the model to (mis)compute. */
+function buildStats(td: TickerData): { label: string; value: string }[] {
+  const q = td.quote
+  const cap = td.details?.marketCap ?? null
+  const margin = td.revenue && td.revenue !== 0 && td.netIncome !== null ? (td.netIncome / td.revenue) * 100 : null
+  const ps = cap && cap > 0 && td.revenue && td.revenue > 0 ? cap / td.revenue : null
+  return [
+    {
+      label: 'Price',
+      value:
+        q.price !== null
+          ? `$${q.price.toFixed(2)}${q.changePct !== null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}% today)` : ''}`
+          : 'n/a'
+    },
+    { label: 'Market cap', value: fmtMoney(cap) },
+    { label: 'P/E', value: td.pe !== null ? td.pe.toFixed(1) : 'n/a' },
+    { label: 'Annual revenue', value: fmtMoney(td.revenue) },
+    { label: 'Net income', value: fmtMoney(td.netIncome) },
+    { label: 'Net margin', value: margin !== null ? `${margin.toFixed(1)}%` : 'n/a' },
+    { label: 'Price / sales', value: ps !== null ? `${ps.toFixed(2)}x` : 'n/a' },
+    { label: 'Sector', value: td.details?.sector || 'n/a' },
+    {
+      label: 'Next earnings',
+      value: td.earnings ? `${td.earnings.date} (${td.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'n/a'
+    }
+  ].slice(0, 12)
+}
+
+/** Weekly price change (last ~5 trading days) from daily closes, or null. */
+async function weeklyChangePct(key: string, sym: string): Promise<number | null> {
+  try {
+    const to = Date.now()
+    const bars = await getAggregates(key, sym, 1, 'day', to - 24 * 86_400_000, to)
+    if (bars.length < 2) return null
+    const last = bars[bars.length - 1].c
+    const ref = bars[Math.max(0, bars.length - 1 - 5)].c
+    return ref > 0 && last > 0 ? ((last - ref) / ref) * 100 : null
+  } catch {
+    return null
+  }
+}
 
 /** Live-data summary block injected into report + chat prompts. */
-function summaryBlock(td: TickerData): string {
+function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
   const q = td.quote
+  const cap = td.details?.marketCap ?? null
+  const margin = td.revenue && td.revenue !== 0 && td.netIncome !== null ? (td.netIncome / td.revenue) * 100 : null
+  const ps = cap && cap > 0 && td.revenue && td.revenue > 0 ? cap / td.revenue : null
   const lines = [
     `${td.symbol} — ${td.details?.name ?? 'Unknown company'}`,
     `Price: ${q.price !== null ? `$${q.price.toFixed(2)}` : 'not available'}` +
       (q.changePct !== null ? ` (${q.changePct >= 0 ? '+' : ''}${q.changePct.toFixed(2)}% today)` : ''),
-    `Market cap: ${fmtMoney(td.details?.marketCap ?? null)}`,
+    weeklyPct != null
+      ? `Weekly price change (last ~5 trading days): ${weeklyPct >= 0 ? '+' : ''}${weeklyPct.toFixed(2)}%`
+      : 'Weekly price change: not available',
+    `Market cap: ${fmtMoney(cap)}`,
     td.pe !== null
-      ? `Trailing P/E: ${td.pe.toFixed(1)}${td.pe < 0 ? ' (negative — reflects a net loss)' : ''}`
-      : 'Trailing P/E: not available',
+      ? `P/E: ${td.pe.toFixed(1)}${td.pe < 0 ? ' (negative — reflects a net loss)' : ''}`
+      : 'P/E: not available',
     `Sector: ${td.details?.sector || 'n/a'}`,
     `Annual revenue: ${fmtMoney(td.revenue)} · Net income: ${fmtMoney(td.netIncome)}`,
+    `Net margin: ${margin !== null ? `${margin.toFixed(1)}%` : 'n/a'} · Price/Sales: ${ps !== null ? `${ps.toFixed(2)}x` : 'n/a'}`,
     td.earnings
       ? `Next earnings: ${td.earnings.date} (${td.earnings.isEstimate ? 'estimated' : 'confirmed'}, via ${td.earnings.source})`
       : 'Next earnings: not available — do NOT guess an earnings date.',
@@ -58,8 +119,10 @@ const REPORT_RULES =
   '{"title","subtitle","ticker","company","asOf","stats":[{"label","value"} up to 12],' +
   '"sections":[{"heading","body","bullets":[..up to 6]} 1..20],"disclaimer"}. ' +
   'Mandated sections in order: Overview, Financials, Technical setup, Pros, Cons. ' +
+  'In "Technical setup", cite the WEEKLY price change (label it "Weekly Price Change"); do NOT feature the daily change there. ' +
   'Ground every claim in the provided live data; where data is missing say so — never invent numbers, ' +
-  'prices or earnings dates. A net loss produces a NEGATIVE trailing P/E — report the negative value, do not call it N/A. ' +
+  'prices or earnings dates. A net loss produces a NEGATIVE P/E — report the negative value, do not call it N/A. ' +
+  'The app fills the stat cards itself, so focus your effort on the section prose. ' +
   'End with a short educational disclaimer (not financial advice).'
 
 export default function register(ctx: ModuleIpcContext): void {
@@ -178,6 +241,8 @@ export default function register(ctx: ModuleIpcContext): void {
     aiBusy = true
     try {
       const td = await getTickerData(marketKeys(), sym, true)
+      const mk = marketKeys()
+      const weekly = mk.massive ? await weeklyChangePct(mk.massive, sym) : null
       const doc = docs.get(sym)
       if (td.details?.name) doc.company = td.details.name
       const images = withTrendlines ? doc.images : []
@@ -189,7 +254,7 @@ export default function register(ctx: ModuleIpcContext): void {
         {
           role: 'user',
           text:
-            `Write the report for ${sym}.\n\nLIVE DATA (authoritative — use it, do not contradict it):\n${summaryBlock(td)}\n\n` +
+            `Write the report for ${sym}.\n\nLIVE DATA (authoritative — use it, do not contradict it):\n${summaryBlock(td, weekly)}\n\n` +
             (td.details?.description ? `Company description: ${td.details.description.slice(0, 1200)}\n\n` : '') +
             (withTrendlines
               ? 'The attached chart screenshots show the user\'s drawn trendlines. Add a "Trendline read" section analyzing support/resistance, the trend direction, and what price zones matter — referring to what is actually visible.'
@@ -203,6 +268,9 @@ export default function register(ctx: ModuleIpcContext): void {
       if (!report) return { ok: false, error: 'The AI returned an unreadable report — try again.' }
       report.ticker = report.ticker || sym
       report.company = report.company || doc.company
+      // App-computed stat cards (real data) override the model's — so P/E,
+      // net margin and price/sales are correct, not hallucinated.
+      report.stats = buildStats(td)
 
       // Real "Past Earnings" section — last 4 reported quarters, expected vs
       // reported EPS. Pulled from live data (never AI-guessed) and injected so it

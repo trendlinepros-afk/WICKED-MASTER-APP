@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect } from 'react'
 import {
   ArrowDownRight,
@@ -336,7 +337,7 @@ export default function TradeLog(): React.JSX.Element {
         <div className="border-b border-edge p-4">
           <div className="flex items-center gap-2">
             <NotebookPen size={18} className="text-accent" />
-            <h1 className="text-base font-bold tracking-tight">Trade Log</h1>
+            <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Trade Log" /></h1>
           </div>
           <p className="mt-0.5 text-xs text-muted">
             {entries.length === 0 ? 'No entries yet' : `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} · ${closedCount} closed`}

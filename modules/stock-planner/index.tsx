@@ -1,3 +1,4 @@
+import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -832,7 +833,7 @@ export default function StockPlanner(): React.JSX.Element {
           <NotebookPen size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-bold tracking-tight">Stock Planner</h1>
+          <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Stock Research" /></h1>
           <p className="truncate text-xs text-muted">
             {s.ticker ? `${s.ticker}${s.doc?.company ? ` — ${s.doc.company}` : ''}` : 'Guided research desk'}
             {s.status ? ` · market ${s.status.session}` : ''}
