@@ -56,19 +56,65 @@ export async function getFinnhubEarnings(key: string, sym: string): Promise<Earn
   }
 }
 
+export interface FinnhubMetrics {
+  /** trailing P/E (negative on a net loss); Finnhub, one call */
+  pe: number | null
+  week52High: number | null
+  week52Low: number | null
+}
+
 /**
- * Trailing P/E straight from Finnhub's basic financials — a robust fallback when
- * we can't derive it from marketCap/net-income. Finnhub reports a negative value
- * for a net loss, which is exactly what we want (never null it out).
+ * Basic-financials metrics from Finnhub (`/stock/metric`): a trailing P/E fallback
+ * (negative for a net loss — never nulled) plus the 52-week price range, which
+ * Polygon/Massive does not provide. One request.
  */
-export async function getFinnhubPE(key: string, sym: string): Promise<number | null> {
+export async function getFinnhubMetrics(key: string, sym: string): Promise<FinnhubMetrics> {
   const j = await finnhubFetch(key, `/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all`)
-  const metric = rec(rec(j).metric)
+  const m = rec(rec(j).metric)
+  let pe: number | null = null
   for (const k of ['peTTM', 'peBasicExclExtraTTM', 'peExclExtraTTM', 'peNormalizedAnnual', 'peAnnual']) {
-    const v = numOrNull(metric[k])
-    if (v != null && v !== 0) return v
+    const v = numOrNull(m[k])
+    if (v != null && v !== 0) {
+      pe = v
+      break
+    }
   }
-  return null
+  return {
+    pe,
+    week52High: numOrNull(m['52WeekHigh']) ?? numOrNull(m['52WeekPriceHigh']),
+    week52Low: numOrNull(m['52WeekLow']) ?? numOrNull(m['52WeekPriceLow'])
+  }
+}
+
+/** Analyst rating consensus (Buy / Hold / Sell) — the "what Wall Street thinks" card. */
+export interface AnalystConsensus {
+  /** Strong Buy | Buy | Hold | Sell */
+  label: string
+  strongBuy: number
+  buy: number
+  hold: number
+  sell: number
+  strongSell: number
+  total: number
+}
+
+/** Latest analyst recommendation trend from Finnhub (`/stock/recommendation`). */
+export async function getFinnhubRecommendation(key: string, sym: string): Promise<AnalystConsensus | null> {
+  const j = await finnhubFetch(key, `/stock/recommendation?symbol=${encodeURIComponent(sym)}`)
+  const rows = arr(j).map(rec)
+  if (rows.length === 0) return null
+  const r = rows.sort((a, b) => String(b.period ?? '').localeCompare(String(a.period ?? '')))[0]
+  const strongBuy = numOrNull(r.strongBuy) ?? 0
+  const buy = numOrNull(r.buy) ?? 0
+  const hold = numOrNull(r.hold) ?? 0
+  const sell = numOrNull(r.sell) ?? 0
+  const strongSell = numOrNull(r.strongSell) ?? 0
+  const total = strongBuy + buy + hold + sell + strongSell
+  if (total === 0) return null
+  const bull = (strongBuy + buy) / total
+  const bear = (sell + strongSell) / total
+  const label = bull >= 0.75 ? 'Strong Buy' : bull >= 0.5 ? 'Buy' : bear >= 0.5 ? 'Sell' : 'Hold'
+  return { label, strongBuy, buy, hold, sell, strongSell, total }
 }
 
 /** One past earnings report: the quarter end date + expected vs reported EPS. */

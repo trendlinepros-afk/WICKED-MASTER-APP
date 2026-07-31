@@ -46,8 +46,10 @@ const fmtMoney = (v: number | null): string => {
 function buildStats(td: TickerData): { label: string; value: string }[] {
   const q = td.quote
   const cap = td.details?.marketCap ?? null
-  const margin = td.revenue && td.revenue !== 0 && td.netIncome !== null ? (td.netIncome / td.revenue) * 100 : null
-  const ps = cap && cap > 0 && td.revenue && td.revenue > 0 ? cap / td.revenue : null
+  const a = td.analyst
+  const analystValue = a ? `${a.label} · ${a.strongBuy + a.buy}B / ${a.hold}H / ${a.sell + a.strongSell}S` : 'n/a'
+  const range =
+    td.week52Low !== null && td.week52High !== null ? `$${td.week52Low.toFixed(2)} – $${td.week52High.toFixed(2)}` : 'n/a'
   return [
     {
       label: 'Price',
@@ -60,8 +62,8 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
     { label: 'P/E', value: td.pe !== null ? td.pe.toFixed(1) : 'n/a' },
     { label: 'Annual revenue', value: fmtMoney(td.revenue) },
     { label: 'Net income', value: fmtMoney(td.netIncome) },
-    { label: 'Net margin', value: margin !== null ? `${margin.toFixed(1)}%` : 'n/a' },
-    { label: 'Price / sales', value: ps !== null ? `${ps.toFixed(2)}x` : 'n/a' },
+    { label: 'Analyst research', value: analystValue },
+    { label: '52-week range', value: range },
     { label: 'Sector', value: td.details?.sector || 'n/a' },
     {
       label: 'Next earnings',
@@ -102,6 +104,10 @@ function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
       ? `P/E: ${td.pe.toFixed(1)}${td.pe < 0 ? ' (negative — reflects a net loss)' : ''}`
       : 'P/E: not available',
     `Sector: ${td.details?.sector || 'n/a'}`,
+    `52-week range: ${td.week52Low !== null && td.week52High !== null ? `$${td.week52Low.toFixed(2)} – $${td.week52High.toFixed(2)}` : 'not available'}`,
+    td.analyst
+      ? `Analyst consensus: ${td.analyst.label} (${td.analyst.strongBuy + td.analyst.buy} buy / ${td.analyst.hold} hold / ${td.analyst.sell + td.analyst.strongSell} sell, ${td.analyst.total} analysts)`
+      : 'Analyst consensus: not available',
     `Annual revenue: ${fmtMoney(td.revenue)} · Net income: ${fmtMoney(td.netIncome)}`,
     `Net margin: ${margin !== null ? `${margin.toFixed(1)}%` : 'n/a'} · Price/Sales: ${ps !== null ? `${ps.toFixed(2)}x` : 'n/a'}`,
     td.earnings
@@ -120,6 +126,7 @@ const REPORT_RULES =
   '"sections":[{"heading","body","bullets":[..up to 6]} 1..20],"disclaimer"}. ' +
   'Mandated sections in order: Overview, Financials, Technical setup, Pros, Cons. ' +
   'In "Technical setup", cite the WEEKLY price change (label it "Weekly Price Change"); do NOT feature the daily change there. ' +
+  'The live data includes the 52-week range and the analyst Buy/Hold/Sell consensus — use them (e.g. where price sits within the 52-week range, and what analysts rate the stock). ' +
   'Ground every claim in the provided live data; where data is missing say so — never invent numbers, ' +
   'prices or earnings dates. A net loss produces a NEGATIVE P/E — report the negative value, do not call it N/A. ' +
   'The app fills the stat cards itself, so focus your effort on the section prose. ' +

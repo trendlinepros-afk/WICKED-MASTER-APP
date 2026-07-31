@@ -17,7 +17,14 @@ import {
   type NewsItem,
   type TickerDetails
 } from './massive'
-import { getCompanyNews, getFinnhubEarnings, getFinnhubPE, type EarningsDate } from './finnhub'
+import {
+  getCompanyNews,
+  getFinnhubEarnings,
+  getFinnhubMetrics,
+  getFinnhubRecommendation,
+  type AnalystConsensus,
+  type EarningsDate
+} from './finnhub'
 import { computePE, resolveQuote, type ResolvedQuote } from './quotes'
 import { etTodayYmd } from './sessions'
 import { yahooEarnings, yahooQuoteFallback } from './yahoo'
@@ -31,6 +38,11 @@ export interface TickerData {
   netIncome: number | null
   earnings: EarningsDate | null
   news: NewsItem[]
+  /** 52-week price range (Finnhub; Polygon doesn't provide it) */
+  week52High: number | null
+  week52Low: number | null
+  /** analyst Buy/Hold/Sell consensus (Finnhub) */
+  analyst: AnalystConsensus | null
 }
 
 export interface MarketKeys {
@@ -60,7 +72,7 @@ export async function getTickerData(
   const sym = symRaw.trim().toUpperCase()
   const m = keys.massive
 
-  const [details, snapshot, prev, financials, news, earnings, finnhubPe] = await Promise.all([
+  const [details, snapshot, prev, financials, news, earnings, finnhubMetrics, analyst] = await Promise.all([
     m ? getTickerDetails(m, sym) : null,
     m ? getSnapshot(m, sym) : null,
     m ? getPrevClose(m, sym) : null,
@@ -73,9 +85,10 @@ export async function getTickerData(
           : []
       : [],
     extras ? earningsCascade(keys, sym) : null,
-    // Robust P/E: prefer marketCap/net-income (gives a negative on a net loss);
-    // fall back to Finnhub's reported trailing P/E when our fundamentals are thin.
-    extras && keys.finnhub ? getFinnhubPE(keys.finnhub, sym) : null
+    // Finnhub-only data: a P/E fallback + the 52-week range, and the analyst
+    // Buy/Hold/Sell consensus. Polygon/Massive provides none of these.
+    extras && keys.finnhub ? getFinnhubMetrics(keys.finnhub, sym) : null,
+    extras && keys.finnhub ? getFinnhubRecommendation(keys.finnhub, sym) : null
   ])
 
   let quote = resolveQuote(snapshot, prev)
@@ -89,10 +102,13 @@ export async function getTickerData(
     symbol: sym,
     details,
     quote,
-    pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubPe,
+    pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubMetrics?.pe ?? null,
     revenue: financials.revenue,
     netIncome: financials.netIncome,
     earnings,
-    news
+    news,
+    week52High: finnhubMetrics?.week52High ?? null,
+    week52Low: finnhubMetrics?.week52Low ?? null,
+    analyst
   }
 }
