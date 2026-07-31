@@ -9,6 +9,7 @@ import { DocStore, type StockDoc } from './ipc/docs'
 import { parseReportSpec, type ReportSpec } from './ipc/report'
 import { getAggregates, getIpos, searchTickers } from './ipc/market/massive'
 import { getEarningsHistory } from './ipc/market/finnhub'
+import { computeTechnicals, type Technicals } from './ipc/market/technicals'
 import { marketSession } from './ipc/market/sessions'
 import { getTickerData, type MarketKeys, type TickerData } from './ipc/market/tickerdata'
 import { afterHoursGainers, dailyGainers, periodGainers, preMarketGainers } from './ipc/market/screeners'
@@ -78,22 +79,57 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
   ].slice(0, 12)
 }
 
-/** Weekly price change (last ~5 trading days) from daily closes, or null. */
-async function weeklyChangePct(key: string, sym: string): Promise<number | null> {
+/** Full technical picture (MAs, RSI, trend, 52-wk position, volume, ATR, S/R)
+ *  from ~2 years of daily bars — one Polygon call. null when history is thin. */
+async function fetchTechnicals(key: string, sym: string): Promise<Technicals | null> {
   try {
     const to = Date.now()
-    const bars = await getAggregates(key, sym, 1, 'day', to - 24 * 86_400_000, to)
-    if (bars.length < 2) return null
-    const last = bars[bars.length - 1].c
-    const ref = bars[Math.max(0, bars.length - 1 - 5)].c
-    return ref > 0 && last > 0 ? ((last - ref) / ref) * 100 : null
+    const bars = await getAggregates(key, sym, 1, 'day', to - 740 * 86_400_000, to)
+    return computeTechnicals(bars)
   } catch {
     return null
   }
 }
 
+const pctStr = (v: number | null): string => (v == null ? 'n/a' : `${v >= 0 ? '+' : ''}${v.toFixed(v <= -1 || v >= 1 ? 1 : 2)}%`)
+const usd = (v: number | null): string => (v == null ? 'n/a' : `$${v.toFixed(2)}`)
+
+/** The TECHNICALS block injected into the report prompt. */
+function technicalsBlock(t: Technicals): string {
+  const lines: string[] = ['TECHNICALS (computed from ~2y of daily bars — USE THESE; do NOT say technicals were not provided):']
+  lines.push(`  Trend: ${t.trend}.${t.maRegime ? ` ${t.maRegime}.` : ''}`)
+  const mas: string[] = []
+  if (t.sma20 != null) mas.push(`20-DMA ${usd(t.sma20)}`)
+  if (t.sma50 != null) mas.push(`50-DMA ${usd(t.sma50)}`)
+  if (t.sma200 != null) mas.push(`200-DMA ${usd(t.sma200)}`)
+  if (mas.length) {
+    const rel: string[] = []
+    if (t.priceVsSma50Pct != null) rel.push(`${pctStr(t.priceVsSma50Pct)} vs its 50-DMA`)
+    if (t.priceVsSma200Pct != null) rel.push(`${pctStr(t.priceVsSma200Pct)} vs its 200-DMA`)
+    lines.push(`  Moving averages: ${mas.join(', ')}${rel.length ? ` — price is ${rel.join(' and ')}` : ''}.`)
+  }
+  if (t.rsi14 != null)
+    lines.push(`  RSI(14): ${t.rsi14} (${t.rsi14 >= 70 ? 'overbought' : t.rsi14 <= 30 ? 'oversold' : 'neutral'}).`)
+  lines.push(
+    `  Returns: 1W ${pctStr(t.weeklyChange)}, 1M ${pctStr(t.ret1m)}, 3M ${pctStr(t.ret3m)}, 6M ${pctStr(t.ret6m)}, 1Y ${pctStr(t.ret1y)}.`
+  )
+  if (t.high52 != null && t.low52 != null)
+    lines.push(
+      `  52-week range ${usd(t.low52)}–${usd(t.high52)}; price sits at ${t.pctOfRange ?? 'n/a'}% of the range${t.pctFromHigh != null ? ` (${pctStr(t.pctFromHigh)} from the 52-wk high)` : ''}.`
+    )
+  if (t.recentLow != null && t.recentHigh != null)
+    lines.push(`  Recent ~1-month support ≈ ${usd(t.recentLow)}, resistance ≈ ${usd(t.recentHigh)}.`)
+  if (t.volTrendPct != null)
+    lines.push(
+      `  Volume trend: recent 10-day average is ${pctStr(t.volTrendPct)} vs its ~50-day average${t.avgVol20 != null ? ` (20-day avg ${t.avgVol20.toLocaleString('en-US')} sh)` : ''}.`
+    )
+  if (t.atrPct != null) lines.push(`  Volatility: ATR(14) ≈ ${t.atrPct}% of price.`)
+  return lines.join('\n')
+}
+
 /** Live-data summary block injected into report + chat prompts. */
-function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
+function summaryBlock(td: TickerData, tech?: Technicals | null): string {
+  const weeklyPct = tech?.weeklyChange ?? null
   const q = td.quote
   const cap = td.details?.marketCap ?? null
   // Prefer Yahoo's TTM net margin; fall back to (annual net income / annual revenue).
@@ -138,6 +174,7 @@ function summaryBlock(td: TickerData, weeklyPct?: number | null): string {
       ? 'Recent headlines:\n' + td.news.slice(0, 3).map((n) => `  - ${n.title} (${n.source})`).join('\n')
       : 'Recent headlines: none available'
   ]
+  if (tech) lines.push(technicalsBlock(tech))
   return lines.join('\n')
 }
 
@@ -146,8 +183,9 @@ const REPORT_RULES =
   '{"title","subtitle","ticker","company","asOf","stats":[{"label","value"} up to 12],' +
   '"sections":[{"heading","body","bullets":[..up to 6]} 1..20],"disclaimer"}. ' +
   'Mandated sections in order: Overview, Financials, Technical setup, Pros, Cons. ' +
-  'In "Technical setup", cite the WEEKLY price change (label it "Weekly Price Change"); do NOT feature the daily change there. ' +
-  'The live data includes the 52-week range, the analyst Buy/Hold/Sell consensus, the analyst price target, and recent per-firm rating actions — use them (where price sits in its 52-week range, the consensus vs the price target, and any notable upgrades/downgrades). ' +
+  'The live data includes a full TECHNICALS block (moving averages, RSI, trend, 52-week position, multi-period returns, recent support/resistance, volume trend, ATR volatility). ' +
+  '"Technical setup" MUST use it: state the trend and moving-average structure, RSI (overbought/oversold/neutral), where price sits in its 52-week range, the recent support/resistance levels, and the volume/volatility read — and cite the WEEKLY change, not the daily. Do NOT claim technical data was unavailable. ' +
+  'The live data also includes the analyst Buy/Hold/Sell consensus, the analyst price target, and recent per-firm rating actions — use them (consensus vs price target, notable upgrades/downgrades). ' +
   'Ground every claim in the provided live data; where data is missing say so — never invent numbers, ' +
   'prices or earnings dates. A net loss produces a NEGATIVE P/E — report the negative value, do not call it N/A. ' +
   'The app fills the stat cards itself, so focus your effort on the section prose. ' +
@@ -268,9 +306,11 @@ export default function register(ctx: ModuleIpcContext): void {
     if (aiBusy) return { ok: false, error: 'An AI request is already running.' }
     aiBusy = true
     try {
-      const td = await getTickerData(marketKeys(), sym, true)
       const mk = marketKeys()
-      const weekly = mk.massive ? await weeklyChangePct(mk.massive, sym) : null
+      const [td, tech] = await Promise.all([
+        getTickerData(mk, sym, true),
+        mk.massive ? fetchTechnicals(mk.massive, sym) : Promise.resolve(null)
+      ])
       const doc = docs.get(sym)
       if (td.details?.name) doc.company = td.details.name
       const images = withTrendlines ? doc.images : []
@@ -282,7 +322,7 @@ export default function register(ctx: ModuleIpcContext): void {
         {
           role: 'user',
           text:
-            `Write the report for ${sym}.\n\nLIVE DATA (authoritative — use it, do not contradict it):\n${summaryBlock(td, weekly)}\n\n` +
+            `Write the report for ${sym}.\n\nLIVE DATA (authoritative — use it, do not contradict it):\n${summaryBlock(td, tech)}\n\n` +
             (td.details?.description ? `Company description: ${td.details.description.slice(0, 1200)}\n\n` : '') +
             (withTrendlines
               ? 'The attached chart screenshots show the user\'s drawn trendlines. Add a "Trendline read" section analyzing support/resistance, the trend direction, and what price zones matter — referring to what is actually visible.'
