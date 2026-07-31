@@ -96,13 +96,15 @@ export interface YahooFundamentals {
   ratingActions: RatingAction[]
   /** forward/indicated dividend yield as a FRACTION (e.g. 0.023 = 2.3%); null = non-payer/unknown */
   dividendYield: number | null
+  /** GICS-style sector from assetProfile — the FREE source Polygon lacks for foreign ADRs. */
+  sector: string | null
 }
 
 export async function yahooFundamentals(sym: string): Promise<YahooFundamentals | null> {
   const c = await yahooCreds()
   if (!c) return null
   try {
-    const modules = 'price,summaryDetail,defaultKeyStatistics,financialData,upgradeDowngradeHistory'
+    const modules = 'price,summaryDetail,defaultKeyStatistics,financialData,upgradeDowngradeHistory,assetProfile'
     const resp = await fetch(
       `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=${modules}&crumb=${encodeURIComponent(c.crumb)}`,
       { headers: { 'User-Agent': UA, Cookie: c.cookie }, signal: AbortSignal.timeout(TIMEOUT_MS) }
@@ -114,6 +116,7 @@ export async function yahooFundamentals(sym: string): Promise<YahooFundamentals 
     const sd = (r.summaryDetail ?? {}) as Record<string, unknown>
     const fd = (r.financialData ?? {}) as Record<string, unknown>
     const pr = (r.price ?? {}) as Record<string, unknown>
+    const ap = (r.assetProfile ?? {}) as Record<string, unknown>
     const hist = Array.isArray((r.upgradeDowngradeHistory as { history?: unknown[] })?.history)
       ? ((r.upgradeDowngradeHistory as { history: Record<string, unknown>[] }).history)
       : []
@@ -141,7 +144,8 @@ export async function yahooFundamentals(sym: string): Promise<YahooFundamentals 
       recommendationKey: typeof fd.recommendationKey === 'string' ? fd.recommendationKey : null,
       numAnalysts: yNum(fd.numberOfAnalystOpinions),
       ratingActions,
-      dividendYield: yNum(sd.dividendYield) ?? yNum(sd.trailingAnnualDividendYield)
+      dividendYield: yNum(sd.dividendYield) ?? yNum(sd.trailingAnnualDividendYield),
+      sector: typeof ap.sector === 'string' && ap.sector.trim() ? ap.sector.trim() : null
     }
   } catch {
     return null

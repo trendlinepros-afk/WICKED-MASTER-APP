@@ -71,7 +71,7 @@ function buildStats(td: TickerData): { label: string; value: string }[] {
     { label: 'Dividend yield', value: td.dividendYield != null && td.dividendYield > 0 ? `${(td.dividendYield * 100).toFixed(2)}%` : 'None' },
     { label: 'Analyst research', value: analystValue },
     { label: '52-week range', value: range },
-    { label: 'Sector', value: td.details?.sector ? td.details.sector.split(' (')[0].trim().slice(0, 42) : 'n/a' },
+    { label: 'Sector', value: td.sector ? td.sector.split(' (')[0].trim().slice(0, 42) : 'n/a' },
     {
       label: 'Next earnings',
       value: td.earnings ? `${td.earnings.date} (${td.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'n/a'
@@ -153,7 +153,7 @@ function summaryBlock(td: TickerData, tech?: Technicals | null): string {
     td.pe !== null
       ? `P/E: ${td.pe.toFixed(1)}${td.pe < 0 ? ' (negative — reflects a net loss)' : ''}`
       : 'P/E: not available',
-    `Sector: ${td.details?.sector || 'n/a'}`,
+    `Sector: ${td.sector || 'n/a'}`,
     `52-week range: ${td.week52Low !== null && td.week52High !== null ? `$${td.week52Low.toFixed(2)} – $${td.week52High.toFixed(2)}` : 'not available'}`,
     td.analyst
       ? `Analyst consensus: ${td.analyst.label} (${td.analyst.strongBuy + td.analyst.buy} buy / ${td.analyst.hold} hold / ${td.analyst.sell + td.analyst.strongSell} sell, ${td.analyst.total} analysts)`
@@ -525,19 +525,19 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   }
 
-  // The renderer builds the PDF (jsPDF) and sends bytes; default save location
-  // is Documents/Stock Trading/{TICKER — Company}/ per the ported convention.
+  // The renderer builds the PDF (jsPDF) and sends bytes; we save into the
+  // current user's Downloads folder (resolved per-machine via Electron's
+  // 'downloads' path) so exports land somewhere that exists on every system —
+  // not a machine-specific Documents path baked into synced data.
   ctx.ipcMain.handle(`${ID}:save-pdf`, async (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
     const sym = typeof r.ticker === 'string' ? r.ticker.trim().toUpperCase() : 'REPORT'
     const b64 = typeof r.data === 'string' ? r.data : ''
     if (!b64) return { ok: false, error: 'No PDF data.' }
     const company = docs.get(sym).company
-    const folder = join(
-      ctx.app.getPath('documents'),
-      'Stock Trading',
-      company ? `${sym} — ${company}`.slice(0, 80) : sym
-    )
+    // A tidy sub-folder inside Downloads keeps reports grouped without ever
+    // depending on a path from another machine. Downloads always exists.
+    const folder = join(ctx.app.getPath('downloads'), 'Stock Research')
     try {
       mkdirSync(folder, { recursive: true })
       const stamp = new Date()
@@ -548,7 +548,8 @@ export default function register(ctx: ModuleIpcContext): void {
         { ticker: sym, company, file, savedAt: Date.now() },
         ...readHistory().filter((e) => e.file !== file)
       ])
-      await ctx.shell.openPath(folder)
+      // Highlight the freshly-written file in the OS file browser.
+      ctx.shell.showItemInFolder(file)
       return { ok: true, file }
     } catch (err) {
       return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
@@ -581,10 +582,10 @@ export default function register(ctx: ModuleIpcContext): void {
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {
     const docsDir = join(ctx.app.getPath('userData'), 'modules', ID, 'docs')
-    const exportDir = join(ctx.app.getPath('documents'), 'Stock Trading')
+    const exportDir = join(ctx.app.getPath('downloads'), 'Stock Research')
     return [
       { label: 'Analysis docs', path: existsSync(docsDir) ? docsDir : null, note: 'Per-ticker reports, chat and screenshots' },
-      { label: 'Exports', path: existsSync(exportDir) ? exportDir : null, note: 'Saved PDFs, one folder per ticker' }
+      { label: 'Exports', path: existsSync(exportDir) ? exportDir : null, note: 'Saved PDFs in your Downloads folder' }
     ]
   })
 }

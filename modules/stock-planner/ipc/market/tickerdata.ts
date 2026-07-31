@@ -36,6 +36,8 @@ export interface TickerData {
   pe: number | null
   revenue: number | null
   netIncome: number | null
+  /** Sector: Polygon SIC first, Yahoo assetProfile fallback (covers foreign ADRs). */
+  sector: string | null
   earnings: EarningsDate | null
   news: NewsItem[]
   /** 52-week price range (Finnhub, Yahoo fallback) */
@@ -113,8 +115,11 @@ export async function getTickerData(
     details,
     quote,
     pe: computePE(details?.marketCap, financials.netIncome) ?? finnhubMetrics?.pe ?? yahoo?.trailingPE ?? null,
-    revenue: financials.revenue,
+    // Polygon annual revenue first; Yahoo TTM revenue fills the gap for foreign
+    // filers (e.g. CX) that never appear in Polygon's SEC-XBRL financials feed.
+    revenue: financials.revenue ?? yahoo?.revenueTTM ?? null,
     netIncome: financials.netIncome,
+    sector: (details?.sector && details.sector.trim()) || yahoo?.sector || null,
     earnings,
     news,
     week52High: finnhubMetrics?.week52High ?? yahoo?.week52High ?? null,

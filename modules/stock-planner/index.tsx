@@ -395,7 +395,7 @@ function DataPanel({ d }: { d: TickerData }): React.JSX.Element {
     ['P/E', d.pe !== null ? d.pe.toFixed(1) : d.netIncome !== null && d.netIncome <= 0 ? 'n/a (net loss)' : '—'],
     ['Revenue (yr)', money(d.revenue)],
     ['Net income', money(d.netIncome)],
-    ['Sector', d.details?.sector || '—'],
+    ['Sector', d.sector || '—'],
     [
       'Next earnings',
       d.earnings ? `${d.earnings.date} (${d.earnings.isEstimate ? 'est.' : 'confirmed'})` : 'not available'

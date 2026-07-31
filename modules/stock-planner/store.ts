@@ -36,6 +36,8 @@ export interface TickerData {
   pe: number | null
   revenue: number | null
   netIncome: number | null
+  /** Sector: Polygon SIC first, Yahoo assetProfile fallback (covers foreign ADRs). */
+  sector: string | null
   earnings: { date: string; isEstimate: boolean; source: string } | null
   news: { title: string; url: string; source: string; publishedAt: string }[]
 }
