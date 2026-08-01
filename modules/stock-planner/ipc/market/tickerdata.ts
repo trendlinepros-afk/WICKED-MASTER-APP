@@ -143,6 +143,8 @@ export async function getTickerData(
       : null,
     ratingActions: yahoo?.ratingActions ?? [],
     netMarginTTM: yahoo?.netMarginTTM ?? null,
-    dividendYield: yahoo?.dividendYield ?? null
+    // Finnhub's /stock/metric is the reliable free dividend source (Yahoo's
+    // cookie/crumb path frequently returns nothing); fall back to Yahoo.
+    dividendYield: finnhubMetrics?.dividendYield ?? yahoo?.dividendYield ?? null
   }
 }

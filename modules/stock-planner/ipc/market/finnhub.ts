@@ -90,12 +90,15 @@ export interface FinnhubMetrics {
   pe: number | null
   week52High: number | null
   week52Low: number | null
+  /** dividend yield as a FRACTION (Finnhub reports a %, normalized here); null/0 = non-payer */
+  dividendYield: number | null
 }
 
 /**
  * Basic-financials metrics from Finnhub (`/stock/metric`): a trailing P/E fallback
- * (negative for a net loss — never nulled) plus the 52-week price range, which
- * Polygon/Massive does not provide. One request.
+ * (negative for a net loss — never nulled), the 52-week price range, and the
+ * dividend yield — none of which Polygon/Massive provides. One request, and it's
+ * the reliable free source for the dividend (Yahoo's cookie/crumb path is flaky).
  */
 export async function getFinnhubMetrics(key: string, sym: string): Promise<FinnhubMetrics> {
   const j = await finnhubFetch(key, `/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all`)
@@ -108,10 +111,22 @@ export async function getFinnhubMetrics(key: string, sym: string): Promise<Finnh
       break
     }
   }
+  // Finnhub gives dividend yields as PERCENTAGES (e.g. 2.4 = 2.4%). Prefer the
+  // forward/indicated figure, then trailing. Store as a fraction so the UI's
+  // ×100 renders it correctly.
+  let divPct: number | null = null
+  for (const k of ['dividendYieldIndicatedAnnual', 'currentDividendYieldTTM', 'dividendYieldTTM', 'dividendYield']) {
+    const v = numOrNull(m[k])
+    if (v != null && v > 0) {
+      divPct = v
+      break
+    }
+  }
   return {
     pe,
     week52High: numOrNull(m['52WeekHigh']) ?? numOrNull(m['52WeekPriceHigh']),
-    week52Low: numOrNull(m['52WeekLow']) ?? numOrNull(m['52WeekPriceLow'])
+    week52Low: numOrNull(m['52WeekLow']) ?? numOrNull(m['52WeekPriceLow']),
+    dividendYield: divPct != null ? divPct / 100 : null
   }
 }
 
