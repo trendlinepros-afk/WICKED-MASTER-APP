@@ -180,15 +180,26 @@ export function rankRows(rows: Candidate[], plan: ScreenPlan): Candidate[] {
   return sorted
 }
 
-/** Post-enrichment filters that need sector / market-cap / news / keywords. */
-export function applyEnrichedFilters(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+/**
+ * Post-enrichment filters that need sector / market-cap / news / keywords.
+ * In `soft` mode a MISSING datum (enrichment gap — e.g. a rate-limited free
+ * Polygon plan couldn't fetch market cap) does NOT drop the row; only a
+ * present-but-out-of-range value does. This keeps the one-click presets from
+ * returning nothing when per-ticker enrichment is incomplete.
+ */
+export function applyEnrichedFilters(rows: Candidate[], plan: ScreenPlan, soft = false): Candidate[] {
   const wantSectors = plan.sectors.map((s) => s.toLowerCase())
   const kw = plan.keywords.map((k) => k.toLowerCase()).filter(Boolean)
+  const wantsCap = plan.minMarketCap != null || plan.maxMarketCap != null
   return rows.filter((r) => {
-    if (!inRange(r.marketCap ?? null, plan.minMarketCap, plan.maxMarketCap)) return false
+    if (r.marketCap != null) {
+      if (!inRange(r.marketCap, plan.minMarketCap, plan.maxMarketCap)) return false
+    } else if (wantsCap && !soft) return false
     if (wantSectors.length > 0) {
       const sec = (r.sector ?? '').toLowerCase()
-      if (!wantSectors.some((w) => sec.includes(w) || w.includes(sec))) return false
+      if (sec) {
+        if (!wantSectors.some((w) => sec.includes(w) || w.includes(sec))) return false
+      } else if (!soft) return false
     }
     if (plan.needsNews && (r.news?.length ?? 0) === 0) return false
     if (kw.length > 0) {
@@ -199,16 +210,31 @@ export function applyEnrichedFilters(rows: Candidate[], plan: ScreenPlan): Candi
   })
 }
 
-/** Filters that need the Tier 1 technical signals (attached at enrichment). */
-export function applySignalFilters(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+/** Filters that need the Tier 1 technical signals (attached at enrichment).
+ *  `soft` keeps rows whose signals couldn't be computed (see above). */
+export function applySignalFilters(rows: Candidate[], plan: ScreenPlan, soft = false): Candidate[] {
+  // A "min" gate on a possibly-missing value: strict drops on missing; soft keeps.
+  const atLeast = (val: number | null | undefined, lo: number | null): boolean =>
+    lo == null ? true : val == null || Number.isNaN(val) ? soft : val >= lo
+  const atMost = (val: number | null | undefined, hi: number | null): boolean =>
+    hi == null ? true : val == null || Number.isNaN(val) ? soft : val <= hi
   return rows.filter((r) => {
     const s = r.signals
-    if (plan.minRvol != null && !(s && s.rvol != null && s.rvol >= plan.minRvol)) return false
-    if (plan.minGapPct != null && !(s && s.gapPct != null && s.gapPct >= plan.minGapPct)) return false
-    if (plan.maxGapPct != null && !(s && s.gapPct != null && s.gapPct <= plan.maxGapPct)) return false
-    if (plan.minAtrPct != null && !(s && s.atrPct != null && s.atrPct >= plan.minAtrPct)) return false
-    if (plan.nearHigh && !(s && s.pctFrom52High != null && s.pctFrom52High >= -5)) return false
-    if (plan.requireUptrend && !(s && s.trendUp && s.aboveSma20)) return false
+    if (!atLeast(s?.rvol, plan.minRvol)) return false
+    if (!atLeast(s?.gapPct, plan.minGapPct)) return false
+    if (!atMost(s?.gapPct, plan.maxGapPct)) return false
+    if (!atLeast(s?.atrPct, plan.minAtrPct)) return false
+    if (plan.nearHigh) {
+      if (s?.pctFrom52High == null) {
+        if (!soft) return false
+      } else if (s.pctFrom52High < -5) return false
+    }
+    if (plan.requireUptrend) {
+      // rsi14 present ⇒ we had enough daily bars to judge the trend at all.
+      if (s?.rsi14 == null) {
+        if (!soft) return false
+      } else if (!(s.trendUp && s.aboveSma20)) return false
+    }
     if (plan.minScore != null && !(r.score && r.score.score >= plan.minScore)) return false
     return true
   })
@@ -233,14 +259,31 @@ export function applyLiquidityGate(rows: Candidate[], plan: ScreenPlan): Candida
   })
 }
 
-/** Filters that need the Tier 3 smart-money extras (analyst / insider / short). */
-export function applyExtrasFilters(rows: Candidate[], plan: ScreenPlan): Candidate[] {
+/** Filters that need the Tier 3 smart-money extras (analyst / insider / short).
+ *  `soft` keeps rows whose extras (Finnhub) weren't available (see above). */
+export function applyExtrasFilters(rows: Candidate[], plan: ScreenPlan, soft = false): Candidate[] {
   return rows.filter((r) => {
     const e = r.extras
-    if (plan.insiderBuying && !(e && e.insiderBuying)) return false
-    if (plan.minAnalystBull != null && !(e && e.analystBull != null && e.analystBull >= plan.minAnalystBull)) return false
-    if (plan.minShortPctFloat != null && !(e && e.shortPctFloat != null && e.shortPctFloat >= plan.minShortPctFloat)) return false
-    if (plan.maxDaysToEarnings != null && !(r.daysToEarnings != null && r.daysToEarnings >= 0 && r.daysToEarnings <= plan.maxDaysToEarnings)) return false
+    if (plan.insiderBuying) {
+      if (!e) {
+        if (!soft) return false
+      } else if (!e.insiderBuying) return false
+    }
+    if (plan.minAnalystBull != null) {
+      if (e?.analystBull == null) {
+        if (!soft) return false
+      } else if (e.analystBull < plan.minAnalystBull) return false
+    }
+    if (plan.minShortPctFloat != null) {
+      if (e?.shortPctFloat == null) {
+        if (!soft) return false
+      } else if (e.shortPctFloat < plan.minShortPctFloat) return false
+    }
+    if (plan.maxDaysToEarnings != null) {
+      if (r.daysToEarnings == null) {
+        if (!soft) return false
+      } else if (!(r.daysToEarnings >= 0 && r.daysToEarnings <= plan.maxDaysToEarnings)) return false
+    }
     if (plan.avoidEarnings && r.daysToEarnings != null && r.daysToEarnings >= 0 && r.daysToEarnings <= 2) return false
     return true
   })

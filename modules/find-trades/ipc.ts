@@ -969,7 +969,14 @@ export default function register(ctx: ModuleIpcContext): void {
    * Deterministic screen (no AI) — the primitive the agent and the MCP tool
    * both use. Given an explicit ScreenPlan-ish object, returns ranked matches.
    */
-  const runScreen = async (plan: ScreenPlan): Promise<{ candidates: Candidate[]; note: string }> => {
+  const runScreen = async (
+    plan: ScreenPlan,
+    opts: { soft?: boolean } = {}
+  ): Promise<{ candidates: Candidate[]; note: string }> => {
+    // Soft mode: a missing enrichment datum (rate-limited free plan) doesn't drop
+    // a candidate — used by the one-click presets so they always surface the best
+    // available movers instead of returning an empty list.
+    const soft = opts.soft === true
     const massiveKey = ctx.getApiKey('massive')
     if (!massiveKey) throw new Error('Add your Massive / Polygon key in Settings → API Keys for market data.')
     const finnhubKey = ctx.getApiKey('finnhub')
@@ -996,7 +1003,7 @@ export default function register(ctx: ModuleIpcContext): void {
     // all filters, and rank by score.
     const enriched = await enrich(massiveKey, finnhubKey, numeric, plan)
     await enrichExtras(finnhubKey, massiveKey, enriched)
-    const filtered = applyExtrasFilters(applySignalFilters(applyEnrichedFilters(enriched, plan), plan), plan)
+    const filtered = applyExtrasFilters(applySignalFilters(applyEnrichedFilters(enriched, plan, soft), plan, soft), plan, soft)
     const final = [...filtered].sort((a, b) => (b.score?.score ?? 0) - (a.score?.score ?? 0)).slice(0, plan.limit)
     return { candidates: final, note }
   }
@@ -1173,7 +1180,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!ctx.getApiKey('massive')) return { ok: false, error: 'Add your Massive / Polygon key in Settings → API Keys for market data.' }
     try {
       const plan = parseScreenPlan(JSON.stringify(preset.plan))
-      const { candidates, note } = await runScreen(plan)
+      const { candidates, note } = await runScreen(plan, { soft: true })
       const picks = candidates.map((c) => toPick(c))
       logPicks(preset.id, picks)
       recordAudit({

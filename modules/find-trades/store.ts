@@ -210,6 +210,8 @@ interface State {
   xMarketValidated: boolean
   xHistory: ScanRecord[]
   xHistoryLoaded: boolean
+  /** collapse the whole "Trending on X" panel so it doesn't dominate the screen */
+  xPanelCollapsed: boolean
 
   // per-ticker mention history (counts endpoint)
   xCountsTicker: string | null
@@ -274,6 +276,7 @@ interface State {
   loadHealth: () => Promise<void>
   _onBtProgress: (p: unknown) => void
   setXWindow: (id: string) => void
+  toggleXPanel: () => void
   setScanSize: (n: number) => Promise<void>
   setAiTone: (on: boolean) => Promise<void>
   loadHistory: () => Promise<void>
@@ -331,6 +334,13 @@ export const useFindTrades = create<State>((set, get) => ({
   xMarketValidated: false,
   xHistory: [],
   xHistoryLoaded: false,
+  xPanelCollapsed: (() => {
+    try {
+      return localStorage.getItem('ft-x-collapsed') === '1'
+    } catch {
+      return false
+    }
+  })(),
 
   xCountsTicker: null,
   xCounts: null,
@@ -513,6 +523,16 @@ export const useFindTrades = create<State>((set, get) => ({
     } finally {
       set({ busy: false })
     }
+  },
+
+  toggleXPanel: () => {
+    const next = !get().xPanelCollapsed
+    try {
+      localStorage.setItem('ft-x-collapsed', next ? '1' : '0')
+    } catch {
+      /* storage unavailable — still toggles for this session */
+    }
+    set({ xPanelCollapsed: next })
   },
 
   setXWindow: (id) => {

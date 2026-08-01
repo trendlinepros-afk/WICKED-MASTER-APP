@@ -7,6 +7,8 @@ import {
   BarChart2,
   Bell,
   CandlestickChart,
+  ChevronDown,
+  ChevronRight,
   Clock,
   ExternalLink,
   Flame,
@@ -501,12 +503,17 @@ function TrendingPanel(): React.JSX.Element | null {
 
   return (
     <div className="border-b border-edge bg-surface/50">
-      {/* title + window (target for next scan) */}
+      {/* title + collapse toggle + window (target for next scan) */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
-        <span className="flex items-center gap-1.5 text-sm font-bold">
+        <button
+          onClick={s.toggleXPanel}
+          title={s.xPanelCollapsed ? 'Expand the Trending on X panel' : 'Collapse the Trending on X panel'}
+          className="flex items-center gap-1.5 text-sm font-bold hover:text-accent"
+        >
+          {s.xPanelCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
           <Flame size={15} className="text-danger" /> Trending on X
-        </span>
-        {s.status.hasX && (
+        </button>
+        {!s.xPanelCollapsed && s.status.hasX && (
           <div className="flex items-center gap-1 rounded-lg border border-edge bg-raised p-0.5">
             {X_WINDOWS.map((w) => (
               <button
@@ -520,8 +527,15 @@ function TrendingPanel(): React.JSX.Element | null {
             ))}
           </div>
         )}
+        {s.xPanelCollapsed && (
+          <span className="text-[11px] text-muted">
+            {s.xRows.length > 0 ? `${s.xRows.length} trending tickers · click to expand` : 'click to expand'}
+          </span>
+        )}
       </div>
 
+      {!s.xPanelCollapsed && (
+      <>
       {/* scan controls */}
       {s.status.hasX && (
         <div className="flex flex-wrap items-center gap-2 px-4 pb-2">
@@ -663,6 +677,8 @@ function TrendingPanel(): React.JSX.Element | null {
             <span>Heat = buzz + momentum + sentiment · Growth = post-tone lean (positive/hopeful/negative), not a forecast.</span>
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )
