@@ -65,8 +65,11 @@ song, so pulling video is almost never what you want):
   title, uploader and video count — fast metadata only, with a 90s cap.
 - **Download** spawns yt-dlp and streams progress (via `--progress-template`) to
   the UI. It is a long-lived child process with **NO timeout**, so multi-hour
-  playlist downloads run to completion. One download runs at a time and is
-  cancellable (kills the child).
+  playlist downloads run to completion. **Up to 3 downloads run concurrently** —
+  each is a tracked job (`jobId`) whose progress events are tagged, rendered as
+  its own status card in the right-hand column, and cancellable independently
+  (cancel with no jobId kills all, which is what the MCP tool does). The setup
+  form resets when a job starts so the next one can be queued immediately.
 
 ## Quality
 

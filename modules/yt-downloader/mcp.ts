@@ -72,7 +72,8 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     },
     {
       name: `${ID}__cancel`,
-      description: 'Cancel the download currently running, if any. Read-only.',
+      description:
+        'Cancel running downloads (up to 3 can run at once; this cancels all of them). Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:cancel`)
     }

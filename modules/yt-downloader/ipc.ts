@@ -28,7 +28,9 @@ import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/com
  *  ffmpeg. Probe reads a URL's metadata (video vs playlist, title, count).
  *  Download spawns yt-dlp and streams progress to the renderer — it is a
  *  long-lived child with NO timeout, so multi-hour playlist downloads run to
- *  completion. One download runs at a time; it is cancellable.
+ *  completion. Up to MAX_JOBS downloads run concurrently; each is a tracked
+ *  job (jobId) whose progress events are tagged and which cancels
+ *  independently.
  * ------------------------------------------------------------------------ */
 
 const ID = 'yt-downloader'
@@ -37,16 +39,21 @@ const MUSIC_AUDIO_ONLY_KEY = `${ID}.musicAudioOnly`
 const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
 const COMBINE_KEY = `${ID}.combineClips`
 const PROBE_TIMEOUT_MS = 90_000
+const MAX_JOBS = 3
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
 export default function register(ctx: ModuleIpcContext): void {
-  // The currently-running child (yt-dlp, then ffprobe/ffmpeg during combine).
-  // Cancel kills it and flips cancelRequested so the combine loop stops too.
-  let downloadChild: ChildProcess | null = null
-  let cancelRequested = false
+  // One entry per running download. `child` is whatever process the job is on
+  // right now (yt-dlp, then ffprobe/ffmpeg during combine); cancel kills it and
+  // flips cancelRequested so the job's combine loop stops too.
+  interface Job {
+    child: ChildProcess | null
+    cancelRequested: boolean
+  }
+  const jobs = new Map<string, Job>()
 
   const userData = (): string => ctx.app.getPath('userData')
 
@@ -87,7 +94,9 @@ export default function register(ctx: ModuleIpcContext): void {
       stale: ready ? isBinaryTooOld(ytDlpPath(ud)) : false,
       ffmpegReady: resolveFfmpeg() !== null,
       downloadDir: downloadDir(),
-      busy: downloadChild !== null
+      busy: jobs.size > 0,
+      activeJobs: jobs.size,
+      maxJobs: MAX_JOBS
     }
   })
 
@@ -262,119 +271,138 @@ export default function register(ctx: ModuleIpcContext): void {
   /* ------------------------------ download ------------------------------- */
 
   ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
-    if (downloadChild) return { ok: false, error: 'A download is already running. Cancel it or wait for it to finish.' }
-    cancelRequested = false
     const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
+    const jobId =
+      typeof r.jobId === 'string' && r.jobId
+        ? r.jobId
+        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
     const url = typeof r.url === 'string' ? r.url.trim() : ''
-    if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'A YouTube URL is required.' }
-    const ud = userData()
-    if (!hasYtDlp(ud)) {
-      const dl = await downloadYtDlp(ud)
-      if (!dl.ok) return { ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') }
-    }
-    const dir = downloadDir()
-    mkdirSync(dir, { recursive: true })
+    if (!/^https?:\/\//i.test(url)) return { ok: false, jobId, error: 'A YouTube URL is required.' }
+    if (jobs.size >= MAX_JOBS)
+      return {
+        ok: false,
+        jobId,
+        error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.`
+      }
+    if (jobs.has(jobId)) return { ok: false, jobId, error: 'That job is already running.' }
 
-    const quality = typeof r.quality === 'string' ? r.quality : 'best'
-    const isPlaylist = r.isPlaylist === true
-    const ffmpeg = resolveFfmpeg()
-    // "Combine clips" only makes sense for a multi-item VIDEO download and needs
-    // ffmpeg. It's ignored for single videos and audio jobs.
-    const wantCombine = r.combine === true && isPlaylist && !isAudioQuality(quality) && !!ffmpeg
-    const jobStart = Date.now()
-    const manifestPath = wantCombine ? join(ud, 'modules', ID, `combine-manifest-${jobStart}.txt`) : undefined
-    if (manifestPath) mkdirSync(dirname(manifestPath), { recursive: true })
+    // claim the slot before any awaits so parallel calls can't oversubscribe
+    const job: Job = { child: null, cancelRequested: false }
+    jobs.set(jobId, job)
+    const sendP = (payload: Record<string, unknown>): void =>
+      send(`${ID}:progress`, { jobId, ...payload })
 
-    const req: DownloadRequest = { url, quality, isPlaylist, downloadDir: dir, manifestPath }
-    const args = buildDownloadArgs(req, ffmpeg)
+    try {
+      const ud = userData()
+      if (!hasYtDlp(ud)) {
+        const dl = await downloadYtDlp(ud)
+        if (!dl.ok) return { ok: false, jobId, error: 'yt-dlp is not installed: ' + (dl.error ?? '') }
+      }
+      const dir = downloadDir()
+      mkdirSync(dir, { recursive: true })
 
-    const cleanupManifest = (): void => {
-      if (manifestPath && existsSync(manifestPath)) {
+      const quality = typeof r.quality === 'string' ? r.quality : 'best'
+      const isPlaylist = r.isPlaylist === true
+      const ffmpeg = resolveFfmpeg()
+      // "Combine clips" only makes sense for a multi-item VIDEO download and needs
+      // ffmpeg. It's ignored for single videos and audio jobs.
+      const wantCombine = r.combine === true && isPlaylist && !isAudioQuality(quality) && !!ffmpeg
+      const jobStart = Date.now()
+      const manifestPath = wantCombine ? join(ud, 'modules', ID, `combine-manifest-${jobId}.txt`) : undefined
+      if (manifestPath) mkdirSync(dirname(manifestPath), { recursive: true })
+
+      const req: DownloadRequest = { url, quality, isPlaylist, downloadDir: dir, manifestPath }
+      const args = buildDownloadArgs(req, ffmpeg)
+
+      let completed = 0
+      const result = await spawnYtDlp(
+        ytDlpCmd(ud),
+        args,
+        (line) => {
+          const p = parseProgressLine(line)
+          if (!p) return
+          if ('note' in p) {
+            if (/Downloading item|Destination|Merging|Extracting/.test(p.note)) sendP({ kind: 'note', note: p.note })
+            if (/has already been downloaded/.test(p.note)) completed++
+          } else {
+            if (p.percent >= 100) completed++
+            sendP({ kind: 'progress', ...p })
+          }
+        },
+        (child) => {
+          job.child = child
+        }
+      )
+
+      if (result.cancelled) return { ok: false, jobId, cancelled: true }
+
+      // ---- combine phase (best-effort; never fails the download itself) ----
+      let combined:
+        | { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }
+        | null = null
+      if (wantCombine && !job.cancelRequested) {
+        const files = collectOutputs(manifestPath ?? null, dir, jobStart)
+        if (files.length >= 2 && ffmpeg) {
+          const title = typeof r.title === 'string' && r.title.trim() ? r.title.trim() : 'Playlist'
+          const stamp = new Date(jobStart).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+          const outPath = join(dir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
+          const tmpDir = join(ud, 'modules', ID, `combine-tmp-${jobId}`)
+          sendP({ kind: 'combine', done: 0, total: files.length, label: `Combining ${files.length} clips…` })
+          const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
+            ffmpeg,
+            ffprobe: resolveFfprobe(),
+            onNote: (note) => sendP({ kind: 'note', note }),
+            onStep: (done, total, label) => sendP({ kind: 'combine', done, total, label }),
+            registerChild: (c) => {
+              job.child = c
+            },
+            shouldCancel: () => job.cancelRequested
+          })
+          combined = cRes.cancelled
+            ? { ok: false, cancelled: true }
+            : cRes.ok
+              ? { ok: true, path: cRes.outPath, used: cRes.used, total: cRes.total }
+              : { ok: false, error: cRes.error }
+        } else {
+          combined = { ok: false, error: `Only ${files.length} downloaded file(s) found — need at least 2 to combine.` }
+        }
+      }
+
+      if (!result.ok) {
+        const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
+        // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
+        // treat as a soft warning when at least something downloaded.
+        return { ok: completed > 0, jobId, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined }
+      }
+      return { ok: true, jobId, completed, combined }
+    } finally {
+      jobs.delete(jobId)
+      const manifest = join(userData(), 'modules', ID, `combine-manifest-${jobId}.txt`)
+      if (existsSync(manifest)) {
         try {
-          rmSync(manifestPath, { force: true })
+          rmSync(manifest, { force: true })
         } catch {
           /* ignore */
         }
       }
     }
-
-    let completed = 0
-    const result = await spawnYtDlp(
-      ytDlpCmd(ud),
-      args,
-      (line) => {
-        const p = parseProgressLine(line)
-        if (!p) return
-        if ('note' in p) {
-          if (/Downloading item|Destination|Merging|Extracting/.test(p.note)) send(`${ID}:progress`, { kind: 'note', note: p.note })
-          if (/has already been downloaded/.test(p.note)) completed++
-        } else {
-          if (p.percent >= 100) completed++
-          send(`${ID}:progress`, { kind: 'progress', ...p })
-        }
-      },
-      (child) => {
-        downloadChild = child
-      }
-    )
-
-    if (result.cancelled) {
-      downloadChild = null
-      cleanupManifest()
-      return { ok: false, cancelled: true }
-    }
-
-    // ---- combine phase (best-effort; never fails the download itself) ----
-    let combined:
-      | { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }
-      | null = null
-    if (wantCombine && !cancelRequested) {
-      const files = collectOutputs(manifestPath ?? null, dir, jobStart)
-      if (files.length >= 2 && ffmpeg) {
-        const title = typeof r.title === 'string' && r.title.trim() ? r.title.trim() : 'Playlist'
-        const stamp = new Date(jobStart).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-        const outPath = join(dir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
-        const tmpDir = join(ud, 'modules', ID, `combine-tmp-${jobStart}`)
-        send(`${ID}:progress`, { kind: 'combine', done: 0, total: files.length, label: `Combining ${files.length} clips…` })
-        const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
-          ffmpeg,
-          ffprobe: resolveFfprobe(),
-          onNote: (note) => send(`${ID}:progress`, { kind: 'note', note }),
-          onStep: (done, total, label) => send(`${ID}:progress`, { kind: 'combine', done, total, label }),
-          registerChild: (c) => {
-            downloadChild = c
-          },
-          shouldCancel: () => cancelRequested
-        })
-        combined = cRes.cancelled
-          ? { ok: false, cancelled: true }
-          : cRes.ok
-            ? { ok: true, path: cRes.outPath, used: cRes.used, total: cRes.total }
-            : { ok: false, error: cRes.error }
-      } else {
-        combined = { ok: false, error: `Only ${files.length} downloaded file(s) found — need at least 2 to combine.` }
-      }
-    }
-
-    downloadChild = null
-    cleanupManifest()
-
-    if (!result.ok) {
-      const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
-      // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
-      // treat as a soft warning when at least something downloaded.
-      return { ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined }
-    }
-    return { ok: true, completed, combined }
   })
 
-  ctx.ipcMain.handle(`${ID}:cancel`, () => {
-    cancelRequested = true
-    if (downloadChild) {
-      downloadChild.kill()
-      return { ok: true, cancelled: true }
+  // Cancel one job (jobId) or, with no argument, all running jobs — the latter
+  // keeps the MCP cancel tool and any older callers working unchanged.
+  ctx.ipcMain.handle(`${ID}:cancel`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const targetId = typeof r.jobId === 'string' && r.jobId ? r.jobId : null
+    const targets = targetId ? [jobs.get(targetId)].filter((j): j is Job => !!j) : [...jobs.values()]
+    let killed = 0
+    for (const j of targets) {
+      j.cancelRequested = true
+      if (j.child) {
+        j.child.kill()
+        killed++
+      }
     }
-    return { ok: true, cancelled: false }
+    return { ok: true, cancelled: killed > 0 }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

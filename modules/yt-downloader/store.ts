@@ -67,6 +67,28 @@ export interface Progress {
   title: string
 }
 
+export type JobState = 'running' | 'combining' | 'done' | 'warning' | 'error' | 'cancelled'
+
+/** One download task, rendered as a status card. Up to MAX_JOBS run at once. */
+export interface DownloadJob {
+  id: string
+  title: string
+  /** what was requested: quality label, target, combine flag */
+  detail: string
+  state: JobState
+  progress: Progress | null
+  log: string[]
+  /** latest activity note while running; final status line when finished */
+  message: string
+  combinedInfo: { path: string; used: number; total: number } | null
+  startedAt: number
+}
+
+export const MAX_JOBS = 3
+
+export const isJobActive = (j: DownloadJob): boolean =>
+  j.state === 'running' || j.state === 'combining'
+
 interface Ok {
   ok: true
   [k: string]: unknown
@@ -104,16 +126,10 @@ interface State {
   /** user explicitly picked a video quality for this music URL — respect it */
   musicOverride: boolean
 
-  downloading: boolean
-  /** true while the post-download combine (ffmpeg) phase is running */
-  combining: boolean
-  /** result of the last combine, if any */
-  combinedInfo: { path: string; used: number; total: number } | null
-  progress: Progress | null
-  log: string[]
+  /** active + recently finished downloads, newest first (each is a card) */
+  jobs: DownloadJob[]
   statusMsg: string
   error: string
-  lastResult: string | null
 
   setUrl: (v: string) => void
   setQuality: (v: string) => void
@@ -132,7 +148,8 @@ interface State {
   openFolder: () => Promise<void>
   doProbe: () => Promise<void>
   download: () => Promise<void>
-  cancel: () => Promise<void>
+  cancel: (jobId: string) => Promise<void>
+  dismissJob: (jobId: string) => void
   _onProgress: (p: unknown) => void
   _onStatusMsg: (m: unknown) => void
 }
@@ -153,14 +170,9 @@ export const useYt = create<State>((set, get) => ({
   urlIsMusic: false,
   musicOverride: false,
 
-  downloading: false,
-  combining: false,
-  combinedInfo: null,
-  progress: null,
-  log: [],
+  jobs: [],
   statusMsg: 'Paste a YouTube video or playlist URL to begin.',
   error: '',
-  lastResult: null,
 
   setUrl: (v) => {
     // Detect a music link as it's typed/pasted — no network call needed — so
@@ -170,7 +182,6 @@ export const useYt = create<State>((set, get) => ({
     set({
       url: v,
       probe: null,
-      lastResult: null,
       urlIsMusic: isMusic,
       musicOverride: false, // a new URL starts fresh
       quality: isMusic && musicAudioOnly ? musicFormat : quality
@@ -296,8 +307,12 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, downloading, wholePlaylist, combineClips } = get()
-    if (downloading || !url.trim()) return
+    const { url, probe, quality, wholePlaylist, combineClips, jobs } = get()
+    if (!url.trim()) return
+    if (jobs.filter(isJobActive).length >= MAX_JOBS) {
+      set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
+      return
+    }
     // For a track+list URL the user's choice wins; otherwise follow the probe.
     // With no probe yet, fall back to the URL shape so a pasted playlist link
     // still downloads the playlist.
@@ -306,71 +321,114 @@ export const useYt = create<State>((set, get) => ({
         ? wholePlaylist
         : probe.kind === 'playlist'
       : /[?&]list=/.test(url)
-    set({ downloading: true, combining: false, combinedInfo: null, error: '', progress: null, log: [], lastResult: null, statusMsg: 'Starting download…' })
-    try {
-      const res = (await invoke('download', {
-        url: url.trim(),
-        quality,
-        isPlaylist,
-        combine: combineClips,
-        title: probe?.title ?? ''
-      })) as Res & {
-        warning?: boolean
-        completed?: number
-        cancelled?: boolean
-        combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
-      }
+    const willCombine = combineClips && isPlaylist && !isAudioPreset(quality)
+    const jobId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    const qLabel = QUALITIES.find((q) => q.id === quality)?.label ?? quality
+    const job: DownloadJob = {
+      id: jobId,
+      title: probe?.title ?? url.trim(),
+      detail: `${qLabel}${isPlaylist ? ' · playlist' : ''}${willCombine ? ' · combine' : ''}`,
+      state: 'running',
+      progress: null,
+      log: [],
+      message: 'Starting download…',
+      combinedInfo: null,
+      startedAt: Date.now()
+    }
+    // new card on top; keep the finished-card history bounded. The form resets
+    // so the next task can be set up while this one runs.
+    set((s) => ({
+      jobs: [job, ...s.jobs.filter(isJobActive), ...s.jobs.filter((j) => !isJobActive(j)).slice(0, 8)],
+      error: '',
+      url: '',
+      probe: null,
+      urlIsMusic: false,
+      musicOverride: false,
+      statusMsg: 'Download started — watch its card on the right. Paste another URL to queue the next one.'
+    }))
 
-      // Describe how the combine step went, appended to the main status line.
-      const c = res.combined
-      const combineMsg = c
-        ? c.ok
-          ? ` 🎬 Combined ${Number(c.used) || 0} clip(s) into one video.`
-          : c.cancelled
-            ? ' (Combine cancelled.)'
-            : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
-        : ''
-      if (c?.ok && c.path) set({ combinedInfo: { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } })
+    const patchJob = (patch: Partial<DownloadJob>): void =>
+      set((s) => ({ jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, ...patch } : j)) }))
 
-      if (res.cancelled) {
-        set({ statusMsg: 'Download cancelled.', lastResult: 'cancelled' })
-      } else if (res.ok === true && !res.warning) {
-        set({
-          statusMsg: `Done — downloaded ${Number(res.completed) || ''} item(s).${combineMsg} Saved to your downloads folder.`,
-          lastResult: c && !c.ok && !c.cancelled ? 'warning' : 'done'
-        })
-      } else if (res.warning) {
-        set({
-          statusMsg: `Finished with some skips — ${Number(res.completed) || 0} downloaded.${combineMsg} ${(res as Err).error ?? ''}`.trim(),
-          lastResult: 'warning'
-        })
-      } else {
-        set({ error: (res as Err).error ?? 'Download failed.', statusMsg: 'Download failed.', lastResult: 'error' })
-      }
-    } finally {
-      set({ downloading: false, combining: false, progress: null })
+    const res = (await invoke('download', {
+      jobId,
+      url: url.trim(),
+      quality,
+      isPlaylist,
+      combine: combineClips,
+      title: probe?.title ?? ''
+    }).catch((e) => ({ ok: false, error: String(e) }))) as Res & {
+      warning?: boolean
+      completed?: number
+      cancelled?: boolean
+      combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
+    }
+
+    // Describe how the combine step went, appended to the main status line.
+    const c = res.combined
+    const combineMsg = c
+      ? c.ok
+        ? ` 🎬 Combined ${Number(c.used) || 0} clip(s) into one video.`
+        : c.cancelled
+          ? ' (Combine cancelled.)'
+          : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
+      : ''
+    const combinedInfo =
+      c?.ok && c.path ? { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } : null
+
+    if (res.cancelled) {
+      patchJob({ state: 'cancelled', message: 'Download cancelled.', progress: null })
+    } else if (res.ok === true && !res.warning) {
+      patchJob({
+        state: c && !c.ok && !c.cancelled ? 'warning' : 'done',
+        message: `Done — downloaded ${Number(res.completed) || ''} item(s).${combineMsg}`,
+        combinedInfo,
+        progress: null
+      })
+    } else if (res.warning) {
+      patchJob({
+        state: 'warning',
+        message: `Finished with some skips — ${Number(res.completed) || 0} downloaded.${combineMsg} ${(res as Err).error ?? ''}`.trim(),
+        combinedInfo,
+        progress: null
+      })
+    } else {
+      patchJob({ state: 'error', message: (res as Err).error ?? 'Download failed.', progress: null })
     }
   },
 
-  cancel: async () => {
-    await invoke('cancel')
+  cancel: async (jobId) => {
+    await invoke('cancel', { jobId })
+  },
+
+  dismissJob: (jobId) => {
+    set((s) => ({ jobs: s.jobs.filter((j) => j.id !== jobId || isJobActive(j)) }))
   },
 
   _onProgress: (raw) => {
-    const p = raw as { kind?: string; note?: string; done?: number; total?: number; label?: string } & Progress
+    const p = raw as { jobId?: string; kind?: string; note?: string; done?: number; total?: number; label?: string } & Progress
+    const jobId = p.jobId
+    if (!jobId) return
+    const patchJob = (fn: (j: DownloadJob) => Partial<DownloadJob>): void =>
+      set((s) => ({ jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, ...fn(j) } : j)) }))
     if (p.kind === 'note' && p.note) {
-      set((s) => ({ log: [...s.log.slice(-40), p.note as string], statusMsg: p.note as string }))
+      patchJob((j) => ({ log: [...j.log.slice(-60), p.note as string], message: p.note as string }))
     } else if (p.kind === 'combine') {
       const total = Number(p.total) || 1
       const done = Number(p.done) || 0
       const label = String(p.label ?? 'Combining…')
-      set({
-        combining: true,
-        statusMsg: label,
+      patchJob(() => ({
+        state: 'combining',
+        message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
-      })
+      }))
     } else if (p.kind === 'progress') {
-      set({ progress: { index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title } })
+      patchJob(() => ({
+        progress: { index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title }
+      }))
     }
   },
 
