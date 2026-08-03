@@ -39,6 +39,8 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
   const addStroke = useBoard((s) => s.addCanvasStroke)
   const addArrow = useBoard((s) => s.addCanvasArrow)
   const del = useBoard((s) => s.deleteCanvasItem)
+  const undo = useBoard((s) => s.undoCanvas)
+  const redoAction = useBoard((s) => s.redoCanvas)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // where the last click / paste landed, so new items appear near the cursor
@@ -76,6 +78,31 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
     return () => document.removeEventListener('keydown', onKey)
   }, [mode])
 
+  // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y): undo / redo canvas actions.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (k !== 'z' && k !== 'y') return
+      const isRedo = k === 'y' || e.shiftKey
+      const ae = document.activeElement as HTMLElement | null
+      const editable =
+        !!ae && (ae.isContentEditable || ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
+      if (editable) {
+        const cvId = ae.getAttribute('data-cv-id')
+        if (!cvId) return // rename input, modals, other fields → native undo
+        const it = useBoard.getState().canvasItems.find((i) => i.id === cvId)
+        // Typing in a box that has content → the editor's native text undo.
+        // An accidental still-empty box → fall through and remove it.
+        if (it && (it.text ?? '').trim()) return
+      }
+      e.preventDefault()
+      void (isRedo ? redoAction(folderId) : undo(folderId))
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [folderId, undo, redoAction])
+
   // Paste an image straight onto the canvas.
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent): Promise<void> => {
@@ -106,7 +133,7 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
         if (note && note.kind === 'text' && !note.title && !(note.text ?? '').trim()) {
           x = note.x
           y = note.y
-          await del(activeId)
+          await del(activeId, { silent: true })
         }
       }
       await addImage(folderId, blob, x, y)
@@ -229,7 +256,8 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
           }}
         />
         <span className="text-xs text-muted">
-          Click anywhere to type · Ctrl+V pastes an image where you click · A on a text box styles lines
+          Click anywhere to type · Ctrl+V pastes an image where you click · Ctrl+Z undoes · A styles
+          lines
         </span>
       </div>
 
@@ -364,6 +392,7 @@ function CanvasNode({
   const persist = useBoard((s) => s.persistCanvasItem)
   const front = useBoard((s) => s.bringCanvasItemFront)
   const del = useBoard((s) => s.deleteCanvasItem)
+  const record = useBoard((s) => s.recordCanvasUndo)
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
   const resize = useRef<{ px: number; py: number; w: number; h: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -422,10 +451,12 @@ function CanvasNode({
     patch(item.id, { x: Math.max(0, d.x + (e.clientX - d.px)), y: Math.max(0, d.y + (e.clientY - d.py)) })
   }
   const onDragUp = (): void => {
-    if (drag.current) {
-      drag.current = null
-      void persist(item.id)
-    }
+    const d = drag.current
+    if (!d) return
+    drag.current = null
+    const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
+    if (cur && (cur.x !== d.x || cur.y !== d.y)) record(item.id, { x: d.x, y: d.y })
+    void persist(item.id)
   }
 
   const onResizeDown = (e: React.PointerEvent): void => {
@@ -442,10 +473,12 @@ function CanvasNode({
     })
   }
   const onResizeUp = (): void => {
-    if (resize.current) {
-      resize.current = null
-      void persist(item.id)
-    }
+    const r = resize.current
+    if (!r) return
+    resize.current = null
+    const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
+    if (cur && (cur.w !== r.w || cur.h !== r.h)) record(item.id, { w: r.w, h: r.h })
+    void persist(item.id)
   }
 
   const url = item.kind === 'image' && item.imageId ? imgUrl(item.imageId) : null
@@ -477,8 +510,12 @@ function CanvasNode({
             }}
             onBlur={(e) => {
               setEditTitle(false)
-              patch(item.id, { title: e.target.value.trim() || undefined })
+              const prev = useBoard.getState().canvasItems.find((i) => i.id === item.id)?.title
+              const next = e.target.value.trim() || undefined
+              if (prev === next) return
+              patch(item.id, { title: next })
               void persist(item.id)
+              record(item.id, { title: prev })
             }}
             className="min-w-0 flex-1 border-b border-accent bg-transparent text-[11px] text-ink outline-none"
           />
@@ -587,7 +624,8 @@ function CanvasNode({
               // Clicked to start a note but typed nothing? Drop it so misclicks
               // don't litter the canvas (unless it was renamed). Otherwise save.
               const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
-              if (cur && cur.kind === 'text' && !cur.title && !(cur.text ?? '').trim()) void del(item.id)
+              if (cur && cur.kind === 'text' && !cur.title && !(cur.text ?? '').trim())
+                void del(item.id, { silent: true })
               else void persist(item.id)
             }}
             onPaste={(e) => {
@@ -628,6 +666,7 @@ function StrokeNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =
   const patch = useBoard((s) => s.patchCanvasItem)
   const persist = useBoard((s) => s.persistCanvasItem)
   const front = useBoard((s) => s.bringCanvasItemFront)
+  const record = useBoard((s) => s.recordCanvasUndo)
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
   const { hover, enter, leave } = useHover()
 
@@ -646,10 +685,12 @@ function StrokeNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =
     patch(item.id, { x: Math.max(0, dr.x + (e.clientX - dr.px)), y: Math.max(0, dr.y + (e.clientY - dr.py)) })
   }
   const onUp = (): void => {
-    if (drag.current) {
-      drag.current = null
-      void persist(item.id)
-    }
+    const dr = drag.current
+    if (!dr) return
+    drag.current = null
+    const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
+    if (cur && (cur.x !== dr.x || cur.y !== dr.y)) record(item.id, { x: dr.x, y: dr.y })
+    void persist(item.id)
   }
 
   return (
@@ -704,8 +745,11 @@ function ArrowNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =>
   const patch = useBoard((s) => s.patchCanvasItem)
   const persist = useBoard((s) => s.persistCanvasItem)
   const front = useBoard((s) => s.bringCanvasItemFront)
+  const record = useBoard((s) => s.recordCanvasUndo)
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
   const endDrag = useRef<{ which: 0 | 1; px: number; py: number; sx: number; sy: number } | null>(null)
+  // full geometry at endpoint-drag start (re-pointing renormalizes x/y/w/h too)
+  const endStart = useRef<{ x: number; y: number; w: number; h: number; points: number[] } | null>(null)
   const { hover, enter, leave } = useHover()
 
   const [x1, y1, x2, y2] = item.points ?? [14, 14, 154, 14]
@@ -734,10 +778,12 @@ function ArrowNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =>
     patch(item.id, { x: Math.max(0, dr.x + (e.clientX - dr.px)), y: Math.max(0, dr.y + (e.clientY - dr.py)) })
   }
   const onShaftUp = (): void => {
-    if (drag.current) {
-      drag.current = null
-      void persist(item.id)
-    }
+    const dr = drag.current
+    if (!dr) return
+    drag.current = null
+    const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
+    if (cur && (cur.x !== dr.x || cur.y !== dr.y)) record(item.id, { x: dr.x, y: dr.y })
+    void persist(item.id)
   }
 
   const onEndDown = (which: 0 | 1) => (e: React.PointerEvent): void => {
@@ -752,6 +798,7 @@ function ArrowNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =>
       sx: pts[which * 2],
       sy: pts[which * 2 + 1]
     }
+    endStart.current = { x: item.x, y: item.y, w: item.w, h: item.h, points: [...pts] }
     ;(e.target as Element).setPointerCapture(e.pointerId)
   }
   const onEndMove = (e: React.PointerEvent): void => {
@@ -783,6 +830,11 @@ function ArrowNode({ item, onAskDelete }: { item: CanvasItem; onAskDelete: () =>
       points: [ax1 - nx, ay1 - ny, ax2 - nx, ay2 - ny]
     })
     void persist(item.id)
+    const s = endStart.current
+    endStart.current = null
+    if (s && cur.points.some((v, i) => v !== s.points[i])) {
+      record(item.id, { x: s.x, y: s.y, w: s.w, h: s.h, points: s.points })
+    }
   }
 
   return (

@@ -31,6 +31,11 @@ Changed for WICKED:
   re-point it. Both use the shared stroke-color palette and store as `canvasItems`
   with additive fields (`points`, `color`, `strokeWidth`). Deleting any item asks
   for confirmation.
+- **Ctrl+Z undoes canvas actions** (add/delete/move/resize/re-point/rename);
+  Ctrl+Shift+Z or Ctrl+Y redoes. The stacks are in-memory per app run and
+  per-folder. While typing inside a box that has content, Ctrl+Z is the editor's
+  native text undo; on a still-empty accidental box it removes the box. Auto-
+  discarded empty notes are not recorded.
 - **Data safety rule for future changes:** never bump the IndexedDB version or
   rewrite existing records — add optional fields only, so updates can never wipe
   or migrate user data.

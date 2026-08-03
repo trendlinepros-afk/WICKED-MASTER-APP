@@ -152,7 +152,12 @@ interface BoardState {
   patchCanvasItem: (id: string, patch: Partial<CanvasItem>) => void
   persistCanvasItem: (id: string) => Promise<void>
   bringCanvasItemFront: (id: string) => Promise<void>
-  deleteCanvasItem: (id: string) => Promise<void>
+  /** silent = housekeeping removal (auto-discarded empty note): not undoable */
+  deleteCanvasItem: (id: string, opts?: { silent?: boolean }) => Promise<void>
+  /** record how to revert a finished gesture (move/resize/re-point/rename) */
+  recordCanvasUndo: (itemId: string, before: Partial<CanvasItem>) => void
+  undoCanvas: (folderId: string) => Promise<void>
+  redoCanvas: (folderId: string) => Promise<void>
 
   addFolder: (name: string) => Promise<Folder>
   renameFolder: (id: string, name: string) => Promise<void>
@@ -200,7 +205,80 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   })
 }
 
-export const useBoard = create<BoardState>((set, getState) => ({
+/* -------------------- freeform canvas undo (Ctrl+Z) ----------------------- *
+ * In-memory only, for this app run — never persisted, so it can't touch or
+ * corrupt saved data. Each entry says what to DO when popped; performing it
+ * yields the inverse entry for the opposite stack.
+ * -------------------------------------------------------------------------- */
+const MAX_UNDO = 100
+
+type UndoEntry =
+  | { op: 'remove'; folderId: string; itemId: string }
+  | { op: 'restore'; folderId: string; item: CanvasItem; imageBlob: Blob | null }
+  | { op: 'patch'; folderId: string; itemId: string; fields: Partial<CanvasItem> }
+
+let undoStack: UndoEntry[] = []
+let redoStack: UndoEntry[] = []
+
+/** Record a new user action (clears the redo branch, caps the stack). */
+function pushUndo(entry: UndoEntry): void {
+  undoStack.push(entry)
+  if (undoStack.length > MAX_UNDO) undoStack = undoStack.slice(-MAX_UNDO)
+  redoStack = []
+}
+
+function lastEntryFor(stack: UndoEntry[], folderId: string): number {
+  for (let i = stack.length - 1; i >= 0; i--) if (stack[i].folderId === folderId) return i
+  return -1
+}
+
+export const useBoard = create<BoardState>((set, getState) => {
+  /** Apply an undo/redo entry; returns the inverse entry (or null if stale). */
+  const performEntry = async (entry: UndoEntry): Promise<UndoEntry | null> => {
+    if (entry.op === 'remove') {
+      const it = getState().canvasItems.find((i) => i.id === entry.itemId)
+      if (!it) return null
+      let imageBlob: Blob | null = null
+      if (it.kind === 'image' && it.imageId) {
+        imageBlob = (await get<{ id: string; blob: Blob }>('images', it.imageId))?.blob ?? null
+        await del('images', it.imageId)
+        const u = objUrls.get(it.imageId)
+        if (u) {
+          URL.revokeObjectURL(u)
+          objUrls.delete(it.imageId)
+        }
+      }
+      set({ canvasItems: getState().canvasItems.filter((i) => i.id !== it.id) })
+      await del('canvasItems', it.id)
+      return { op: 'restore', folderId: entry.folderId, item: it, imageBlob }
+    }
+    if (entry.op === 'restore') {
+      const it = entry.item
+      if (it.kind === 'image' && it.imageId && entry.imageBlob) {
+        await put('images', { id: it.imageId, blob: entry.imageBlob })
+        objUrls.set(it.imageId, URL.createObjectURL(entry.imageBlob))
+      }
+      set({ canvasItems: [...getState().canvasItems.filter((i) => i.id !== it.id), it] })
+      await put('canvasItems', it)
+      return { op: 'remove', folderId: entry.folderId, itemId: it.id }
+    }
+    const cur = getState().canvasItems.find((i) => i.id === entry.itemId)
+    if (!cur) return null
+    const inverse: Partial<CanvasItem> = {}
+    for (const k of Object.keys(entry.fields) as (keyof CanvasItem)[]) {
+      ;(inverse as Record<string, unknown>)[k] = cur[k]
+    }
+    set({
+      canvasItems: getState().canvasItems.map((i) =>
+        i.id === entry.itemId ? { ...i, ...entry.fields } : i
+      )
+    })
+    const next = getState().canvasItems.find((i) => i.id === entry.itemId)
+    if (next) await put('canvasItems', next)
+    return { op: 'patch', folderId: entry.folderId, itemId: entry.itemId, fields: inverse }
+  }
+
+  return {
   ready: false,
   folders: [],
   canvasItems: [],
@@ -279,6 +357,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     }
     set({ canvasItems: [...items, it] })
     await put('canvasItems', it)
+    pushUndo({ op: 'remove', folderId, itemId: it.id })
     return it
   },
 
@@ -302,6 +381,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     }
     set({ canvasItems: [...items, it] })
     await put('canvasItems', it)
+    pushUndo({ op: 'remove', folderId, itemId: it.id })
   },
 
   addCanvasStroke: async (folderId, s) => {
@@ -310,6 +390,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     const it: CanvasItem = { id: uid('cv'), folderId, kind: 'draw', ...s, z, createdAt: Date.now() }
     set({ canvasItems: [...items, it] })
     await put('canvasItems', it)
+    pushUndo({ op: 'remove', folderId, itemId: it.id })
   },
 
   addCanvasArrow: async (folderId, x, y, color) => {
@@ -333,6 +414,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     }
     set({ canvasItems: [...items, it] })
     await put('canvasItems', it)
+    pushUndo({ op: 'remove', folderId, itemId: it.id })
   },
 
   patchCanvasItem: (id, patch) => {
@@ -353,10 +435,13 @@ export const useBoard = create<BoardState>((set, getState) => ({
     await getState().persistCanvasItem(id)
   },
 
-  deleteCanvasItem: async (id) => {
+  deleteCanvasItem: async (id, opts) => {
     const it = getState().canvasItems.find((i) => i.id === id)
     if (!it) return
+    let imageBlob: Blob | null = null
     if (it.kind === 'image' && it.imageId) {
+      // keep the blob so Ctrl+Z can bring the image back
+      imageBlob = (await get<{ id: string; blob: Blob }>('images', it.imageId))?.blob ?? null
       await del('images', it.imageId)
       const u = objUrls.get(it.imageId)
       if (u) {
@@ -366,6 +451,33 @@ export const useBoard = create<BoardState>((set, getState) => ({
     }
     set({ canvasItems: getState().canvasItems.filter((i) => i.id !== id) })
     await del('canvasItems', id)
+    if (opts?.silent) {
+      // an auto-discarded empty note cancels out with its own add — drop both
+      undoStack = undoStack.filter((e) => !(e.op === 'remove' && e.itemId === id))
+    } else {
+      pushUndo({ op: 'restore', folderId: it.folderId, item: it, imageBlob })
+    }
+  },
+
+  recordCanvasUndo: (itemId, before) => {
+    const it = getState().canvasItems.find((i) => i.id === itemId)
+    if (it) pushUndo({ op: 'patch', folderId: it.folderId, itemId, fields: before })
+  },
+
+  undoCanvas: async (folderId) => {
+    const idx = lastEntryFor(undoStack, folderId)
+    if (idx < 0) return
+    const [entry] = undoStack.splice(idx, 1)
+    const inverse = await performEntry(entry)
+    if (inverse) redoStack.push(inverse)
+  },
+
+  redoCanvas: async (folderId) => {
+    const idx = lastEntryFor(redoStack, folderId)
+    if (idx < 0) return
+    const [entry] = redoStack.splice(idx, 1)
+    const inverse = await performEntry(entry)
+    if (inverse) undoStack.push(inverse) // direct push: redo must not clear its own stack
   },
 
   addFolder: async (name) => {
@@ -406,6 +518,8 @@ export const useBoard = create<BoardState>((set, getState) => ({
     const nextFolders = folders.filter((f) => f.id !== id)
     set({ canvasItems: canvasItems.filter((i) => i.folderId !== id), folders: nextFolders })
     await del('folders', id)
+    undoStack = undoStack.filter((e) => e.folderId !== id)
+    redoStack = redoStack.filter((e) => e.folderId !== id)
     if (settings.activeFolder === id) {
       await getState().saveSettings({ activeFolder: nextFolders[0]?.id ?? null })
     }
@@ -475,6 +589,8 @@ export const useBoard = create<BoardState>((set, getState) => ({
   },
 
   importData: async (dump) => {
+    undoStack = []
+    redoStack = []
     for (const n of ['folders', 'cards', 'canvasItems', 'images', 'timeEntries'] as const) await clearStore(n)
     for (const u of objUrls.values()) URL.revokeObjectURL(u)
     objUrls.clear()
@@ -502,7 +618,8 @@ export const useBoard = create<BoardState>((set, getState) => ({
       dataEpoch: s.dataEpoch + 1
     }))
   }
-}))
+  }
+})
 
 /* ---------- derived totals ---------- */
 export function liveSec(timerStart: number | null): number {
