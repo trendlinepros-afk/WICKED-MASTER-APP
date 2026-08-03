@@ -506,9 +506,14 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
         {job.message}
       </p>
       {job.combinedInfo && (
-        <p className="mt-1 flex items-center gap-1.5 text-sm text-accent">
-          <Film size={14} /> Combined {job.combinedInfo.used} clip(s) into one movie.
-        </p>
+        <div className="mt-1">
+          <p className="flex items-center gap-1.5 text-sm text-accent">
+            <Film size={14} /> Combined {job.combinedInfo.used} clip(s) into one movie.
+          </p>
+          <p className="mt-0.5 break-all text-xs text-muted" title={job.combinedInfo.path}>
+            Saved: {job.combinedInfo.path}
+          </p>
+        </div>
       )}
       {job.state === 'done' && (
         <button onClick={() => void openFolder()} className="mt-1.5 text-sm text-accent hover:underline">

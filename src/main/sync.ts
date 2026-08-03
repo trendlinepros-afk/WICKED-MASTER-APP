@@ -1,6 +1,6 @@
 import { app, dialog, ipcMain, safeStorage, type BrowserWindow } from 'electron'
 import Store from 'electron-store'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { hostname } from 'os'
 import { join } from 'path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
@@ -185,6 +185,15 @@ export function buildStatus(): SyncStatus {
 
 /* --------------------------------- push ---------------------------------- */
 
+/**
+ * A sync snapshot holds settings + module data, so it should be a few MB. Cap
+ * it well below GitHub's ~100 MB content limit — and far below Node's max
+ * string length, which an unbounded snapshot once hit ("Cannot create a string
+ * longer than 0x1fffffe8 characters") when stray ffmpeg scratch files were
+ * swept into the zip.
+ */
+const MAX_SNAPSHOT_BYTES = 80 * 1024 * 1024
+
 /** Build the encrypted snapshot bytes (zip → passphrase-encrypted blob text). */
 function buildEncryptedSnapshot(passphrase: string): string {
   const userData = app.getPath('userData')
@@ -196,6 +205,25 @@ function buildEncryptedSnapshot(passphrase: string): string {
   if (Object.keys(plainKeys).length > 0)
     extras.push({ rel: PORTABLE_KEYS_NAME, data: encryptWithPassword(JSON.stringify(plainKeys), passphrase) })
   const zip = buildBackupZipBuffer(entries, app.getVersion(), extras)
+  if (zip.length > MAX_SNAPSHOT_BYTES) {
+    const biggest = entries
+      .map((e) => {
+        try {
+          return { rel: e.rel, size: statSync(e.abs).size }
+        } catch {
+          return { rel: e.rel, size: 0 }
+        }
+      })
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 3)
+      .map((e) => `${e.rel} (${Math.round(e.size / 1048576)} MB)`)
+      .join(', ')
+    throw new Error(
+      `Sync snapshot is ${Math.round(zip.length / 1048576)} MB — too large to push (limit ${Math.round(
+        MAX_SNAPSHOT_BYTES / 1048576
+      )} MB). Largest files: ${biggest}. Remove stray large files from the WICKED data folder and push again.`
+    )
+  }
   return encryptBytesWithPassword(zip, passphrase)
 }
 

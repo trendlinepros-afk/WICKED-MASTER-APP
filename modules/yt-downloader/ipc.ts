@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -56,6 +56,22 @@ export default function register(ctx: ModuleIpcContext): void {
   const jobs = new Map<string, Job>()
 
   const userData = (): string => ctx.app.getPath('userData')
+
+  // Sweep ffmpeg scratch left by interrupted combines (app closed / crashed
+  // mid-stitch). These normalized clips can be GIGABYTES, and stale ones once
+  // bloated the Cloud Sync snapshot past Node's string limit. No job can be
+  // running this early, so anything matching is guaranteed stale.
+  try {
+    const moduleDir = join(userData(), 'modules', ID)
+    for (const name of readdirSync(moduleDir)) {
+      if (/^combine-(tmp|manifest-)/.test(name)) {
+        rmSync(join(moduleDir, name), { recursive: true, force: true })
+        console.log(`[${ID}] removed stale combine scratch: ${name}`)
+      }
+    }
+  } catch {
+    /* module dir may not exist yet */
+  }
 
   const defaultDownloadDir = (): string => join(ctx.app.getPath('downloads'), 'WICKED YouTube')
   const downloadDir = (): string => {
@@ -345,7 +361,11 @@ export default function register(ctx: ModuleIpcContext): void {
         if (files.length >= 2 && ffmpeg) {
           const title = typeof r.title === 'string' && r.title.trim() ? r.title.trim() : 'Playlist'
           const stamp = new Date(jobStart).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-          const outPath = join(dir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
+          // Save the movie ALONGSIDE the clips (playlist downloads land in their
+          // own subfolder), matching what the UI promises.
+          const clipDirs = new Set(files.map((f) => dirname(f)))
+          const outDir = clipDirs.size === 1 ? [...clipDirs][0] : dir
+          const outPath = join(outDir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
           const tmpDir = join(ud, 'modules', ID, `combine-tmp-${jobId}`)
           sendP({ kind: 'combine', done: 0, total: files.length, label: `Combining ${files.length} clips…` })
           const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
@@ -363,6 +383,7 @@ export default function register(ctx: ModuleIpcContext): void {
             : cRes.ok
               ? { ok: true, path: cRes.outPath, used: cRes.used, total: cRes.total }
               : { ok: false, error: cRes.error }
+          if (cRes.ok && cRes.outPath) sendP({ kind: 'note', note: `Combined movie saved: ${cRes.outPath}` })
         } else {
           combined = { ok: false, error: `Only ${files.length} downloaded file(s) found — need at least 2 to combine.` }
         }

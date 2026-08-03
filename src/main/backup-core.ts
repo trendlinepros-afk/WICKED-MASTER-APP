@@ -44,8 +44,24 @@ export const INCLUDE_TOP = new Set([
 
 /** Paths (relative to userData, '/'-joined) whose subtree is never backed up. */
 export const EXCLUDE_RELPATHS = new Set([
-  'modules/web-browser/chrome-profile' // full Chrome profile: huge, Chrome-sync owned
+  'modules/web-browser/chrome-profile', // full Chrome profile: huge, Chrome-sync owned
+  'modules/yt-downloader/bin' // yt-dlp binary: ~20 MB, machine-local, refetched on demand
 ])
+
+/**
+ * Basenames (file or directory) that are never backed up, wherever they appear.
+ * Guards against transient scratch data: yt-downloader's ffmpeg combine scratch
+ * can be GIGABYTES if a combine was interrupted, and once made the sync snapshot
+ * exceed Node's max string length ("Cannot create a string longer than …").
+ */
+export const EXCLUDE_NAME_PATTERNS: RegExp[] = [/^combine-tmp/, /^combine-manifest-/, /\.tmp$/i]
+
+/**
+ * Files bigger than this are skipped (with a console note). Settings + module
+ * data are small; anything this big in userData is transient media that has no
+ * business inside a backup/sync snapshot.
+ */
+export const MAX_BACKUP_FILE_BYTES = 64 * 1024 * 1024
 
 export interface BackupEntry {
   /** absolute path on disk */
@@ -78,6 +94,8 @@ export function collectEntries(
   const out: BackupEntry[] = []
   const walk = (abs: string, rel: string): void => {
     if (excludeRel.has(relKey(rel))) return
+    const base = relKey(rel).split('/').pop() ?? rel
+    if (EXCLUDE_NAME_PATTERNS.some((p) => p.test(base))) return
     let st: ReturnType<typeof statSync>
     try {
       st = statSync(abs)
@@ -93,6 +111,10 @@ export function collectEntries(
       }
       for (const name of entries) walk(join(abs, name), rel ? `${rel}/${name}` : name)
     } else if (st.isFile()) {
+      if (st.size > MAX_BACKUP_FILE_BYTES) {
+        console.warn(`[wicked] backup: skipping oversized file (${Math.round(st.size / 1048576)} MB): ${relKey(rel)}`)
+        return
+      }
       out.push({ abs, rel: relKey(rel) })
     }
   }
