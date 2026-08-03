@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GripVertical, ImagePlus, Trash2, Type } from 'lucide-react'
+import { GripVertical, ImagePlus, Trash2 } from 'lucide-react'
 import { imgUrl, useBoard, type CanvasItem } from './store'
 
 /**
@@ -21,6 +21,7 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
   const items = useBoard((s) => s.canvasItems).filter((i) => i.folderId === folderId)
   const addText = useBoard((s) => s.addCanvasText)
   const addImage = useBoard((s) => s.addCanvasImage)
+  const del = useBoard((s) => s.deleteCanvasItem)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // where the last click / paste landed, so new items appear near the cursor
@@ -42,36 +43,49 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
     return { x: Math.max(0, clientX - r.left + el.scrollLeft), y: Math.max(0, clientY - r.top + el.scrollTop) }
   }
 
-  // paste an image straight onto the canvas
+  // Paste an image straight onto the canvas.
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent): Promise<void> => {
-      const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')) return
+      // Look for an image on the clipboard. If there's none we do nothing, so a
+      // plain text paste falls through to whatever textarea currently has focus.
+      let blob: File | null = null
       for (const it of Array.from(e.clipboardData?.items ?? [])) {
         if (it.type.startsWith('image/')) {
-          const blob = it.getAsFile()
-          if (!blob) continue
-          e.preventDefault()
-          const p = lastPoint.current
-          await addImage(folderId, blob, p.x, p.y)
-          return
+          const f = it.getAsFile()
+          if (f) {
+            blob = f
+            break
+          }
         }
       }
+      if (!blob) return
+      e.preventDefault()
+
+      // Where the image lands: the last spot you clicked. If the caret is in a
+      // fresh, still-empty note (you clicked a spot then pasted instead of
+      // typing), reuse that note's spot and delete the empty note — so the image
+      // lands exactly where you clicked with nothing left over.
+      let { x, y } = lastPoint.current
+      const active = document.activeElement as HTMLElement | null
+      const activeId = active?.getAttribute('data-cv-id') ?? null
+      if (activeId) {
+        const note = useBoard.getState().canvasItems.find((i) => i.id === activeId)
+        if (note && note.kind === 'text' && !(note.text ?? '').trim()) {
+          x = note.x
+          y = note.y
+          await del(activeId)
+        }
+      }
+      await addImage(folderId, blob, x, y)
     }
     document.addEventListener('paste', onPaste)
     return () => document.removeEventListener('paste', onPaste)
-  }, [folderId, addImage])
+  }, [folderId, addImage, del])
 
   return (
     <div className="flex h-full flex-col">
       {/* toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => void addText(folderId, lastPoint.current.x, lastPoint.current.y)}
-          className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90"
-        >
-          <Type size={14} /> Add text
-        </button>
         <button
           onClick={() => fileRef.current?.click()}
           className="flex items-center gap-1.5 rounded-lg border border-edge bg-surface px-3 py-1.5 text-sm font-medium hover:border-accent/60"
@@ -97,8 +111,8 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
           }}
         />
         <span className="text-xs text-muted">
-          Click empty space to start a note · paste (Ctrl+V) an image anywhere · drag the grip · resize
-          from the corner
+          Click anywhere to type · paste (Ctrl+V) an image where you click · drag the grip to move ·
+          resize from the corner
         </span>
       </div>
 
@@ -120,7 +134,7 @@ export default function Freeform({ folderId }: { folderId: string }): React.JSX.
         >
           {items.length === 0 && (
             <div className="pointer-events-none absolute left-1/2 top-24 -translate-x-1/2 text-center text-sm text-muted">
-              Empty canvas — click anywhere to start a note, or paste an image.
+              Empty canvas — click anywhere to start typing, or paste an image.
             </div>
           )}
           {items.map((it) => (
@@ -216,9 +230,16 @@ function CanvasNode({ item, autoFocus }: { item: CanvasItem; autoFocus?: boolean
         {item.kind === 'text' ? (
           <textarea
             ref={taRef}
+            data-cv-id={item.id}
             defaultValue={item.text}
             onChange={(e) => patch(item.id, { text: e.target.value })}
-            onBlur={() => void persist(item.id)}
+            onBlur={() => {
+              // Clicked to start a note but typed nothing? Drop it so misclicks
+              // don't litter the canvas with empty notes. Otherwise save.
+              const cur = useBoard.getState().canvasItems.find((i) => i.id === item.id)
+              if (cur && cur.kind === 'text' && !(cur.text ?? '').trim()) void del(item.id)
+              else void persist(item.id)
+            }}
             placeholder="Type anything…"
             className="h-full w-full resize-none bg-transparent px-2 py-1.5 text-sm text-ink outline-none"
           />

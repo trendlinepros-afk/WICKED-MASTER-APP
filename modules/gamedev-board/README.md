@@ -18,7 +18,15 @@ Carried over 1:1:
 
 Changed for WICKED:
 
-- Storage is the same IndexedDB schema (`gamedevhelper` v1) but now lives in the
+- **Freeform is the default view.** A folder opens as a freeform canvas: click
+  anywhere to start typing (an empty note you never fill in is discarded on blur),
+  paste a screenshot with Ctrl+V and it lands exactly where you clicked, drag items
+  by the grip, resize from the corner. Everything persists to IndexedDB
+  (`canvasItems` store).
+- **Cards are an optional alternate view.** The single button top-right toggles
+  between the freeform canvas and the stacked-card view (title, notes, screenshots,
+  checklist). Both views share the same folders and image store.
+- Storage is the same IndexedDB schema (`gamedevhelper` v2) but now lives in the
   WICKED renderer profile
 - The old in-app light/dark toggle is gone — the shell's theme applies
 - Runtime favicon drawing dropped (shell owns the window)

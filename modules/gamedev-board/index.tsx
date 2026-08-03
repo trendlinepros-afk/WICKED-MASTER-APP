@@ -219,22 +219,24 @@ export default function GameDevBoard(): React.JSX.Element {
           <ModuleTitle fallback="Project Board" />
         </div>
         <div className="flex items-center gap-3.5">
-          {settings.view === 'board' && (
-            <div className="flex overflow-hidden rounded-lg border border-edge text-[13px]">
+          {settings.view === 'board' &&
+            (settings.boardMode === 'freeform' ? (
               <button
                 onClick={() => saveSettings({ boardMode: 'cards' })}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 font-medium ${settings.boardMode !== 'freeform' ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+                title="Switch to stacked card view"
+                className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-[13px] font-medium text-muted hover:border-accent/60 hover:text-ink"
               >
                 <LayoutGrid size={14} /> Cards
               </button>
+            ) : (
               <button
                 onClick={() => saveSettings({ boardMode: 'freeform' })}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 font-medium ${settings.boardMode === 'freeform' ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+                title="Back to the freeform canvas"
+                className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-[13px] font-medium text-muted hover:border-accent/60 hover:text-ink"
               >
                 <StickyNote size={14} /> Freeform
               </button>
-            </div>
-          )}
+            ))}
           <TimerBox />
           <button
             title="Export backup"

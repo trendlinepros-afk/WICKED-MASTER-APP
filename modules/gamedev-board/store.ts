@@ -174,7 +174,9 @@ export interface BackupDump {
 
 const DEFAULT_SETTINGS: BoardSettings = {
   view: 'board',
-  boardMode: 'cards',
+  // Freeform is the primary way to use a folder: click anywhere to type, paste an
+  // image onto the canvas. Cards are an optional alternate view (toggle top-right).
+  boardMode: 'freeform',
   activeFolder: null,
   timerStart: null,
   sidebarWidth: 188
@@ -254,6 +256,7 @@ export const useBoard = create<BoardState>((set, getState) => ({
     // seed on first run (same starter content as the standalone app)
     let seeded = folders
     let seededCards = cards
+    let seededCanvas = canvasItems
     if (!folders.length) {
       const f1: Folder = { id: uid('f'), name: 'Ideas', createdAt: Date.now() }
       const f2: Folder = { id: uid('f'), name: 'To-do', createdAt: Date.now() + 1 }
@@ -275,11 +278,26 @@ export const useBoard = create<BoardState>((set, getState) => ({
       }
       seededCards = [welcome]
       await put('cards', welcome)
+      // Freeform is the default view, so drop a welcome note on the canvas too.
+      const welcomeNote: CanvasItem = {
+        id: uid('cv'),
+        folderId: f1.id,
+        kind: 'text',
+        x: 40,
+        y: 40,
+        w: 300,
+        h: 128,
+        z: 1,
+        text: 'Welcome 👋\n\nClick anywhere on this canvas to start typing. Paste a screenshot with Ctrl+V to drop it right where you click. Drag the grip to move things, resize from the corner.\n\nPrefer stacked cards? Use "Cards" at the top right.',
+        createdAt: Date.now()
+      }
+      seededCanvas = [welcomeNote]
+      await put('canvasItems', welcomeNote)
       settings = { ...settings, activeFolder: f1.id }
       await put('settings', { key: 'app', ...settings })
     }
 
-    set({ ready: true, folders: seeded, cards: seededCards, canvasItems, entries, settings })
+    set({ ready: true, folders: seeded, cards: seededCards, canvasItems: seededCanvas, entries, settings })
   },
 
   saveSettings: async (patch) => {
