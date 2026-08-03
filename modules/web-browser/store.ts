@@ -67,14 +67,14 @@ interface WebBrowserState {
   tabs: BrowserTab[]
   activeId: string | null
   bookmarks: Bookmark[]
-  /** true once the saved session has been restored (gates session saving) */
+  /** true once boot opened the first tab (incognito: there is never a saved session) */
   restored: boolean
   addTab: (url?: string | null) => string
   closeTab: (id: string) => void
   setActive: (id: string) => void
   updateTab: (id: string, patch: Partial<BrowserTab>) => void
   setBookmarks: (bookmarks: Bookmark[]) => void
-  restoreSession: (urls: string[], activeUrl: string | null) => void
+  startFresh: () => void
 }
 
 export const useWebBrowser = create<WebBrowserState>((set, get) => ({
@@ -114,9 +114,8 @@ export const useWebBrowser = create<WebBrowserState>((set, get) => ({
 
   setBookmarks: (bookmarks) => set({ bookmarks }),
 
-  restoreSession: (urls, activeUrl) => {
-    const tabs = urls.length > 0 ? urls.map((u) => makeTab(u)) : [makeTab(null)]
-    const active = tabs.find((t) => t.url === activeUrl) ?? tabs[tabs.length - 1]
-    set({ tabs, activeId: active.id, restored: true })
+  startFresh: () => {
+    const tab = makeTab(null)
+    set({ tabs: [tab], activeId: tab.id, restored: true })
   }
 }))

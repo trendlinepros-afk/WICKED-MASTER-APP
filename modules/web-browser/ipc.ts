@@ -16,13 +16,19 @@ import {
 import { findChrome, launchChrome } from './ipc/chrome'
 
 const ID = 'web-browser'
-/** must match the partition the renderer's <webview> tags use */
-const PARTITION = 'persist:web-browser'
+/**
+ * Must match the partition the renderer's <webview> tags use. NO `persist:`
+ * prefix — the embedded browser is always incognito: cookies, history, cache and
+ * site storage live in memory only and are gone when WICKED closes. Nothing is
+ * ever written to disk.
+ */
+const PARTITION = 'web-browser'
+/** the on-disk partition older versions used; wiped once at startup */
+const LEGACY_PARTITION = 'persist:web-browser'
 /** deliberately not 9222 so dev tooling on the machine doesn't collide */
 const DEFAULT_DEBUG_PORT = 9224
 const LAUNCH_WAIT_MS = 20_000
 const MAX_PAGE_CHARS = 150_000
-const MAX_SESSION_TABS = 40
 
 const CHROME_NOT_FOUND =
   'Google Chrome was not found. Install Chrome, or pick chrome.exe manually in the Web Browser module (Full Chrome panel → "Locate Chrome…").'
@@ -143,29 +149,21 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, bookmarks }
   })
 
-  /* ------------------- in-app tab session (restore on open) -------------- */
+  /* ----------------------------- incognito-only --------------------------- */
 
-  ctx.ipcMain.handle(`${ID}:session-get`, () => {
-    const raw = asRecord(ctx.storeGet<unknown>(`${ID}.session`, {}))
-    const urls = Array.isArray(raw.urls)
-      ? raw.urls.filter(isHttpUrl).slice(0, MAX_SESSION_TABS)
-      : []
-    return {
-      ok: true,
-      urls,
-      activeUrl: typeof raw.activeUrl === 'string' ? raw.activeUrl : null
-    }
-  })
-
-  ctx.ipcMain.handle(`${ID}:session-set`, (_e, raw: unknown) => {
-    const r = asRecord(raw)
-    const urls = Array.isArray(r.urls) ? r.urls.filter(isHttpUrl).slice(0, MAX_SESSION_TABS) : []
-    ctx.storeSet(`${ID}.session`, {
-      urls,
-      activeUrl: typeof r.activeUrl === 'string' ? r.activeUrl : null
-    })
-    return { ok: true }
-  })
+  // Always-incognito: the live partition is in-memory, so simply not persisting
+  // is the guarantee. Two bits of one-time hygiene for machines that ran older
+  // versions: drop the saved "reopen last tabs" session, and erase the browsing
+  // data (cookies/history/cache) the old persist: partition left on disk.
+  ctx.storeSet(`${ID}.session`, {})
+  try {
+    const legacy = session.fromPartition(LEGACY_PARTITION)
+    void Promise.all([legacy.clearStorageData(), legacy.clearCache()]).catch((err) =>
+      console.error(`[${ID}] could not clear legacy browsing data`, err)
+    )
+  } catch (err) {
+    console.error(`[${ID}] could not open legacy browsing partition`, err)
+  }
 
   const browserSession = session.fromPartition(PARTITION)
 

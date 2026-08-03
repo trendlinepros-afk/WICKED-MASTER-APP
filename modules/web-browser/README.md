@@ -3,10 +3,14 @@
 A browser module with two complementary modes:
 
 1. **In-app browser** — a tabbed `<webview>` browser embedded in the WICKED window:
-   address bar (URL or Google search), back/forward/reload, per-site logins that
-   persist (`persist:web-browser` session partition), bookmarks (stored by the
-   module), and tab-session restore. Popups / `target=_blank` open as new in-app
-   tabs (routed through the main process, scoped to this module's partition only).
+   address bar (URL or search), back/forward/reload, bookmarks (stored by the
+   module). **Always incognito**: the `web-browser` session partition has no
+   `persist:` prefix, so cookies, history, cache and site storage live in memory
+   only — nothing is ever written to disk, everything vanishes when WICKED closes,
+   and no tab session is saved or restored. (Startup also wipes any browsing data
+   the old `persist:web-browser` partition left behind on machines that ran
+   pre-incognito versions.) Popups / `target=_blank` open as new in-app tabs
+   (routed through the main process, scoped to this module's partition only).
 2. **Full Chrome** — launches the user's real Google Chrome with a **dedicated
    WICKED profile** (`userData/modules/web-browser/chrome-profile`) and a
    localhost-only DevTools automation port. This is where Chrome extensions —
@@ -68,6 +72,9 @@ Security notes:
 - Screenshots require bringing the tab to the front (Chrome can't capture
   background tabs); the tool does this automatically.
 - The in-app browser deliberately keeps at least one tab open (a start page).
+- Because the in-app browser is incognito, site logins there last only for the
+  current WICKED run. For logins that should stick (and for extensions), use
+  Full Chrome — its dedicated profile persists by design.
 
 ## Data paths
 

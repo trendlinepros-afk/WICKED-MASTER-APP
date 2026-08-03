@@ -3,6 +3,6 @@
   "name": "Web Browser",
   "icon": "Globe",
   "version": "1.0.0",
-  "description": "Tabbed browser with bookmarks, plus full Chrome (your extensions, incl. Claude) automated over MCP",
+  "description": "Always-incognito tabbed browser (nothing saved) with bookmarks, plus full Chrome (your extensions, incl. Claude) automated over MCP",
   "status": "stable"
 }

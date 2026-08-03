@@ -11,13 +11,18 @@ import {
   Plus,
   RotateCw,
   Star,
+  VenetianMask,
   X
 } from 'lucide-react'
 import { hostOf, normalizeInput, useWebBrowser, type Bookmark, type BrowserTab } from './store'
 
 const ID = 'web-browser'
-/** must match the partition ipc.ts scopes its session/popup handling to */
-const PARTITION = 'persist:web-browser'
+/**
+ * Must match the partition ipc.ts scopes its session/popup handling to.
+ * NO `persist:` prefix — the embedded browser is always incognito: history,
+ * cookies and cache live in memory only and vanish when WICKED closes.
+ */
+const PARTITION = 'web-browser'
 // The user agent + Sec-CH-UA client hints for this partition are set once in
 // main (ipc.ts) so the UA and the client hints always agree — spoofing only the
 // UA attribute here would leave the "Electron" client-hint brand in place and
@@ -56,19 +61,18 @@ export default function WebBrowser(): React.JSX.Element {
 
   const webviews = useRef(new Map<string, WebviewElement>())
 
-  /* ------------------------- boot: session + bookmarks ------------------- */
+  /* ------------------------------ boot: bookmarks ------------------------- */
 
+  // Incognito: no saved tab session to restore (and none is ever written) —
+  // boot just loads bookmarks and opens a fresh start tab.
   useEffect(() => {
     const st = useWebBrowser.getState()
     if (!st.restored) {
       void (async () => {
-        const [bm, sess] = await Promise.all([
-          invoke(`${ID}:bookmarks-get`) as Promise<{ bookmarks?: Bookmark[] }>,
-          invoke(`${ID}:session-get`) as Promise<{ urls?: string[]; activeUrl?: string | null }>
-        ])
+        const bm = (await invoke(`${ID}:bookmarks-get`)) as { bookmarks?: Bookmark[] }
         const cur = useWebBrowser.getState()
         if (bm.bookmarks) cur.setBookmarks(bm.bookmarks)
-        if (!cur.restored) cur.restoreSession(sess.urls ?? [], sess.activeUrl ?? null)
+        if (!cur.restored) cur.startFresh()
       })()
     }
     // popups from page JS / target=_blank / MCP open-in-app arrive here
@@ -77,18 +81,6 @@ export default function WebBrowser(): React.JSX.Element {
     })
     return off
   }, [])
-
-  // persist the open-tab set (debounced) so the module reopens where it left off
-  useEffect(() => {
-    if (!restored) return
-    const timer = setTimeout(() => {
-      const urls = tabs
-        .map((t) => t.url)
-        .filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u))
-      void invoke(`${ID}:session-set`, { urls, activeUrl: active?.url ?? null })
-    }, 600)
-    return () => clearTimeout(timer)
-  }, [tabs, active?.url, restored])
 
   /* ------------------------------ navigation ----------------------------- */
 
@@ -359,6 +351,14 @@ function NavBar({
         <ExternalLink size={14} />
       </button>
 
+      <span
+        title="Always incognito — history, cookies and cache are kept in memory only and wiped when WICKED closes. Nothing is saved to disk."
+        className="flex h-8 shrink-0 cursor-default items-center gap-1.5 rounded-lg border border-edge px-2.5 text-[11px] font-medium text-muted"
+      >
+        <VenetianMask size={14} />
+        Incognito
+      </span>
+
       <ChromePanel currentUrl={active?.url ?? null} />
     </div>
   )
@@ -573,6 +573,10 @@ function StartPage({
         </div>
         <p className="mt-2 text-center text-sm text-muted">
           Type a URL or search above — or jump back into a bookmark.
+        </p>
+        <p className="mt-1.5 flex items-center justify-center gap-1.5 text-center text-xs text-muted/80">
+          <VenetianMask size={13} />
+          Always incognito: nothing is saved — history, cookies and logins vanish when WICKED closes.
         </p>
 
         {bookmarks.length > 0 && (
