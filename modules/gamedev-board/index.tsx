@@ -10,7 +10,6 @@ import {
   Plus,
   Settings2,
   Square,
-  StickyNote,
   Upload
 } from 'lucide-react'
 import {
@@ -23,7 +22,6 @@ import {
   type BackupDump,
   type Folder as FolderT
 } from './store'
-import Board from './Board'
 import Freeform from './Freeform'
 import TimeLog from './TimeLog'
 import { ConfirmModal, FolderMenu, SessionNotePrompt, TextPrompt } from './Modals'
@@ -149,14 +147,12 @@ export default function GameDevBoard(): React.JSX.Element {
     ready,
     init,
     folders,
-    cards,
+    canvasItems,
     settings,
     saveSettings,
     addFolder,
     renameFolder,
     deleteFolder,
-    setActiveCard,
-    addImageToCard,
     exportData,
     importData,
     dataEpoch
@@ -167,33 +163,6 @@ export default function GameDevBoard(): React.JSX.Element {
   useEffect(() => {
     init()
   }, [init])
-
-  // global paste -> active card (or a fresh card in the current folder)
-  useEffect(() => {
-    const onPaste = async (e: ClipboardEvent): Promise<void> => {
-      const state = useBoard.getState()
-      // freeform handles its own paste (drops the image on the canvas)
-      if (state.settings.view !== 'board' || state.settings.boardMode === 'freeform') return
-      for (const it of Array.from(e.clipboardData?.items ?? [])) {
-        if (it.type.startsWith('image/')) {
-          const blob = it.getAsFile()
-          if (!blob) continue
-          e.preventDefault()
-          let cardId = state.activeCardId
-          if (!state.cards.some((c) => c.id === cardId)) {
-            const fid = state.settings.activeFolder ?? state.folders[0]?.id
-            if (!fid) return
-            const c = await state.addCard(fid)
-            cardId = c.id
-          }
-          await addImageToCard(cardId!, blob)
-          return
-        }
-      }
-    }
-    document.addEventListener('paste', onPaste)
-    return () => document.removeEventListener('paste', onPaste)
-  }, [addImageToCard])
 
   if (!ready) {
     return (
@@ -219,24 +188,6 @@ export default function GameDevBoard(): React.JSX.Element {
           <ModuleTitle fallback="Project Board" />
         </div>
         <div className="flex items-center gap-3.5">
-          {settings.view === 'board' &&
-            (settings.boardMode === 'freeform' ? (
-              <button
-                onClick={() => saveSettings({ boardMode: 'cards' })}
-                title="Switch to stacked card view"
-                className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-[13px] font-medium text-muted hover:border-accent/60 hover:text-ink"
-              >
-                <LayoutGrid size={14} /> Cards
-              </button>
-            ) : (
-              <button
-                onClick={() => saveSettings({ boardMode: 'freeform' })}
-                title="Back to the freeform canvas"
-                className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-[13px] font-medium text-muted hover:border-accent/60 hover:text-ink"
-              >
-                <StickyNote size={14} /> Freeform
-              </button>
-            ))}
           <TimerBox />
           <button
             title="Export backup"
@@ -304,7 +255,7 @@ export default function GameDevBoard(): React.JSX.Element {
             Folders
           </div>
           {folders.map((f) => {
-            const count = cards.filter((c) => c.folderId === f.id).length
+            const count = canvasItems.filter((i) => i.folderId === f.id).length
             const active = settings.view === 'board' && settings.activeFolder === f.id
             return (
               <div key={f.id} className="group flex items-center">
@@ -343,12 +294,8 @@ export default function GameDevBoard(): React.JSX.Element {
           <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-16 pt-4">
             <TimeLog />
           </div>
-        ) : settings.boardMode === 'freeform' ? (
-          <FreeformContent onNewFolder={() => setModal({ kind: 'newFolder' })} />
         ) : (
-          <div className="min-w-0 flex-1 overflow-y-auto px-5 pb-16 pt-4">
-            <Board onNewFolder={() => setModal({ kind: 'newFolder' })} />
-          </div>
+          <FreeformContent onNewFolder={() => setModal({ kind: 'newFolder' })} />
         )}
       </div>
 
@@ -388,8 +335,8 @@ export default function GameDevBoard(): React.JSX.Element {
         <ConfirmModal
           title="Delete folder?"
           message={`"${modal.folder.name}" and its ${
-            cards.filter((c) => c.folderId === modal.folder.id).length
-          } card(s) will be removed. This cannot be undone.`}
+            canvasItems.filter((i) => i.folderId === modal.folder.id).length
+          } item(s) will be removed. This cannot be undone.`}
           danger
           onDone={(ok) => {
             setModal(null)
@@ -415,10 +362,7 @@ export default function GameDevBoard(): React.JSX.Element {
           onDone={async (ok) => {
             const dump = modal.dump
             setModal(null)
-            if (ok) {
-              await importData(dump)
-              setActiveCard(null)
-            }
+            if (ok) await importData(dump)
           }}
         />
       )}

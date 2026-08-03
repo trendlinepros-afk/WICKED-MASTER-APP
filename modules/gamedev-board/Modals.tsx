@@ -181,14 +181,3 @@ export function FolderMenu({
     </Overlay>
   )
 }
-
-export function Lightbox({ url, onClose }: { url: string; onClose: () => void }): React.JSX.Element {
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex cursor-zoom-out items-center justify-center bg-black/85 p-8"
-      onClick={onClose}
-    >
-      <img src={url} className="max-h-full max-w-full rounded-lg" />
-    </div>
-  )
-}
