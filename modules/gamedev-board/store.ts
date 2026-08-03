@@ -35,19 +35,33 @@ export interface TimeEntry {
   createdAt: number
 }
 
-/** A freely-positioned item on a folder's freeform canvas (text or image). */
+/**
+ * A freely-positioned item on a folder's freeform canvas.
+ * All newer fields are OPTIONAL and additive — old records (and old backups)
+ * load unchanged, and no IndexedDB schema/version bump is ever needed for them.
+ */
 export interface CanvasItem {
   id: string
   folderId: string
-  kind: 'text' | 'image'
+  kind: 'text' | 'image' | 'draw' | 'arrow'
   x: number
   y: number
   w: number
   h: number
   z: number
+  /** user-given label shown in the item header (falls back to the kind) */
+  title?: string
+  /** plain-text fallback of a text item's body (kept in sync with html) */
   text?: string
+  /** rich body of a text item (headings / colors); produced only by our editor */
+  html?: string
   /** image blob id in the shared `images` store (reused from cards) */
   imageId?: string
+  /** draw: flat polyline [x0,y0,x1,y1,…]; arrow: [x1,y1,x2,y2] — relative to x/y */
+  points?: number[]
+  /** stroke color for draw/arrow (any CSS color, may reference theme vars) */
+  color?: string
+  strokeWidth?: number
   createdAt: number
 }
 
@@ -130,6 +144,11 @@ interface BoardState {
 
   addCanvasText: (folderId: string, x: number, y: number) => Promise<CanvasItem>
   addCanvasImage: (folderId: string, blob: Blob, x: number, y: number) => Promise<void>
+  addCanvasStroke: (
+    folderId: string,
+    s: { x: number; y: number; w: number; h: number; points: number[]; color: string; strokeWidth: number }
+  ) => Promise<void>
+  addCanvasArrow: (folderId: string, x: number, y: number, color: string) => Promise<void>
   patchCanvasItem: (id: string, patch: Partial<CanvasItem>) => void
   persistCanvasItem: (id: string) => Promise<void>
   bringCanvasItemFront: (id: string) => Promise<void>
@@ -279,6 +298,37 @@ export const useBoard = create<BoardState>((set, getState) => ({
       h: 200,
       z,
       imageId,
+      createdAt: Date.now()
+    }
+    set({ canvasItems: [...items, it] })
+    await put('canvasItems', it)
+  },
+
+  addCanvasStroke: async (folderId, s) => {
+    const items = getState().canvasItems
+    const z = items.reduce((m, i) => Math.max(m, i.z), 0) + 1
+    const it: CanvasItem = { id: uid('cv'), folderId, kind: 'draw', ...s, z, createdAt: Date.now() }
+    set({ canvasItems: [...items, it] })
+    await put('canvasItems', it)
+  },
+
+  addCanvasArrow: async (folderId, x, y, color) => {
+    const items = getState().canvasItems
+    const z = items.reduce((m, i) => Math.max(m, i.z), 0) + 1
+    // bbox padded so the arrowhead and endpoint handles stay inside it
+    const pad = 14
+    const it: CanvasItem = {
+      id: uid('cv'),
+      folderId,
+      kind: 'arrow',
+      x,
+      y,
+      w: 140 + pad * 2,
+      h: pad * 2,
+      z,
+      points: [pad, pad, pad + 140, pad],
+      color,
+      strokeWidth: 3,
       createdAt: Date.now()
     }
     set({ canvasItems: [...items, it] })
