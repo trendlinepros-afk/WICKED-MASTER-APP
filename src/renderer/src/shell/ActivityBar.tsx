@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   ChevronDown,
@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   Settings
 } from 'lucide-react'
+import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
@@ -40,6 +41,11 @@ export default function ActivityBar(): React.JSX.Element {
   const [dragWidth, setDragWidth] = useState<number | null>(null)
   const navWidth = dragWidth ?? settings.navWidth ?? 224
   const location = useLocation()
+  const [appVersion, setAppVersion] = useState('')
+
+  useEffect(() => {
+    window.wicked.invoke(SHELL_IPC.appVersion).then((v) => setAppVersion(v as string))
+  }, [])
 
   // Drag the right edge to resize the expanded sidebar (persisted).
   const startResize = (e: React.MouseEvent): void => {
@@ -265,11 +271,11 @@ export default function ActivityBar(): React.JSX.Element {
       {/* Cloud Sync status (hidden until sync is set up) */}
       <SyncBadge expanded={expanded} />
 
-      {/* Check for Updates */}
+      {/* Check for Updates (with the installed version alongside) */}
       <button
         onClick={() => checkForUpdates()}
         disabled={checking}
-        title={expanded ? undefined : 'Check for Updates'}
+        title={expanded ? undefined : `Check for Updates${appVersion ? ` (v${appVersion})` : ''}`}
         className={`${rowClass(false, expanded)} shrink-0 disabled:opacity-60`}
       >
         {checking ? (
@@ -278,9 +284,14 @@ export default function ActivityBar(): React.JSX.Element {
           <DownloadCloud size={20} strokeWidth={1.8} className="shrink-0" />
         )}
         {expanded && (
-          <span className="truncate text-sm">
-            {checking ? 'Checking…' : 'Check for Updates'}
-          </span>
+          <>
+            <span className="min-w-0 flex-1 truncate text-left text-sm">
+              {checking ? 'Checking…' : 'Check for Updates'}
+            </span>
+            {appVersion && (
+              <span className="shrink-0 text-[10.5px] tabular-nums text-muted/80">v{appVersion}</span>
+            )}
+          </>
         )}
       </button>
 
