@@ -2,8 +2,8 @@
   "id": "advanced-charts",
   "name": "Advanced Charts",
   "icon": "LineChart",
-  "version": "2.0.0",
-  "description": "Candlestick charts (Lightweight Charts) fed by your Massive market data — no external library needed",
+  "version": "2.1.0",
+  "description": "Multi-chart candlestick grid (1-12 charts, 1m-weekly candles) with per-ticker notes, fed by your Massive market data",
   "status": "stable",
   "group": {
     "id": "stocks",
