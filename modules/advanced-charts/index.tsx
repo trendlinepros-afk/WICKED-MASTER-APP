@@ -251,6 +251,9 @@ function ChartTile({
   const [range, setRange] = useState(globalRange)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
+  const barsRef = useRef<Bar[]>([])
+  const seqRef = useRef(0)
 
   // The top dropdowns override every chart whenever they change.
   useEffect(() => {
@@ -298,31 +301,42 @@ function ChartTile({
     }
   }, [])
 
-  // Load candles on symbol / interval / range change.
-  useEffect(() => {
+  /**
+   * Load bars. fresh=true (new symbol / duration / range) repaints and reframes
+   * the view; fresh=false (auto-refresh) merges only the newest bars in place
+   * via series.update(), so zoom and pan are never disturbed. Refresh errors
+   * are ignored — the chart keeps its last good data.
+   */
+  const doLoad = async (fresh: boolean): Promise<void> => {
     if (!symbol) return
-    let alive = true
+    const mySeq = fresh ? ++seqRef.current : seqRef.current
     const rangeDays = rangeDaysOf(range)
-    void (async () => {
+    if (fresh) {
       setLoading(true)
       setError('')
-      const res = (await window.wicked.invoke(`${ID}:candles`, { symbol, timeframe: tf, rangeDays })) as {
-        ok?: boolean
-        bars?: Bar[]
-        error?: string
-        note?: string
-      }
-      if (!alive) return
-      setLoading(false)
-      const bars = res?.bars ?? []
-      if (!bars.length) {
+    }
+    const res = (await window.wicked.invoke(`${ID}:candles`, { symbol, timeframe: tf, rangeDays })) as {
+      ok?: boolean
+      bars?: Bar[]
+      error?: string
+      note?: string
+    }
+    if (seqRef.current !== mySeq) return // superseded by a newer fresh load
+    if (fresh) setLoading(false)
+    const bars = res?.bars ?? []
+    if (!bars.length) {
+      if (fresh) {
         setError(res?.error || res?.note || 'No data.')
         candleRef.current?.setData([])
         volRef.current?.setData([])
-        return
+        barsRef.current = []
       }
-      const up = cssRGB('--wk-ok', '#22c55e')
-      const down = cssRGB('--wk-danger', '#ef4444')
+      return
+    }
+    const up = cssRGB('--wk-ok', '#22c55e')
+    const down = cssRGB('--wk-danger', '#ef4444')
+    const prev = barsRef.current
+    if (fresh || prev.length === 0) {
       candleRef.current?.setData(
         bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c }))
       )
@@ -342,11 +356,42 @@ function ChartTile({
       }
       if (from === 0) chartRef.current?.timeScale().fitContent()
       else chartRef.current?.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: bars.length + 1 })
-    })()
-    return () => {
-      alive = false
+    } else {
+      // live refresh: replace/extend from the last known bar onward only
+      const lastT = prev[prev.length - 1].t
+      for (const b of bars) {
+        if (b.t < lastT) continue
+        candleRef.current?.update({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c })
+        volRef.current?.update({ time: Math.floor(b.t / 1000) as UTCTimestamp, value: b.v, color: b.c >= b.o ? up : down })
+      }
     }
+    barsRef.current = bars
+    setUpdatedAt(Date.now())
+  }
+  const doLoadRef = useRef(doLoad)
+  doLoadRef.current = doLoad
+
+  // Fresh load on symbol / interval / range change.
+  useEffect(() => {
+    barsRef.current = []
+    setUpdatedAt(null)
+    void doLoadRef.current(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, tf, range])
+
+  // Auto-refresh every minute while a ticker is loaded (start offset staggers
+  // the tiles so a full grid doesn't fire all requests in the same instant).
+  useEffect(() => {
+    if (!symbol) return
+    let interval: ReturnType<typeof setInterval> | null = null
+    const start = setTimeout(() => {
+      interval = setInterval(() => void doLoadRef.current(false), 60_000)
+    }, 3000 + Math.random() * 12_000)
+    return () => {
+      clearTimeout(start)
+      if (interval) clearInterval(interval)
+    }
+  }, [symbol])
 
   const submit = (): void => {
     const s = input.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
@@ -380,30 +425,40 @@ function ChartTile({
             {error}
           </span>
         )}
-        <select
-          value={tf}
-          onChange={(e) => setTf(e.target.value)}
-          title="Candle duration for this chart only (the top dropdown overrides it)"
-          className="ml-auto shrink-0 rounded-md border border-edge bg-raised px-1.5 py-1 text-[11px] text-muted outline-none focus:border-accent"
-        >
-          {INTERVALS.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={range}
-          onChange={(e) => setRange(e.target.value)}
-          title="History shown on this chart only (the top dropdown overrides it)"
-          className="shrink-0 rounded-md border border-edge bg-raised px-1.5 py-1 text-[11px] text-muted outline-none focus:border-accent"
-        >
-          {RANGES.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.label}
-            </option>
-          ))}
-        </select>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {symbol && updatedAt && !loading && (
+            <span
+              className="text-[10px] tabular-nums text-muted/70"
+              title="Last refreshed — charts auto-refresh every minute while loaded"
+            >
+              {new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          <select
+            value={tf}
+            onChange={(e) => setTf(e.target.value)}
+            title="Candle duration for this chart only (the top dropdown overrides it)"
+            className="rounded-md border border-edge bg-raised px-1.5 py-1 text-[11px] text-muted outline-none focus:border-accent"
+          >
+            {INTERVALS.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={range}
+            onChange={(e) => setRange(e.target.value)}
+            title="History shown on this chart only (the top dropdown overrides it)"
+            className="rounded-md border border-edge bg-raised px-1.5 py-1 text-[11px] text-muted outline-none focus:border-accent"
+          >
+            {RANGES.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* chart */}

@@ -25,6 +25,13 @@ same **Massive/Polygon** market data the rest of the Stocks tools use. If your
   14 days) to stay under the API row limit.
 - Candles + a volume histogram render inline, colored with the app theme
   (green up / red down). Crosshair, zoom and pan are built in.
+- **Charts auto-refresh every minute** while a ticker is loaded (tiles are
+  staggered so a full grid doesn't burst requests). Refreshes merge only the
+  newest bars via `series.update()`, so zoom/pan is never disturbed, and a
+  refresh failure keeps the last good data. Each tile shows its last-refreshed
+  time next to the pickers. Note: on a 15-minute-delayed data plan the newest
+  bar is itself ~15 minutes behind the live market — the stamp shows when WE
+  fetched, not the quote time.
 
 ## Per-ticker notes
 
