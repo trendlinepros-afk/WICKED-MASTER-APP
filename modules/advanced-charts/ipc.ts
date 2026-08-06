@@ -18,21 +18,24 @@ const NOTE_MAX = 500
 interface Timeframe {
   mult: number
   timespan: 'minute' | 'hour' | 'day' | 'week'
-  days: number
+  /** cap on the fetch window so fine candles can't exceed the API's row limit */
+  maxDays: number
 }
 
-/** Candle duration → aggregate params + how far back to fetch. */
+/** Candle duration → aggregate params. The caller picks how far back (range). */
 const TIMEFRAMES: Record<string, Timeframe> = {
-  '1m': { mult: 1, timespan: 'minute', days: 2 },
-  '5m': { mult: 5, timespan: 'minute', days: 7 },
-  '15m': { mult: 15, timespan: 'minute', days: 15 },
-  '30m': { mult: 30, timespan: 'minute', days: 30 },
-  '1h': { mult: 1, timespan: 'hour', days: 60 },
-  '2h': { mult: 2, timespan: 'hour', days: 90 },
-  '4h': { mult: 4, timespan: 'hour', days: 180 },
-  '1D': { mult: 1, timespan: 'day', days: 380 },
-  '1W': { mult: 1, timespan: 'week', days: 1830 }
+  '1m': { mult: 1, timespan: 'minute', maxDays: 14 },
+  '5m': { mult: 5, timespan: 'minute', maxDays: 60 },
+  '15m': { mult: 15, timespan: 'minute', maxDays: 120 },
+  '30m': { mult: 30, timespan: 'minute', maxDays: 240 },
+  '1h': { mult: 1, timespan: 'hour', maxDays: 365 },
+  '2h': { mult: 2, timespan: 'hour', maxDays: 730 },
+  '4h': { mult: 4, timespan: 'hour', maxDays: 1830 },
+  '1D': { mult: 1, timespan: 'day', maxDays: 1830 },
+  '1W': { mult: 1, timespan: 'week', maxDays: 1830 }
 }
+
+const DEFAULT_RANGE_DAYS = 90
 
 function cleanSymbol(v: unknown): string {
   return typeof v === 'string' ? v.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10) : ''
@@ -69,16 +72,21 @@ export default function register(ctx: ModuleIpcContext): void {
     const key = ctx.getApiKey('massive')
     if (!key) return { ok: false, error: 'Add your Massive/Polygon key in Settings → API Keys to load charts.', bars: [] }
     const tf = TIMEFRAMES[tfKey]
+    const rangeDays = Math.min(1830, Math.max(1, Math.round(Number(r.rangeDays)) || DEFAULT_RANGE_DAYS))
+    // Fetch a little beyond short ranges so weekends/holidays still yield bars
+    // (the renderer trims the view to the requested range); cap per duration.
+    const fetchDays = Math.min(tf.maxDays, Math.max(rangeDays, 7))
     const to = Date.now()
-    const from = to - tf.days * 86_400_000
+    const from = to - fetchDays * 86_400_000
     try {
       const bars = await getAggregates(key, symbol, tf.mult, tf.timespan, from, to)
       return {
         ok: true,
         bars,
         timeframe: tfKey,
+        rangeDays,
         ...(bars.length === 0
-          ? { note: `No ${tfKey} data for ${symbol} — unknown symbol, or your plan/market hours have no bars yet.` }
+          ? { note: `No ${tfKey} data for ${symbol} — check the ticker symbol (e.g. JetBlue is JBLU), or your plan/market hours have no bars yet.` }
           : {})
       }
     } catch (err) {

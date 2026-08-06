@@ -13,9 +13,16 @@ same **Massive/Polygon** market data the rest of the Stocks tools use. If your
   Enter to populate it.
 - **Candles dropdown** (top): candle duration — 1m, 5m, 15m, 30m, 1h, 2h, 4h
   (the default), Daily, Weekly. Changing it **overrides every chart at once**.
-- Each chart also has its **own** duration picker (top-right of the tile) to
-  diverge from the rest — until the top dropdown is changed again, which snaps
-  all charts back to one duration.
+- **History dropdown** (top): how much price action each chart shows — 1 day,
+  1 week, 2 weeks, 1 month, **90 days (default)**, 6 months, 1 year. Works the
+  same way: changing it overrides every chart.
+- Each chart also has its **own** duration and history pickers (top-right of
+  the tile) to diverge from the rest — until a top dropdown is changed again,
+  which snaps all charts back in line. Zoom and pan stay fully interactive;
+  the range only sets the initial framing. Short ranges are fetched with a
+  small pad so a "1 day" view on a weekend falls back to the last trading day
+  instead of rendering empty; fine candles cap the window (e.g. 1m tops out at
+  14 days) to stay under the API row limit.
 - Candles + a volume histogram render inline, colored with the app theme
   (green up / red down). Crosshair, zoom and pan are built in.
 

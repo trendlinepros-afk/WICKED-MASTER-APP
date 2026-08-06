@@ -35,6 +35,24 @@ const INTERVALS = [
 ] as const
 
 const DEFAULT_TF = '4h'
+
+/** How much price history a chart shows (calendar days back from now). */
+const RANGES = [
+  { id: '1d', label: '1 day', days: 1 },
+  { id: '1w', label: '1 week', days: 7 },
+  { id: '2w', label: '2 weeks', days: 14 },
+  { id: '1m', label: '1 month', days: 30 },
+  { id: '90d', label: '90 days', days: 90 },
+  { id: '6mo', label: '6 months', days: 183 },
+  { id: '1yr', label: '1 year', days: 365 }
+] as const
+
+const DEFAULT_RANGE = '90d'
+
+function rangeDaysOf(id: string): number {
+  return RANGES.find((r) => r.id === id)?.days ?? 90
+}
+
 const LAYOUTS = [1, 2, 4, 6, 8, 10, 12] as const
 
 /** Grid columns per layout; rows fill in via auto-rows. */
@@ -71,6 +89,10 @@ export default function AdvancedCharts(): React.JSX.Element {
   )
   // bumped every time the top dropdown changes → every chart snaps to globalTf
   const [tfEpoch, setTfEpoch] = useState(0)
+  const [globalRange, setGlobalRange] = useState<string>(
+    () => localStorage.getItem('ac-range') ?? DEFAULT_RANGE
+  )
+  const [rangeEpoch, setRangeEpoch] = useState(0)
   const [hasMassive, setHasMassive] = useState(true)
   const [notes, setNotes] = useState<Record<string, string>>({})
   const noteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -99,10 +121,16 @@ export default function AdvancedCharts(): React.JSX.Element {
     )
   }
 
-  const overrideAll = (tf: string): void => {
+  const overrideAllTf = (tf: string): void => {
     setGlobalTf(tf)
     setTfEpoch((e) => e + 1)
     localStorage.setItem('ac-tf', tf)
+  }
+
+  const overrideAllRange = (id: string): void => {
+    setGlobalRange(id)
+    setRangeEpoch((e) => e + 1)
+    localStorage.setItem('ac-range', id)
   }
 
   return (
@@ -136,7 +164,7 @@ export default function AdvancedCharts(): React.JSX.Element {
           Candles
           <select
             value={globalTf}
-            onChange={(e) => overrideAll(e.target.value)}
+            onChange={(e) => overrideAllTf(e.target.value)}
             title="Sets the candle duration on ALL charts (overrides per-chart choices)"
             className="rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
           >
@@ -147,7 +175,23 @@ export default function AdvancedCharts(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <span className="text-[11px] text-muted">applies to all charts · each chart can differ until you change this</span>
+
+        <label className="flex items-center gap-1.5 text-xs text-muted">
+          History
+          <select
+            value={globalRange}
+            onChange={(e) => overrideAllRange(e.target.value)}
+            title="How much price history ALL charts show (overrides per-chart choices)"
+            className="rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm text-ink outline-none focus:border-accent"
+          >
+            {RANGES.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="text-[11px] text-muted">apply to all charts · each chart can differ until changed here</span>
 
         <span className="ml-auto text-[11px] text-muted">Lightweight Charts · Massive data</span>
       </div>
@@ -167,6 +211,8 @@ export default function AdvancedCharts(): React.JSX.Element {
               key={i}
               globalTf={globalTf}
               tfEpoch={tfEpoch}
+              globalRange={globalRange}
+              rangeEpoch={rangeEpoch}
               notes={notes}
               onNote={onNote}
             />
@@ -182,11 +228,15 @@ export default function AdvancedCharts(): React.JSX.Element {
 function ChartTile({
   globalTf,
   tfEpoch,
+  globalRange,
+  rangeEpoch,
   notes,
   onNote
 }: {
   globalTf: string
   tfEpoch: number
+  globalRange: string
+  rangeEpoch: number
   notes: Record<string, string>
   onNote: (symbol: string, text: string) => void
 }): React.JSX.Element {
@@ -198,14 +248,19 @@ function ChartTile({
   const [input, setInput] = useState('')
   const [symbol, setSymbol] = useState('')
   const [tf, setTf] = useState(globalTf)
+  const [range, setRange] = useState(globalRange)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // The top dropdown overrides every chart whenever it changes.
+  // The top dropdowns override every chart whenever they change.
   useEffect(() => {
     setTf(globalTf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tfEpoch])
+  useEffect(() => {
+    setRange(globalRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeEpoch])
 
   // Build the chart once.
   useEffect(() => {
@@ -243,14 +298,15 @@ function ChartTile({
     }
   }, [])
 
-  // Load candles on symbol / interval change.
+  // Load candles on symbol / interval / range change.
   useEffect(() => {
     if (!symbol) return
     let alive = true
+    const rangeDays = rangeDaysOf(range)
     void (async () => {
       setLoading(true)
       setError('')
-      const res = (await window.wicked.invoke(`${ID}:candles`, { symbol, timeframe: tf })) as {
+      const res = (await window.wicked.invoke(`${ID}:candles`, { symbol, timeframe: tf, rangeDays })) as {
         ok?: boolean
         bars?: Bar[]
         error?: string
@@ -273,12 +329,24 @@ function ChartTile({
       volRef.current?.setData(
         bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, value: b.v, color: b.c >= b.o ? up : down }))
       )
-      chartRef.current?.timeScale().fitContent()
+      // Show exactly the requested history window (the fetch may be padded so
+      // short ranges survive weekends). If nothing falls inside the window —
+      // e.g. "1 day" on a Sunday — fall back to the last trading day. Zoom and
+      // pan stay fully interactive after this initial framing.
+      const cutoffMs = Date.now() - rangeDays * 86_400_000
+      let from = bars.findIndex((b) => b.t >= cutoffMs)
+      if (from === -1) {
+        const lastT = bars[bars.length - 1].t
+        from = bars.findIndex((b) => b.t >= lastT - 86_400_000)
+        if (from === -1) from = 0
+      }
+      if (from === 0) chartRef.current?.timeScale().fitContent()
+      else chartRef.current?.timeScale().setVisibleLogicalRange({ from: from - 0.5, to: bars.length + 1 })
     })()
     return () => {
       alive = false
     }
-  }, [symbol, tf])
+  }, [symbol, tf, range])
 
   const submit = (): void => {
     const s = input.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 10)
@@ -321,6 +389,18 @@ function ChartTile({
           {INTERVALS.map((i) => (
             <option key={i.id} value={i.id}>
               {i.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={range}
+          onChange={(e) => setRange(e.target.value)}
+          title="History shown on this chart only (the top dropdown overrides it)"
+          className="shrink-0 rounded-md border border-edge bg-raised px-1.5 py-1 text-[11px] text-muted outline-none focus:border-accent"
+        >
+          {RANGES.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.label}
             </option>
           ))}
         </select>
