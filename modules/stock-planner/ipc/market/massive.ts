@@ -12,9 +12,9 @@ const TIMEOUT_MS = 15_000
 
 export type KeyFn = () => string | null
 
-async function massiveFetch(key: string, path: string): Promise<unknown> {
+async function massiveFetchUrl(key: string, url: string): Promise<unknown> {
   try {
-    const resp = await fetch(`${DEFAULT_BASE}${path}`, {
+    const resp = await fetch(url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(TIMEOUT_MS)
     })
@@ -23,6 +23,10 @@ async function massiveFetch(key: string, path: string): Promise<unknown> {
   } catch {
     return null
   }
+}
+
+async function massiveFetch(key: string, path: string): Promise<unknown> {
+  return massiveFetchUrl(key, `${DEFAULT_BASE}${path}`)
 }
 
 const rec = (v: unknown): Record<string, unknown> =>
@@ -57,11 +61,23 @@ export async function getAggregates(
   fromMs: number,
   toMs: number
 ): Promise<Bar[]> {
-  const j = await massiveFetch(
-    key,
-    `/v2/aggs/ticker/${encodeURIComponent(sym)}/range/${mult}/${timespan}/${fromMs}/${toMs}?adjusted=true&sort=asc&limit=50000`
-  )
-  return toBars(j)
+  // Polygon's `limit` caps the BASE (minute) aggregates used to BUILD the
+  // requested bars, not the rows returned. A months-long hourly query on a
+  // liquid ticker exceeds 50k base bars, and with sort=asc the truncation
+  // silently drops the NEWEST data — charts froze weeks in the past while
+  // thinly-traded tickers (fewer base bars) stayed complete. Follow the
+  // response's next_url pages until the window is covered.
+  let url: string | null =
+    `${DEFAULT_BASE}/v2/aggs/ticker/${encodeURIComponent(sym)}/range/${mult}/${timespan}/${fromMs}/${toMs}?adjusted=true&sort=asc&limit=50000`
+  const out: Bar[] = []
+  for (let page = 0; page < 10 && url; page++) {
+    const j = await massiveFetchUrl(key, url)
+    if (!j) break
+    out.push(...toBars(j))
+    const next = rec(j).next_url
+    url = typeof next === 'string' && next.startsWith(DEFAULT_BASE) ? next : null
+  }
+  return out
 }
 
 /** Single-day 1-minute bars (Trade Review's execution chart). */
