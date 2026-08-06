@@ -9,8 +9,11 @@ same **Massive/Polygon** market data the rest of the Stocks tools use. If your
 
 - **Charts dropdown** (top): show 1, 2, 4, 6, 8, 10 or 12 charts in a grid on
   one page. The choice persists.
-- Every chart launches **blank** — type a ticker into a chart's box and press
-  Enter to populate it.
+- Type a ticker into a chart's box and press Enter to populate it. **Loaded
+  charts persist**: each slot remembers its ticker plus its own candle/history
+  picks (localStorage), so the whole page comes back as you left it after a
+  restart or update. Shrinking the layout keeps the hidden slots' state —
+  grow it again and they return.
 - **Candles dropdown** (top): candle duration — 1m, 5m, 15m, 30m, 1h, 2h, 4h
   (the default), Daily, Weekly. Changing it **overrides every chart at once**.
 - **History dropdown** (top): how much price action each chart shows — 1 day,

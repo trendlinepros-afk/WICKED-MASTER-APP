@@ -55,6 +55,20 @@ function rangeDaysOf(id: string): number {
 
 const LAYOUTS = [1, 2, 4, 6, 8, 10, 12] as const
 
+/** Restore a chart slot's last ticker + pickers so the page survives restarts. */
+function loadSlot(slot: number): { symbol: string; tf: string | null; range: string | null } {
+  try {
+    const j = JSON.parse(localStorage.getItem(`ac-slot-${slot}`) ?? '{}') as Record<string, unknown>
+    return {
+      symbol: typeof j.symbol === 'string' ? j.symbol : '',
+      tf: typeof j.tf === 'string' && INTERVALS.some((i) => i.id === j.tf) ? j.tf : null,
+      range: typeof j.range === 'string' && RANGES.some((r) => r.id === j.range) ? j.range : null
+    }
+  } catch {
+    return { symbol: '', tf: null, range: null }
+  }
+}
+
 /** Grid columns per layout; rows fill in via auto-rows. */
 const GRID_COLS: Record<number, string> = {
   1: 'grid-cols-1',
@@ -209,6 +223,7 @@ export default function AdvancedCharts(): React.JSX.Element {
           {Array.from({ length: layout }, (_, i) => (
             <ChartTile
               key={i}
+              slot={i}
               globalTf={globalTf}
               tfEpoch={tfEpoch}
               globalRange={globalRange}
@@ -226,6 +241,7 @@ export default function AdvancedCharts(): React.JSX.Element {
 /* -------------------------------- one chart ------------------------------- */
 
 function ChartTile({
+  slot,
   globalTf,
   tfEpoch,
   globalRange,
@@ -233,6 +249,7 @@ function ChartTile({
   notes,
   onNote
 }: {
+  slot: number
   globalTf: string
   tfEpoch: number
   globalRange: string
@@ -245,25 +262,41 @@ function ChartTile({
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
 
-  const [input, setInput] = useState('')
-  const [symbol, setSymbol] = useState('')
-  const [tf, setTf] = useState(globalTf)
-  const [range, setRange] = useState(globalRange)
+  const [input, setInput] = useState(() => loadSlot(slot).symbol)
+  const [symbol, setSymbol] = useState(() => loadSlot(slot).symbol)
+  const [tf, setTf] = useState(() => loadSlot(slot).tf ?? globalTf)
+  const [range, setRange] = useState(() => loadSlot(slot).range ?? globalRange)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   const barsRef = useRef<Bar[]>([])
   const seqRef = useRef(0)
+  const tfMount = useRef(true)
+  const rangeMount = useRef(true)
 
-  // The top dropdowns override every chart whenever they change.
+  // The top dropdowns override every chart whenever they change — but the
+  // mount run must not stomp a restored per-chart choice.
   useEffect(() => {
+    if (tfMount.current) {
+      tfMount.current = false
+      return
+    }
     setTf(globalTf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tfEpoch])
   useEffect(() => {
+    if (rangeMount.current) {
+      rangeMount.current = false
+      return
+    }
     setRange(globalRange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeEpoch])
+
+  // Persist this slot (ticker + pickers) so the page survives restarts/updates.
+  useEffect(() => {
+    localStorage.setItem(`ac-slot-${slot}`, JSON.stringify({ symbol, tf, range }))
+  }, [slot, symbol, tf, range])
 
   // Build the chart once.
   useEffect(() => {
