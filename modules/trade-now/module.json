@@ -1,0 +1,14 @@
+{
+  "id": "trade-now",
+  "name": "Trade Now",
+  "icon": "Camera",
+  "version": "1.0.0",
+  "description": "Snapshot the moment you buy: price, 52-week range and the chart marked at your exact entry, plus your reason and prediction",
+  "status": "stable",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
