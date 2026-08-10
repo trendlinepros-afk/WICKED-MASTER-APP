@@ -1,39 +1,44 @@
 # Trade Now
 
-A snapshot of the **moment you buy** a stock. You just bought → open the tool,
-type the ticker, hit **Snap**. The tool freezes that instant:
+Open a position the moment you buy, then track it to the end. Type the ticker,
+enter how many shares (and optionally the price you paid — blank uses the
+current market price), and hit **Snap the buy**. Trade Now captures the company
+name and 52-week range and records your first buy.
 
-- Company name and the price at purchase (from your Massive/Polygon feed,
-  15-minute delayed)
-- 52-week high / low (computed from a year of daily bars at capture time)
-- **The chart as it looked right then** — ~90 days of 4h candles ending at your
-  buy, with a BUY marker at the exact date/time and price. The bars are stored
-  inside the snapshot, so the chart re-renders identically forever; it never
-  updates with later data.
-- Two note fields — **Why I bought** and **My prediction** — editable any time,
-  auto-saved.
+## Position tracking
 
-Opening a snapshot later also fetches the **current** price and shows the %
-move since your buy, so you can grade the prediction against what actually
-happened.
+Each position holds an **order ledger** of buy/sell legs (price + quantity +
+date), all editable after the fact:
 
-## Storage
+- **Average down / add** — add more BUY legs any time; the average buy price and
+  cost basis update.
+- **Sell / scale out** — add SELL legs with the price and quantity you sold.
+- A position is **In Trade** until the shares sold cover the shares bought; once
+  fully sold it flips to **Closed**. The list on the left shows each position's
+  status at a glance.
 
-`userData/modules/trade-now/snapshots.json` — one JSON array of frozen
-snapshots (bars included). Listed under Settings → Modules data paths; rides
-along in backups and Cloud Sync.
+Computed live (average-cost basis): open shares, average buy price, total order
+value (Σ price × quantity) for buys and sells, market value + unrealized P/L on
+the open shares (from the delayed feed), and realized P/L on what you've sold.
+
+## The chart
+
+The chart spans from your **first buy to now** and marks **every** order — buys
+as up-arrows (▲) below the bar, sells as down-arrows (▼) above — each labeled
+with its quantity and price. It refreshes as you add legs (interval scales with
+the trade's age).
+
+## Storage & migration
+
+`userData/modules/trade-now/snapshots.json` — positions with their leg ledger,
+52-week range and notes (listed under Settings → Modules). Older single-buy
+snapshots (from v1) are migrated automatically to a one-buy ledger on load
+(quantity unknown → 0, which you can edit in).
 
 ## MCP
 
-- `trade-now__list` — all snapshots (without bars). Read-only.
-- `trade-now__snapshot` — take a snapshot of a ticker right now (optionally
-  with reason/prediction).
-- `trade-now__update-notes` — edit a snapshot's notes.
+- `trade-now__list` — positions with full ledger + computed summary (read-only).
+- `trade-now__snapshot` — open a position (symbol, quantity, optional buyPrice).
+- `trade-now__add-leg` — add a buy or sell order to a position.
+- `trade-now__update-notes` — edit reason/prediction.
 - `trade-now__delete` — destructive, confirm-gated.
-
-## Quirks
-
-- The chart marker sits on the last captured bar — with a 15-minute-delayed
-  feed that bar is the freshest one available at capture time.
-- Snapshots taken outside market hours freeze the most recent session's data
-  (that IS the state of the world at that moment).
