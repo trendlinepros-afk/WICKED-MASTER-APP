@@ -190,17 +190,20 @@ export default function register(ctx: ModuleIpcContext): void {
       const marketPrice = recent[recent.length - 1]?.c ?? daily[daily.length - 1]?.c ?? 0
       const buyPrice = r.buyPrice != null && num(r.buyPrice) > 0 ? num(r.buyPrice) : marketPrice
       const quantity = Math.max(0, num(r.quantity))
+      // let the user back-date the buy (entering a trade from a previous day);
+      // clamp to "now" so a future date can't be recorded
+      const boughtAt = num(r.at) > 0 ? Math.min(num(r.at), now) : now
 
       const entry: TradeNowEntry = {
         id: `tn-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         symbol,
         name: details?.name || symbol,
-        createdAt: now,
+        createdAt: boughtAt,
         high52: highs.length ? Math.max(...highs) : null,
         low52: lows.length ? Math.min(...lows) : null,
         reason: cleanNote(r.reason),
         prediction: cleanNote(r.prediction),
-        legs: [{ id: legId(), side: 'buy', price: buyPrice, quantity, at: now }]
+        legs: [{ id: legId(), side: 'buy', price: buyPrice, quantity, at: boughtAt }]
       }
       const entries = readEntries()
       entries.unshift(entry)

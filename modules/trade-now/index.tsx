@@ -107,6 +107,7 @@ export default function TradeNow(): React.JSX.Element {
   const [ticker, setTicker] = useState('')
   const [newQty, setNewQty] = useState('')
   const [newPrice, setNewPrice] = useState('')
+  const [newWhen, setNewWhen] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [hasMassive, setHasMassive] = useState(true)
@@ -133,16 +134,19 @@ export default function TradeNow(): React.JSX.Element {
     if (!symbol || creating) return
     setCreating(true)
     setError('')
+    const whenMs = newWhen ? new Date(newWhen).getTime() : 0
     const res = (await invoke('create', {
       symbol,
       quantity: Number(newQty) || 0,
-      buyPrice: Number(newPrice) || undefined
+      buyPrice: Number(newPrice) || undefined,
+      at: Number.isFinite(whenMs) && whenMs > 0 ? whenMs : undefined
     })) as { ok?: boolean; entry?: Entry; error?: string }
     setCreating(false)
     if (res.ok && res.entry) {
       setTicker('')
       setNewQty('')
       setNewPrice('')
+      setNewWhen('')
       await refreshList()
       setSelectedId(res.entry.id)
     } else {
@@ -217,6 +221,16 @@ export default function TradeNow(): React.JSX.Element {
                 className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm outline-none focus:border-accent"
               />
             </div>
+            <label className="mt-1.5 block text-[11px] text-muted">
+              When did you buy? (leave blank for now)
+              <input
+                value={newWhen}
+                onChange={(e) => setNewWhen(e.target.value)}
+                type="datetime-local"
+                max={new Date().toISOString().slice(0, 16)}
+                className="mt-0.5 w-full rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm text-ink outline-none focus:border-accent"
+              />
+            </label>
             <button
               onClick={() => void snapshot()}
               disabled={creating || !ticker.trim() || !hasMassive}

@@ -26,6 +26,10 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         symbol: z.string().describe('Ticker symbol that was just bought (e.g. JBLU).'),
         quantity: z.number().optional().describe('Shares bought (the first buy leg).'),
         buyPrice: z.number().optional().describe('Price paid per share; omit to use the current market price.'),
+        at: z
+          .number()
+          .optional()
+          .describe('When the buy happened (ms epoch) — for back-dating a trade from a previous day. Defaults to now.'),
         reason: z.string().optional().describe('Why the stock was bought.'),
         prediction: z.string().optional().describe('The prediction for this position.')
       },
@@ -34,6 +38,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           symbol: args.symbol,
           quantity: args.quantity,
           buyPrice: args.buyPrice,
+          at: args.at,
           reason: args.reason,
           prediction: args.prediction
         })

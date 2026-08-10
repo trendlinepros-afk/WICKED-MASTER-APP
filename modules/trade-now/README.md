@@ -2,8 +2,10 @@
 
 Open a position the moment you buy, then track it to the end. Type the ticker,
 enter how many shares (and optionally the price you paid — blank uses the
-current market price), and hit **Snap the buy**. Trade Now captures the company
-name and 52-week range and records your first buy.
+current market price), optionally set **when you bought** (a date/time picker —
+leave blank for now, or back-date a trade you took on a previous day), and hit
+**Snap the buy**. Trade Now captures the company name and 52-week range and
+records your first buy at that time.
 
 ## Position tracking
 
