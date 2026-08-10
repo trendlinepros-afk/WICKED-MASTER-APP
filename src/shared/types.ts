@@ -257,8 +257,31 @@ export const SHELL_IPC = {
   /** (pin: string) => { ok } — verify the PIN at the lock screen */
   appLockVerify: 'shell:applock-verify',
   /** (pin: string) => { ok, error? } — turn the lock off (requires the current PIN) */
-  appLockClear: 'shell:applock-clear'
+  appLockClear: 'shell:applock-clear',
+
+  /* --------------------- Web Server (LAN remote access) --------------------- */
+  /** () => WebServerStatus — current web-server config + running state */
+  webServerStatus: 'shell:webserver-status',
+  /** (enabled: boolean) => WebServerStatus — start/stop the LAN web server */
+  webServerSetEnabled: 'shell:webserver-set-enabled',
+  /** (password: string) => WebServerStatus — set/replace the access password */
+  webServerSetPassword: 'shell:webserver-set-password',
+  /** (port: number) => WebServerStatus — change the listen port (restarts if running) */
+  webServerSetPort: 'shell:webserver-set-port'
 } as const
+
+/** Web-server state for Settings (device-local; never synced, no secrets returned). */
+export interface WebServerStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  /** an access password has been set (required before the server can run) */
+  hasPassword: boolean
+  /** http URLs to reach it on the LAN (best-effort from network interfaces) */
+  urls: string[]
+  /** last start error, if any */
+  error: string
+}
 
 /** Non-secret cloud-sync configuration (device-local; secrets live in the vault). */
 export interface SyncConfig {

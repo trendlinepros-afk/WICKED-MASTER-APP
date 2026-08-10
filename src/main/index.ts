@@ -5,8 +5,9 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { SHELL_IPC, type ShellSettings } from '@shared/types'
 import { registerApiKeyIpc } from './api-keys'
-import { hasChannel, invokeChannel, setMainWindowGetter } from './mcp/channel-registry'
+import { hasChannel, installGlobalRecorder, invokeChannel, setMainWindowGetter } from './mcp/channel-registry'
 import { getMcpStatus, setMcpEnabled, stopMcpServer } from './mcp/server'
+import { broadcastToWeb, registerWebServerIpc, stopWebServer } from './webserver'
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
@@ -70,6 +71,23 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Mirror every event the desktop window receives to any connected web-server
+  // browser client. Modules push progress via getMainWindow().webContents.send
+  // and handlers via event.sender.send — both hit THIS webContents.send, so
+  // wrapping it once fans every event out to the LAN clients too.
+  const wc = mainWindow.webContents as unknown as {
+    send: (channel: string, ...args: unknown[]) => void
+  }
+  const origSend = wc.send.bind(wc)
+  wc.send = (channel: string, ...args: unknown[]): void => {
+    origSend(channel, ...args)
+    try {
+      broadcastToWeb(channel, args)
+    } catch {
+      /* never let mirroring break a desktop event */
+    }
+  }
+
   loadRenderer(mainWindow)
 }
 
@@ -105,6 +123,10 @@ function openModuleWindow(id: string): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.wickedrc.wicked')
 
+  // Record EVERY ipcMain.handle (shell + modules) so the web-server bridge can
+  // invoke any channel. Must run before the first handle below.
+  installGlobalRecorder()
+
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
@@ -139,6 +161,9 @@ app.whenReady().then(() => {
   registerRecoveryIpc(() => mainWindow)
   registerBackupIpc(() => mainWindow)
   registerSyncIpc(() => mainWindow)
+  // LAN web server (Settings → Web Server; OFF by default, auto-starts here only
+  // if the user left it enabled last run and a password is set)
+  registerWebServerIpc(() => mainWindow)
 
   // MCP: the channel registry needs the main window for synthetic-event senders
   setMainWindowGetter(() => mainWindow)
@@ -188,9 +213,11 @@ app.on('before-quit', (e) => {
       new Promise((resolve) => setTimeout(resolve, 8000))
     ]).finally(() => {
       stopMcpServer()
+      stopWebServer()
       app.exit(0)
     })
     return
   }
   stopMcpServer()
+  stopWebServer()
 })

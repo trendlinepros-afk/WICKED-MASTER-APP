@@ -22,6 +22,7 @@ import {
   Save,
   Sun,
   UploadCloud,
+  Wifi,
   X
 } from 'lucide-react'
 import {
@@ -41,7 +42,8 @@ import {
   type SyncSnapshot,
   type SyncSnapshotList,
   type SyncStatus,
-  type UpdateEvent
+  type UpdateEvent,
+  type WebServerStatus
 } from '@shared/types'
 import { modules, type RegisteredModule } from './registry'
 import { CARD_SIZES, effectiveDescription, effectiveName } from './moduleView'
@@ -1084,6 +1086,155 @@ function AppLockSection(): React.JSX.Element {
   )
 }
 
+function WebServerSection(): React.JSX.Element {
+  const [status, setStatus] = useState<WebServerStatus | null>(null)
+  const [password, setPassword] = useState('')
+  const [port, setPort] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [copied, setCopied] = useState('')
+
+  const refresh = async (): Promise<void> => {
+    const s = (await window.wicked.invoke(SHELL_IPC.webServerStatus)) as WebServerStatus
+    setStatus(s)
+    if (!port) setPort(String(s.port))
+  }
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const savePassword = async (): Promise<void> => {
+    setMsg(null)
+    const s = (await window.wicked.invoke(SHELL_IPC.webServerSetPassword, password)) as WebServerStatus
+    setStatus(s)
+    setPassword('')
+    setMsg(s.error ? s.error : 'Password saved.')
+  }
+
+  const toggle = async (on: boolean): Promise<void> => {
+    setMsg(null)
+    const s = (await window.wicked.invoke(SHELL_IPC.webServerSetEnabled, on)) as WebServerStatus
+    setStatus(s)
+    if (on && !s.running && s.error) setMsg(s.error)
+  }
+
+  const savePort = async (): Promise<void> => {
+    const n = Number(port)
+    const s = (await window.wicked.invoke(SHELL_IPC.webServerSetPort, n)) as WebServerStatus
+    setStatus(s)
+    if (s.error) setMsg(s.error)
+  }
+
+  const input = 'min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent'
+  const running = status?.running ?? false
+
+  return (
+    <section className="mt-8">
+      <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted">
+        <Wifi size={14} />
+        Web Server (LAN remote access)
+      </h2>
+      <p className="mt-1 max-w-xl text-xs text-muted">
+        Serve the WHOLE app to other devices on your network. Anyone who opens the address below and enters
+        the password gets the full app in their browser — and it can do everything the desktop app can,
+        including actions that touch files and run programs on THIS PC. Off by default; the setting and
+        password are stored only on this device and never sync.
+      </p>
+      <div className="mt-3 max-w-xl space-y-3 rounded-xl border border-warn/40 bg-warn/5 p-4">
+        <p className="flex items-start gap-2 text-xs text-warn">
+          <span className="mt-0.5">⚠</span>
+          <span>
+            This is full remote control over plain HTTP. Only turn it on trusted networks, use a strong
+            password, and turn it off when you don&apos;t need it.
+          </span>
+        </p>
+
+        {/* password */}
+        <div className="flex items-center gap-2 border-t border-edge pt-3">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={status?.hasPassword ? 'Replace password (min 4)' : 'Set a password (min 4)'}
+            autoComplete="off"
+            className={input}
+          />
+          <button
+            onClick={() => void savePassword()}
+            disabled={password.trim().length < 4}
+            className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {status?.hasPassword ? 'Replace' : 'Set password'}
+          </button>
+        </div>
+
+        {/* port */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted">Port</span>
+          <input
+            type="number"
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            placeholder="8420"
+            className="w-28 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <button
+            onClick={() => void savePort()}
+            className="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-muted hover:bg-raised hover:text-ink"
+          >
+            Save port
+          </button>
+        </div>
+
+        {/* toggle */}
+        <label className="flex items-center justify-between gap-4 border-t border-edge pt-3">
+          <span className="text-sm font-medium">
+            {running ? 'Web server is ON' : 'Enable web server'}
+            {!status?.hasPassword && <span className="ml-2 text-xs text-muted">(set a password first)</span>}
+          </span>
+          <input
+            type="checkbox"
+            checked={status?.enabled ?? false}
+            disabled={!status?.hasPassword}
+            onChange={(e) => void toggle(e.target.checked)}
+            className="h-4 w-4 accent-[rgb(var(--wk-accent))] disabled:opacity-40"
+          />
+        </label>
+
+        {running && status && status.urls.length > 0 && (
+          <div className="space-y-1 border-t border-edge pt-3">
+            <div className="text-xs text-muted">Open from another device on your network:</div>
+            {status.urls.map((u) => (
+              <div key={u} className="flex items-center gap-2">
+                <code className="rounded bg-raised px-2 py-1 text-xs text-ink">{u}</code>
+                <button
+                  title="Copy address"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(u)
+                    setCopied(u)
+                    setTimeout(() => setCopied(''), 1500)
+                  }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                >
+                  <Copy size={13} />
+                </button>
+                {copied === u && <span className="text-xs text-ok">Copied</span>}
+              </div>
+            ))}
+            <p className="pt-1 text-xs text-muted">Each new browser session is prompted for the password.</p>
+          </div>
+        )}
+        {running && status && status.urls.length === 0 && (
+          <p className="border-t border-edge pt-3 text-xs text-muted">
+            Running on port {status.port}, but no network address was detected — check your Wi-Fi/Ethernet
+            connection.
+          </p>
+        )}
+        {msg && <p className={`text-xs ${status?.error && msg === status.error ? 'text-danger' : 'text-ok'}`}>{msg}</p>}
+      </div>
+    </section>
+  )
+}
+
 export default function SettingsScreen(): React.JSX.Element {
   const { settings, update } = useSettings()
   const [version, setVersion] = useState('')
@@ -1262,6 +1413,9 @@ export default function SettingsScreen(): React.JSX.Element {
 
       {/* App Lock */}
       <AppLockSection />
+
+      {/* Web Server (LAN remote access) */}
+      <WebServerSection />
 
       {/* Data & Recovery */}
       <RecoverySection />

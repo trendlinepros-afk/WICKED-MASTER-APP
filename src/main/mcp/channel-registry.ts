@@ -17,6 +17,23 @@ export function setMainWindowGetter(fn: () => BrowserWindow | null): void {
   getWin = fn
 }
 
+/**
+ * Patch ipcMain.handle ONCE so EVERY handler (shell channels + modules) is
+ * recorded, not just the module ones that go through recordingIpcMain. The web
+ * server's remote bridge needs to invoke shell channels too. Call before the
+ * first ipcMain.handle in the app.
+ */
+let globalInstalled = false
+export function installGlobalRecorder(): void {
+  if (globalInstalled) return
+  globalInstalled = true
+  const orig = ipcMain.handle.bind(ipcMain)
+  ipcMain.handle = ((channel: string, listener: InvokeHandler) => {
+    handlers.set(channel, listener)
+    return orig(channel, listener as Parameters<typeof orig>[1])
+  }) as typeof ipcMain.handle
+}
+
 /** A drop-in replacement for `ipcMain` that also records `.handle` registrations. */
 export function recordingIpcMain(): typeof ipcMain {
   return new Proxy(ipcMain, {
