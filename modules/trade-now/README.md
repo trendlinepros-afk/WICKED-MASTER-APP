@@ -30,6 +30,14 @@ The chart spans from your **first buy to now** and marks **every** order —
 labeled with its quantity and price. It refreshes as you add legs (interval
 scales with the trade's age).
 
+**Zoom / pan / draw.** Scroll to zoom and drag to pan (native). A **Draw
+trendline** toggle lets you click-drag straight trendlines over the chart
+(Undo / Clear alongside); lines are anchored to data (logical index + price) so
+they hold their place through zoom/pan and persist on the position
+(`drawings`). On **Export PDF** the report chart is rendered light-themed for
+the white page, framed to the **exact view you have on screen**, with your
+trendlines composited on top.
+
 ## Printable PDF
 
 **Export PDF** (top-right of a position — works whether the trade is open or

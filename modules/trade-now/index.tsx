@@ -6,6 +6,8 @@ import {
   CrosshairMode,
   createChart,
   type IChartApi,
+  type ISeriesApi,
+  type Logical,
   type UTCTimestamp
 } from 'lightweight-charts'
 import {
@@ -13,10 +15,12 @@ import {
   Camera,
   FileDown,
   Loader2,
+  PenLine,
   Plus,
   Trash2,
   TrendingDown,
   TrendingUp,
+  Undo2,
   X
 } from 'lucide-react'
 
@@ -37,6 +41,43 @@ interface TradeLeg {
   price: number
   quantity: number
   at: number
+}
+
+/** A trendline anchored to data (logical index + price), so it survives zoom/pan. */
+interface TrendLine {
+  id: string
+  l1: number
+  p1: number
+  l2: number
+  p2: number
+}
+
+/** Stroke trendlines onto a 2D context using a chart's coordinate conversion. */
+function strokeTrend(
+  ctx: CanvasRenderingContext2D,
+  chart: IChartApi,
+  series: ISeriesApi<'Candlestick'>,
+  lines: TrendLine[],
+  color: string,
+  lineWidth: number
+): void {
+  const ts = chart.timeScale()
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  ctx.lineCap = 'round'
+  for (const ln of lines) {
+    const x1 = ts.logicalToCoordinate(ln.l1 as Logical)
+    const x2 = ts.logicalToCoordinate(ln.l2 as Logical)
+    const y1 = series.priceToCoordinate(ln.p1)
+    const y2 = series.priceToCoordinate(ln.p2)
+    if (x1 == null || x2 == null || y1 == null || y2 == null) continue
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 interface TradeSummary {
@@ -63,6 +104,7 @@ interface Entry {
   reason: string
   prediction: string
   legs: TradeLeg[]
+  drawings: TrendLine[]
   summary: TradeSummary
 }
 
@@ -99,6 +141,80 @@ const toDateInput = (ms: number): string => {
 const fromDateInput = (s: string): number => {
   const d = new Date(`${s}T12:00:00`)
   return Number.isFinite(d.getTime()) ? d.getTime() : Date.now()
+}
+
+/**
+ * Render a LIGHT-themed chart off-screen just for the PDF, so it's legible on a
+ * white page (the on-screen chart is dark-themed for the app and washes out when
+ * dropped onto white). Green dots = buys, red dots = sells. Returns a PNG data
+ * URL, or null if there are no bars.
+ */
+async function renderChartPng(
+  bars: Bar[],
+  legs: TradeLeg[],
+  lines: TrendLine[],
+  view: { from: number; to: number } | null
+): Promise<string | null> {
+  if (bars.length === 0) return null
+  const CW = 1000
+  const CH = 380
+  const el = document.createElement('div')
+  el.style.cssText = `position:fixed;left:-10000px;top:0;width:${CW}px;height:${CH}px`
+  document.body.appendChild(el)
+  try {
+    const chart = createChart(el, {
+      width: CW,
+      height: CH,
+      layout: { background: { type: ColorType.Solid, color: '#ffffff' }, textColor: '#1e293b', fontSize: 13 },
+      grid: { vertLines: { color: '#e2e8f0' }, horzLines: { color: '#e2e8f0' } },
+      rightPriceScale: { borderColor: '#94a3b8' },
+      timeScale: { borderColor: '#94a3b8', timeVisible: true, secondsVisible: false },
+      crosshair: { mode: CrosshairMode.Normal }
+    })
+    const up = '#16a34a'
+    const down = '#dc2626'
+    const candle = chart.addCandlestickSeries({
+      upColor: up,
+      downColor: down,
+      borderUpColor: up,
+      borderDownColor: down,
+      wickUpColor: up,
+      wickDownColor: down
+    })
+    candle.setData(
+      bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c }))
+    )
+    candle.setMarkers(
+      [...legs]
+        .sort((a, b) => a.at - b.at)
+        .map((leg) => ({
+          time: Math.floor(leg.at / 1000) as UTCTimestamp,
+          position: leg.side === 'buy' ? ('belowBar' as const) : ('aboveBar' as const),
+          color: leg.side === 'buy' ? up : down,
+          shape: 'circle' as const,
+          text: `${leg.side === 'buy' ? 'BUY' : 'SELL'} ${qty(leg.quantity)} @ ${money(leg.price)}`
+        }))
+    )
+    // Match the on-screen view (zoom/pan) so the export shows what you're seeing.
+    if (view) chart.timeScale().setVisibleLogicalRange({ from: view.from as Logical, to: view.to as Logical })
+    else chart.timeScale().fitContent()
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    const canvas = chart.takeScreenshot()
+    // composite the trendlines onto the shot (coords are CSS-px; scale to the
+    // canvas's device pixels so they line up whatever the pixel ratio)
+    const ctx = canvas.getContext('2d')
+    if (ctx && lines.length) {
+      ctx.save()
+      ctx.scale(canvas.width / CW, canvas.height / CH)
+      strokeTrend(ctx, chart, candle, lines, '#e11d48', 2)
+      ctx.restore()
+    }
+    const png = canvas.toDataURL('image/png')
+    chart.remove()
+    return png
+  } finally {
+    el.remove()
+  }
 }
 
 export default function TradeNow(): React.JSX.Element {
@@ -316,6 +432,13 @@ function PositionView({
 }): React.JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
+  const [drawMode, setDrawMode] = useState(false)
+  const [lines, setLines] = useState<TrendLine[]>(entry.drawings ?? [])
+  const linesRef = useRef<TrendLine[]>(entry.drawings ?? [])
+  const previewRef = useRef<TrendLine | null>(null)
+  const dragRef = useRef<{ l: number; p: number } | null>(null)
   const [reason, setReason] = useState(entry.reason)
   const [prediction, setPrediction] = useState(entry.prediction)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -388,11 +511,107 @@ function PositionView({
     candle.setMarkers(markers)
     chart.timeScale().fitContent()
     chartRef.current = chart
+    seriesRef.current = candle
+
+    const onRange = (): void => redrawRef.current()
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange)
+    const ro = new ResizeObserver(() => redrawRef.current())
+    ro.observe(el)
+    requestAnimationFrame(() => redrawRef.current())
+
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange)
+      ro.disconnect()
       chart.remove()
       chartRef.current = null
+      seriesRef.current = null
     }
   }, [bars, entry.legs])
+
+  // keep the overlay ref current and repaint when lines change
+  useEffect(() => {
+    linesRef.current = lines
+    redrawRef.current()
+  }, [lines])
+
+  const redraw = (): void => {
+    const cv = overlayRef.current
+    const host = wrapRef.current
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!cv || !host || !chart || !series) return
+    const w = host.clientWidth
+    const h = host.clientHeight
+    if (w === 0 || h === 0) return
+    const dpr = window.devicePixelRatio || 1
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr)
+      cv.height = Math.round(h * dpr)
+    }
+    cv.style.width = `${w}px`
+    cv.style.height = `${h}px`
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, w, h)
+    const accent = cssRGB('--wk-accent', '#e11d48')
+    strokeTrend(ctx, chart, series, linesRef.current, accent, 1.8)
+    if (previewRef.current) strokeTrend(ctx, chart, series, [previewRef.current], accent, 1.8)
+  }
+  const redrawRef = useRef<() => void>(() => {})
+  redrawRef.current = redraw
+
+  const toData = (e: React.PointerEvent): { l: number; p: number } | null => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    const cv = overlayRef.current
+    if (!chart || !series || !cv) return null
+    const rect = cv.getBoundingClientRect()
+    const l = chart.timeScale().coordinateToLogical(e.clientX - rect.left)
+    const p = series.coordinateToPrice(e.clientY - rect.top)
+    if (l == null || p == null) return null
+    return { l: l as number, p }
+  }
+  const onDrawDown = (e: React.PointerEvent): void => {
+    if (!drawMode) return
+    const d = toData(e)
+    if (!d) return
+    dragRef.current = d
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onDrawMove = (e: React.PointerEvent): void => {
+    if (!drawMode || !dragRef.current) return
+    const d = toData(e)
+    if (!d) return
+    previewRef.current = { id: 'preview', l1: dragRef.current.l, p1: dragRef.current.p, l2: d.l, p2: d.p }
+    redraw()
+  }
+  const onDrawUp = (e: React.PointerEvent): void => {
+    if (!drawMode || !dragRef.current) return
+    const d = toData(e)
+    const start = dragRef.current
+    dragRef.current = null
+    previewRef.current = null
+    if (d && (Math.abs(d.l - start.l) > 0.15 || Math.abs(d.p - start.p) > 1e-9)) {
+      const line: TrendLine = {
+        id: `tl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+        l1: start.l,
+        p1: start.p,
+        l2: d.l,
+        p2: d.p
+      }
+      const next = [...linesRef.current, line]
+      linesRef.current = next
+      setLines(next)
+      void invoke('set-drawings', { id: entry.id, drawings: next })
+    }
+    redraw()
+  }
+  const persistLines = (next: TrendLine[]): void => {
+    linesRef.current = next
+    setLines(next)
+    void invoke('set-drawings', { id: entry.id, drawings: next })
+  }
 
   const scheduleSaveNotes = (r: string, p: string): void => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -421,7 +640,7 @@ function PositionView({
         doc.setTextColor(20, 24, 31)
       }
       const muted = (): void => {
-        doc.setTextColor(110, 118, 130)
+        doc.setTextColor(90, 99, 112)
       }
 
       // compact title
@@ -546,20 +765,27 @@ function PositionView({
       }
       y += 3
 
-      // chart image
-      const png = chartRef.current?.takeScreenshot().toDataURL('image/png')
+      // chart image — light-themed, at the current on-screen view, with drawings
+      const view = chartRef.current?.timeScale().getVisibleLogicalRange() ?? null
+      const png = await renderChartPng(
+        bars,
+        entry.legs,
+        linesRef.current,
+        view ? { from: view.from as number, to: view.to as number } : null
+      )
       if (png) {
-        if (y > 180) {
+        const chartH = ((W - 2 * M) * 380) / 1000 // keep the 1000x380 aspect
+        if (y + chartH + 8 > 285) {
           doc.addPage()
           y = 18
         }
         ink()
         doc.setFont('helvetica', 'bold')
         doc.setFontSize(11)
-        doc.text('Chart (every buy up-arrow / sell down-arrow marked)', M, y)
+        doc.text('Chart (green dot = buy, red dot = sell)', M, y)
         y += 3
-        doc.addImage(png, 'PNG', M, y, W - 2 * M, 66)
-        y += 72
+        doc.addImage(png, 'PNG', M, y, W - 2 * M, chartH)
+        y += chartH + 6
       }
 
       // notes
@@ -733,11 +959,56 @@ function PositionView({
 
       {/* chart */}
       <div className="rounded-xl border border-edge bg-surface p-3">
-        <div className="text-xs font-semibold text-muted">
-          Chart from your first buy to now — every buy (▲) and sell (▼) is marked
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-muted">
+            Chart from your first buy to now — green dot = buy, red dot = sell
+          </div>
+          {bars.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setDrawMode((v) => !v)}
+                className={`flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                  drawMode ? 'border-accent bg-accent text-accent-ink' : 'border-edge text-muted hover:text-ink'
+                }`}
+              >
+                <PenLine size={12} /> {drawMode ? 'Drawing…' : 'Draw trendline'}
+              </button>
+              <button
+                onClick={() => persistLines(lines.slice(0, -1))}
+                disabled={lines.length === 0}
+                title="Undo last line"
+                className="flex items-center gap-1 rounded-lg border border-edge px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40"
+              >
+                <Undo2 size={12} />
+              </button>
+              <button
+                onClick={() => persistLines([])}
+                disabled={lines.length === 0}
+                className="rounded-lg border border-edge px-2 py-1 text-xs text-muted hover:text-danger disabled:opacity-40"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
         {bars.length > 0 ? (
-          <div ref={wrapRef} className="mt-2 h-[320px] w-full" />
+          <>
+            <div className="relative mt-2 h-[320px] w-full">
+              <div ref={wrapRef} className="absolute inset-0" />
+              <canvas
+                ref={overlayRef}
+                onPointerDown={onDrawDown}
+                onPointerMove={onDrawMove}
+                onPointerUp={onDrawUp}
+                className="absolute inset-0"
+                style={{ pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default' }}
+              />
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted">
+              Scroll to zoom, drag to pan. Whatever view you set — and any trendlines you draw — carries into
+              the exported PDF.
+            </p>
+          </>
         ) : (
           <p className="py-10 text-center text-xs text-muted">Loading chart…</p>
         )}

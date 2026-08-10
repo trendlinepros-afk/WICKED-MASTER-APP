@@ -26,6 +26,16 @@ export interface TradeLeg {
   at: number
 }
 
+/** A hand-drawn trendline, anchored to chart data (logical index + price) so it
+ *  survives zoom/pan and re-renders identically in the exported PDF. */
+export interface TrendLine {
+  id: string
+  l1: number
+  p1: number
+  l2: number
+  p2: number
+}
+
 export interface TradeNowEntry {
   id: string
   symbol: string
@@ -37,6 +47,8 @@ export interface TradeNowEntry {
   reason: string
   prediction: string
   legs: TradeLeg[]
+  /** user-drawn trendlines on the chart */
+  drawings: TrendLine[]
 }
 
 /** Rolled-up position metrics (average-cost basis). */
@@ -150,7 +162,8 @@ export default function register(ctx: ModuleIpcContext): void {
         low52: typeof o.low52 === 'number' ? o.low52 : null,
         reason: cleanNote(o.reason),
         prediction: cleanNote(o.prediction),
-        legs
+        legs,
+        drawings: Array.isArray(o.drawings) ? (o.drawings as TrendLine[]) : []
       }
     })
   }
@@ -203,7 +216,8 @@ export default function register(ctx: ModuleIpcContext): void {
         low52: lows.length ? Math.min(...lows) : null,
         reason: cleanNote(r.reason),
         prediction: cleanNote(r.prediction),
-        legs: [{ id: legId(), side: 'buy', price: buyPrice, quantity, at: boughtAt }]
+        legs: [{ id: legId(), side: 'buy', price: buyPrice, quantity, at: boughtAt }],
+        drawings: []
       }
       const entries = readEntries()
       entries.unshift(entry)
@@ -276,6 +290,27 @@ export default function register(ctx: ModuleIpcContext): void {
     try {
       saveEntries(entries)
       return { ok: true, entry: withSummary(entry) }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:set-drawings`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const entries = readEntries()
+    const entry = entries.find((x) => x.id === r.id)
+    if (!entry) return { ok: false, error: 'Position not found.' }
+    const list = Array.isArray(r.drawings) ? r.drawings : []
+    entry.drawings = list
+      .map((d) => {
+        const o = (typeof d === 'object' && d !== null ? d : {}) as Record<string, unknown>
+        return { id: String(o.id ?? legId()), l1: num(o.l1), p1: num(o.p1), l2: num(o.l2), p2: num(o.p2) }
+      })
+      .filter((d) => Number.isFinite(d.p1) && Number.isFinite(d.p2))
+      .slice(0, 100)
+    try {
+      saveEntries(entries)
+      return { ok: true }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
