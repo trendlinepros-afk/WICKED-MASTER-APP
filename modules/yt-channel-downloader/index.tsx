@@ -14,6 +14,7 @@ import {
   X
 } from 'lucide-react'
 import { QUALITIES, isAudioPreset } from '../yt-downloader/store'
+import { JobProgress } from '../yt-downloader/progress'
 
 const ID = 'yt-channel-downloader'
 
@@ -116,7 +117,21 @@ export default function ChannelDownloader(): React.JSX.Element {
       setAutoQueue(channels.filter((c) => c.autoDownloadedPending > 0))
     })()
     const off = window.wicked.on(`${ID}:progress`, (raw) => {
-      const p = raw as { kind?: string; note?: string; done?: number; total?: number; label?: string } & Progress
+      const p = raw as {
+        kind?: string
+        note?: string
+        done?: number
+        total?: number
+        label?: string
+        mode?: string
+        resumed?: boolean
+        ok?: boolean
+        warning?: boolean
+        cancelled?: boolean
+        completed?: number
+        error?: string
+        combined?: JobResult['combined']
+      } & Progress
       if (p.kind === 'note' && p.note) {
         setLog((l) => [...l.slice(-60), p.note as string])
         setMessage(p.note)
@@ -128,9 +143,20 @@ export default function ChannelDownloader(): React.JSX.Element {
         setProgress({ index: done, total, percent: (done / total) * 100, speed: '', eta: '', title: String(p.label ?? '') })
       } else if (p.kind === 'progress') {
         setProgress({ index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title })
+      } else if (p.kind === 'job-start') {
+        // covers jobs this UI didn't start: crash resume + launch auto-rescan
+        setPhase(p.mode === 'stitch' ? 'combining' : 'running')
+        setJobLabel(`${String(p.label ?? 'Channel job')}${p.resumed ? ' (resumed)' : ''}`)
+        setProgress(null)
+        setLog([])
+        setCombinedPath(null)
+        setMessage(p.resumed ? 'Resumed after restart — finished videos are skipped.' : 'Starting…')
+      } else if (p.kind === 'job-end') {
+        finishJob(p as unknown as JobResult, p.mode === 'stitch' ? 'Stitch' : 'Channel download')
       }
     })
     return off
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const doProbe = async (): Promise<void> => {
@@ -192,8 +218,14 @@ export default function ChannelDownloader(): React.JSX.Element {
     setCombinedPath(null)
     setError('')
     setMessage('Starting channel download…')
-    const res = (await invoke('download', opts)) as JobResult
-    finishJob(res, 'Channel download')
+    const res = (await invoke('download', opts)) as JobResult & { started?: boolean }
+    // once started, job-start / job-end events drive the card (they also cover
+    // resumed and auto-rescan jobs); only pre-claim rejections land here
+    if (res.started !== true && res.ok !== true) {
+      setPhase('error')
+      setMessage(res.error ?? 'Channel download failed.')
+      setProgress(null)
+    }
   }
 
   const runStitch = async (rec: ChannelRecord): Promise<void> => {
@@ -205,8 +237,12 @@ export default function ChannelDownloader(): React.JSX.Element {
     setCombinedPath(null)
     setError('')
     setMessage('Preparing the complete stitched movie…')
-    const res = (await invoke('stitch', { id: rec.id })) as JobResult
-    finishJob(res, 'Stitch')
+    const res = (await invoke('stitch', { id: rec.id })) as JobResult & { started?: boolean }
+    if (res.started !== true && res.ok !== true) {
+      setPhase('error')
+      setMessage(res.error ?? 'Stitch failed.')
+      setProgress(null)
+    }
   }
 
   const doRescan = async (rec: ChannelRecord): Promise<void> => {
@@ -502,30 +538,7 @@ export default function ChannelDownloader(): React.JSX.Element {
                   )}
                 </div>
 
-                {busy && (
-                  <div className="mt-3 space-y-2">
-                    {progress && progress.total > 1 && (
-                      <div className="text-xs font-medium text-muted">
-                        {phase === 'combining' ? 'Clip' : 'Video'} {progress.index} of {progress.total}
-                      </div>
-                    )}
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-raised">
-                      <div
-                        className="h-full rounded-full bg-accent transition-[width]"
-                        style={{ width: `${Math.min(100, progress?.percent ?? 0)}%` }}
-                      />
-                    </div>
-                    {progress && (
-                      <div className="flex items-center justify-between gap-2 text-xs text-muted">
-                        <span className="min-w-0 truncate">{progress.title || '…'}</span>
-                        <span className="shrink-0 tabular-nums">
-                          {progress.percent.toFixed(1)}% {progress.speed && `· ${progress.speed}`}{' '}
-                          {progress.eta && `· ETA ${progress.eta}`}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                {busy && <JobProgress state={phase} progress={progress} />}
 
                 <p className={`mt-2.5 text-sm ${phase === 'error' ? 'text-danger' : phase === 'warning' ? 'text-warn' : busy ? 'text-muted' : 'text-ink'}`}>
                   {message}

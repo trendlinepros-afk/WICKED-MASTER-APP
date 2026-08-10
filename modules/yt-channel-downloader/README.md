@@ -51,6 +51,18 @@ full movie). The history card offers per channel:
   clears the nag until more videos arrive, but the unstitched backlog stays
   visible on the history card. The sweep never runs while a user job is active.
 
+## Crash resume
+
+The running job is journaled to `pending-job.json` (phase `download` vs
+`stitch`, plus the stitch's output path once known) and cleared on
+completion/cancel. After a crash / power loss / app close, the next launch
+resumes it (max 3 attempts): downloads re-run with yt-dlp skipping finished
+files and continuing partial ones; an interrupted stitch **deletes its partial
+movie file** (a half-written mp4 can't be completed) and starts a fresh stitch
+from the intact numbered videos. `job-start`/`job-end` events keep the UI in
+sync with resumed jobs, and the status card shows two bars: overall progress
+across all videos plus the current video's own percentage.
+
 ## Thumbnails
 
 Every video's thumbnail is saved alongside it with the same basename

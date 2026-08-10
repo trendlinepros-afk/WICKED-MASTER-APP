@@ -70,6 +70,13 @@ song, so pulling video is almost never what you want):
   its own status card in the right-hand column, and cancellable independently
   (cancel with no jobId kills all, which is what the MCP tool does). The setup
   form resets when a job starts so the next one can be queued immediately.
+- **Crash resume.** Started jobs are journaled to `pending-jobs.json` and
+  cleared on completion/cancel. If the app or the whole PC dies mid-job, the
+  next launch restarts the survivors (max 3 attempts): yt-dlp skips finished
+  files and continues `.part` files, and the job's manifest is kept across the
+  crash so the combine still covers both runs' files. Job cards show up via
+  `job-start`/`job-end` events even though the UI never invoked the job. Each
+  card shows TWO bars: overall project progress and the current item's own %.
 
 ## Quality
 

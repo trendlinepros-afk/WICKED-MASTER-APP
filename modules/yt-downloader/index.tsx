@@ -24,6 +24,7 @@ import {
   useYt,
   type DownloadJob
 } from './store'
+import { JobProgress } from './progress'
 
 function fmtDuration(sec: number | null): string {
   if (!sec || sec <= 0) return ''
@@ -475,31 +476,8 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
         )}
       </div>
 
-      {/* progress */}
-      {active && (
-        <div className="mt-3 space-y-2">
-          {job.progress && job.progress.total > 1 && (
-            <div className="text-xs font-medium text-muted">
-              {job.state === 'combining' ? 'Clip' : 'Item'} {job.progress.index} of {job.progress.total}
-            </div>
-          )}
-          <div className="h-2 w-full overflow-hidden rounded-full bg-raised">
-            <div
-              className="h-full rounded-full bg-accent transition-[width]"
-              style={{ width: `${Math.min(100, job.progress?.percent ?? 0)}%` }}
-            />
-          </div>
-          {job.progress && (
-            <div className="flex items-center justify-between gap-2 text-xs text-muted">
-              <span className="min-w-0 truncate">{job.progress.title || '…'}</span>
-              <span className="shrink-0 tabular-nums">
-                {job.progress.percent.toFixed(1)}% {job.progress.speed && `· ${job.progress.speed}`}{' '}
-                {job.progress.eta && `· ETA ${job.progress.eta}`}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
+      {/* progress: overall project bar + current-item bar */}
+      {active && <JobProgress state={job.state} progress={job.progress} />}
 
       {/* status line */}
       <p className={`mt-2.5 text-sm ${job.state === 'error' ? 'text-danger' : job.state === 'warning' ? 'text-warn' : active ? 'text-muted' : 'text-ink'}`}>

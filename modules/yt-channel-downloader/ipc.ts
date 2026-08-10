@@ -23,23 +23,24 @@ import { canvasFor, collectOutputs, combineClips, isVideoFile, sanitizeName } fr
  *  Takes a YouTube CHANNEL URL and downloads the creator's entire long-form
  *  library (the /videos tab: no Shorts, posts or streams), oldest → newest,
  *  numbered chronologically. Every session is recorded in history.json so a
- *  channel can be RESCANNED later: new uploads are detected by comparing the
- *  remote video count against the recorded one, and the stitched-movie state
- *  (stitchedCount vs downloadedCount) tracks whether earlier downloads are
- *  still waiting to be included in the full movie. A complete stitch always
- *  reads the channel FOLDER (numbered files in name order), so it includes
- *  every session's videos regardless of when they were downloaded.
+ *  channel can be RESCANNED later; autoRescan channels are topped up shortly
+ *  after every launch (downloads only — stitching always asks first).
  *
- *  AUTO RESCAN: channels with autoRescan enabled are checked shortly after
- *  every app launch; new uploads are downloaded automatically (never
- *  auto-stitched) and counted in autoDownloadedPending, which the UI turns
- *  into a "stitch the complete movie now or postpone?" prompt on next open.
- *  One job (download or stitch) runs at a time.
+ *  CRASH RESUME: the running job is journaled to pending-job.json (phase
+ *  download vs stitch, and the stitch's output path once known) and cleared on
+ *  completion/cancel. After a crash / power loss / app close, the next launch
+ *  resumes it: downloads re-run (yt-dlp skips finished files and continues
+ *  half-downloaded ones); an interrupted stitch DELETES its partial movie file
+ *  and starts a fresh stitch — a half-written mp4 can't be completed.
+ *  job-start / job-end events keep the UI in sync with resumed jobs. One job
+ *  (download or stitch) runs at a time.
  * ------------------------------------------------------------------------ */
 
 const ID = 'yt-channel-downloader'
 const PROBE_TIMEOUT_MS = 120_000
 const AUTO_SWEEP_DELAY_MS = 30_000
+const RESUME_DELAY_MS = 8000
+const MAX_RESUME_ATTEMPTS = 3
 
 interface ChannelRecord {
   /** normalized /videos URL doubles as the id */
@@ -62,8 +63,24 @@ interface ChannelRecord {
   autoDownloadedPending: number
 }
 
+interface PendingChannelJob {
+  mode: 'download' | 'stitch'
+  /** where the job was when it died: still downloading, or already stitching */
+  phase: 'download' | 'stitch'
+  url: string
+  quality: string
+  combine: boolean
+  channel: string
+  folder: string | null
+  startedAt: number
+  /** the stitch output file being written (deleted on resume — unrecoverable) */
+  stitchOut: string | null
+  attempts: number
+}
+
 interface DownloadOutcome {
   ok: boolean
+  started?: boolean
   warning?: boolean
   cancelled?: boolean
   completed?: number
@@ -115,6 +132,7 @@ export default function register(ctx: ModuleIpcContext): void {
   const userData = (): string => ctx.app.getPath('userData')
   const moduleDir = (): string => join(userData(), 'modules', ID)
   const historyFile = (): string => join(moduleDir(), 'history.json')
+  const pendingFile = (): string => join(moduleDir(), 'pending-job.json')
 
   // Same destination as the Custom Playlist Downloader — one YouTube folder.
   const downloadDir = (): string => {
@@ -173,6 +191,32 @@ export default function register(ctx: ModuleIpcContext): void {
     return rec
   }
 
+  /* --------------------- crash-resume journal (one job) ------------------- */
+
+  const readPendingJob = (): PendingChannelJob | null => {
+    try {
+      const j = JSON.parse(readFileSync(pendingFile(), 'utf8')) as { job?: PendingChannelJob }
+      return j.job && typeof j.job === 'object' ? j.job : null
+    } catch {
+      return null
+    }
+  }
+  const writePendingJob = (job: PendingChannelJob): void => {
+    mkdirSync(moduleDir(), { recursive: true })
+    writeFileSync(pendingFile(), JSON.stringify({ job }, null, 2), 'utf8')
+  }
+  const patchPendingJob = (patch: Partial<PendingChannelJob>): void => {
+    const cur = readPendingJob()
+    if (cur) writePendingJob({ ...cur, ...patch })
+  }
+  const clearPendingJob = (): void => {
+    try {
+      rmSync(pendingFile(), { force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** All downloaded channel videos, chronological (numbered filenames sort). */
   const channelVideos = (folder: string): string[] => {
     try {
@@ -186,7 +230,8 @@ export default function register(ctx: ModuleIpcContext): void {
   }
 
   // Sweep ffmpeg scratch left by interrupted stitches (names use the combine-
-  // prefixes so the backup/sync layer excludes them too).
+  // prefixes so the backup/sync layer excludes them too). A resumed stitch
+  // always starts fresh, so nothing here is worth keeping.
   try {
     for (const name of readdirSync(moduleDir())) {
       if (/^combine-(tmp|manifest-)/.test(name)) {
@@ -259,7 +304,8 @@ export default function register(ctx: ModuleIpcContext): void {
   async function stitchFolder(
     folder: string,
     channel: string,
-    quality: string
+    quality: string,
+    onOutPath?: (p: string) => void
   ): Promise<{ ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }> {
     const ffmpeg = resolveFfmpeg()
     if (!ffmpeg) return { ok: false, error: 'ffmpeg is not available, so the videos cannot be stitched.' }
@@ -267,6 +313,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (files.length < 2) return { ok: false, error: `Only ${files.length} video(s) in ${folder} — need at least 2 to stitch.` }
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
     const outPath = join(folder, `${sanitizeName(channel)} - Full Channel ${stamp}.mp4`)
+    onOutPath?.(outPath)
     const tmpDir = join(moduleDir(), `combine-tmp-${Date.now()}`)
     send({ kind: 'combine', done: 0, total: files.length, label: `Stitching ${files.length} videos oldest → newest…` })
     const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
@@ -286,10 +333,55 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, path: cRes.outPath, used: cRes.used, total: cRes.total }
   }
 
+  /** Stitch-only session (deferred/auto-prompt/crash-resume completion). */
+  async function performStitch(
+    p: { url: string; folder: string; channel: string; quality: string },
+    attempts = 0,
+    resumed = false
+  ): Promise<DownloadOutcome> {
+    if (busy) return { ok: false, error: 'A channel job is already running. Cancel it or wait for it to finish.' }
+    busy = true
+    cancelRequested = false
+    writePendingJob({
+      mode: 'stitch',
+      phase: 'stitch',
+      url: p.url,
+      quality: p.quality,
+      combine: true,
+      channel: p.channel,
+      folder: p.folder,
+      startedAt: Date.now(),
+      stitchOut: null,
+      attempts
+    })
+    send({ kind: 'job-start', mode: 'stitch', label: p.channel || 'Channel stitch', resumed })
+    try {
+      const combined = await stitchFolder(p.folder, p.channel, p.quality, (out) => patchPendingJob({ stitchOut: out }))
+      if (combined.ok) {
+        upsertRecord({
+          id: p.url,
+          stitchedCount: channelVideos(p.folder).length,
+          lastStitchAt: Date.now(),
+          lastStitchPath: combined.path ?? null,
+          autoDownloadedPending: 0
+        })
+      }
+      const res: DownloadOutcome = combined.cancelled
+        ? { ok: false, started: true, cancelled: true }
+        : { ok: combined.ok, started: true, combined, error: combined.error }
+      send({ kind: 'job-end', mode: 'stitch', ...res })
+      return res
+    } finally {
+      busy = false
+      child = null
+      clearPendingJob()
+    }
+  }
+
   /* ------------------------------- download ------------------------------ */
 
   /** The whole download (+ optional stitch) session, shared by the manual
-   *  handler and the launch-time auto-rescan sweep. Manages the busy flag. */
+   *  handler, the launch-time auto-rescan sweep and crash resume. */
   async function performDownload(opts: {
     url: string
     quality: string
@@ -297,16 +389,45 @@ export default function register(ctx: ModuleIpcContext): void {
     channel: string
     folder: string | null
     auto: boolean
+    resumed?: boolean
+    attempts?: number
   }): Promise<DownloadOutcome> {
     if (busy) return { ok: false, error: 'A channel job is already running. Cancel it or wait for it to finish.' }
     busy = true
     cancelRequested = false
+    writePendingJob({
+      mode: 'download',
+      phase: 'download',
+      url: opts.url,
+      quality: opts.quality,
+      combine: opts.combine,
+      channel: opts.channel,
+      folder: opts.folder,
+      startedAt: Date.now(),
+      stitchOut: null,
+      attempts: opts.attempts ?? 0
+    })
+    send({
+      kind: 'job-start',
+      mode: 'download',
+      label: opts.channel || 'Channel download',
+      resumed: opts.resumed === true
+    })
+    if (opts.resumed)
+      send({ kind: 'note', note: 'Resumed after a restart — finished videos are skipped, partial ones continue.' })
+
+    const finish = (outcome: DownloadOutcome): DownloadOutcome => {
+      const res = { ...outcome, started: true }
+      send({ kind: 'job-end', mode: 'download', ...res })
+      return res
+    }
 
     const ud = userData()
     if (!hasYtDlp(ud)) {
       const dl = await downloadYtDlp(ud)
       if (!dl.ok) {
         busy = false
+        clearPendingJob()
         return { ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') }
       }
     }
@@ -370,10 +491,10 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       )
 
-      if (result.cancelled) return { ok: false, cancelled: true }
+      if (result.cancelled) return finish({ ok: false, cancelled: true })
 
       // Locate the channel folder: this session's files, the known folder
-      // (rescan/auto flow), or nothing (fresh run that downloaded nothing).
+      // (rescan/auto/resume flow), or nothing (fresh run that downloaded nothing).
       const sessionFiles = collectOutputs(manifestPath, dir, jobStart)
       const folderFromRun = sessionFiles.length > 0 ? dirname(sessionFiles[0]) : null
       const folder = folderFromRun ?? knownFolder
@@ -382,9 +503,12 @@ export default function register(ctx: ModuleIpcContext): void {
       // ---- ordered complete stitch (whole folder, all sessions) ----
       let combined: DownloadOutcome['combined'] = null
       if (opts.combine && !cancelRequested) {
-        combined = folder
-          ? await stitchFolder(folder, channel, opts.quality)
-          : { ok: false, error: 'Could not locate the channel folder to stitch.' }
+        if (folder) {
+          patchPendingJob({ phase: 'stitch', folder, channel })
+          combined = await stitchFolder(folder, channel, opts.quality, (out) => patchPendingJob({ stitchOut: out }))
+        } else {
+          combined = { ok: false, error: 'Could not locate the channel folder to stitch.' }
+        }
       }
 
       // record the session in history
@@ -409,18 +533,73 @@ export default function register(ctx: ModuleIpcContext): void {
       if (!result.ok) {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // members-only / removed videos exit non-zero even with --ignore-errors
-        return { ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined }
+        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined })
       }
-      return { ok: true, completed, combined }
+      return finish({ ok: true, completed, combined })
     } finally {
       busy = false
       child = null
+      clearPendingJob()
       try {
         rmSync(manifestPath, { force: true })
       } catch {
         /* ignore */
       }
     }
+  }
+
+  /* ----------------------- crash resume at launch ------------------------- */
+
+  const interrupted = readPendingJob()
+  if (interrupted) {
+    setTimeout(() => {
+      void (async () => {
+        if (busy) return
+        const p = interrupted
+        if (p.attempts >= MAX_RESUME_ATTEMPTS) {
+          console.error(`[${ID}] giving up on interrupted job after ${p.attempts} resume attempts`)
+          clearPendingJob()
+          return
+        }
+        // A half-written stitched movie can't be completed — delete it; the
+        // resumed run stitches a fresh one from the (intact) numbered videos.
+        if (p.stitchOut && existsSync(p.stitchOut)) {
+          try {
+            rmSync(p.stitchOut, { force: true })
+            console.log(`[${ID}] deleted partial stitched movie: ${p.stitchOut}`)
+          } catch {
+            /* ignore */
+          }
+        }
+        console.log(`[${ID}] resuming interrupted ${p.phase} for ${p.channel || p.url}`)
+        if (p.phase === 'stitch') {
+          const folder =
+            p.folder && existsSync(p.folder)
+              ? p.folder
+              : (readHistory().find((c) => c.id === p.url)?.folder ?? null)
+          if (!folder || !existsSync(folder)) {
+            clearPendingJob()
+            return
+          }
+          await performStitch(
+            { url: p.url, folder, channel: p.channel || basename(folder), quality: p.quality },
+            p.attempts + 1,
+            true
+          )
+        } else {
+          await performDownload({
+            url: p.url,
+            quality: p.quality,
+            combine: p.combine,
+            channel: p.channel,
+            folder: p.folder,
+            auto: false,
+            resumed: true,
+            attempts: p.attempts + 1
+          })
+        }
+      })()
+    }, RESUME_DELAY_MS)
   }
 
   /* ----------------------- launch-time auto rescan ------------------------ */
@@ -432,7 +611,7 @@ export default function register(ctx: ModuleIpcContext): void {
       const recs = readHistory().filter((r) => r.autoRescan)
       if (recs.length === 0 || !hasYtDlp(userData())) return
       for (const rec of recs) {
-        if (busy) break // never fight a job the user started
+        if (busy) break // never fight a job the user started (or a resume)
         try {
           const probe = await probeChannel(rec.url)
           if (!probe.ok) continue
@@ -530,29 +709,16 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /** Stitch-only for a saved channel (completing a deferred stitch). */
   ctx.ipcMain.handle(`${ID}:stitch`, async (_e, raw: unknown) => {
-    if (busy) return { ok: false, error: 'A job is already running. Wait for it to finish or cancel it.' }
     const rec = readHistory().find((c) => c.id === asRecord(raw).id)
     if (!rec) return { ok: false, error: 'Channel not found in history.' }
     if (!rec.folder || !existsSync(rec.folder))
       return { ok: false, error: 'The channel folder could not be found — run a download first.' }
-    busy = true
-    cancelRequested = false
-    try {
-      const combined = await stitchFolder(rec.folder, rec.channel || basename(rec.folder), rec.quality)
-      if (combined.ok) {
-        upsertRecord({
-          id: rec.id,
-          stitchedCount: channelVideos(rec.folder).length,
-          lastStitchAt: Date.now(),
-          lastStitchPath: combined.path ?? null,
-          autoDownloadedPending: 0
-        })
-      }
-      return combined.cancelled ? { ok: false, cancelled: true } : { ok: combined.ok, combined, error: combined.error }
-    } finally {
-      busy = false
-      child = null
-    }
+    return performStitch({
+      url: rec.url,
+      folder: rec.folder,
+      channel: rec.channel || basename(rec.folder),
+      quality: rec.quality
+    })
   })
 
   ctx.ipcMain.handle(`${ID}:download`, async (_e, raw: unknown) => {

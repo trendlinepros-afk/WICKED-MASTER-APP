@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -31,6 +31,13 @@ import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/com
  *  completion. Up to MAX_JOBS downloads run concurrently; each is a tracked
  *  job (jobId) whose progress events are tagged and which cancels
  *  independently.
+ *
+ *  CRASH RESUME: every started job is journaled to pending-jobs.json and
+ *  cleared on completion/cancel. If the app (or the whole PC) dies mid-job,
+ *  the journal survives — on the next launch those jobs restart themselves:
+ *  yt-dlp skips finished files and continues half-downloaded ones, and the
+ *  job's original manifest (kept across the crash) still feeds the combine.
+ *  job-start / job-end events keep the UI in sync with resumed jobs.
  * ------------------------------------------------------------------------ */
 
 const ID = 'yt-downloader'
@@ -40,6 +47,19 @@ const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
 const COMBINE_KEY = `${ID}.combineClips`
 const PROBE_TIMEOUT_MS = 90_000
 const MAX_JOBS = 3
+const RESUME_DELAY_MS = 8000
+const MAX_RESUME_ATTEMPTS = 3
+
+interface PendingJob {
+  jobId: string
+  url: string
+  quality: string
+  isPlaylist: boolean
+  combine: boolean
+  title: string
+  startedAt: number
+  attempts: number
+}
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -56,16 +76,40 @@ export default function register(ctx: ModuleIpcContext): void {
   const jobs = new Map<string, Job>()
 
   const userData = (): string => ctx.app.getPath('userData')
+  const moduleDir = (): string => join(userData(), 'modules', ID)
+  const pendingFile = (): string => join(moduleDir(), 'pending-jobs.json')
+  const manifestPathFor = (jobId: string): string => join(moduleDir(), `combine-manifest-${jobId}.txt`)
 
-  // Sweep ffmpeg scratch left by interrupted combines (app closed / crashed
-  // mid-stitch). These normalized clips can be GIGABYTES, and stale ones once
-  // bloated the Cloud Sync snapshot past Node's string limit. No job can be
-  // running this early, so anything matching is guaranteed stale.
+  /* -------------------- crash-resume journal (pending jobs) ---------------- */
+
+  const readPending = (): PendingJob[] => {
+    try {
+      const j = JSON.parse(readFileSync(pendingFile(), 'utf8')) as { jobs?: unknown }
+      return Array.isArray(j.jobs) ? (j.jobs as PendingJob[]) : []
+    } catch {
+      return []
+    }
+  }
+  const savePending = (list: PendingJob[]): void => {
+    mkdirSync(moduleDir(), { recursive: true })
+    writeFileSync(pendingFile(), JSON.stringify({ jobs: list }, null, 2), 'utf8')
+  }
+  const addPending = (p: PendingJob): void => {
+    savePending([...readPending().filter((x) => x.jobId !== p.jobId), p])
+  }
+  const removePending = (jobId: string): void => {
+    savePending(readPending().filter((x) => x.jobId !== jobId))
+  }
+
+  // Sweep ffmpeg scratch left by interrupted combines — but KEEP manifests that
+  // belong to journaled (about-to-resume) jobs: they list the files downloaded
+  // before the crash, which the resumed combine still needs.
+  const survivors = readPending()
+  const keepManifests = new Set(survivors.map((p) => `combine-manifest-${p.jobId}.txt`))
   try {
-    const moduleDir = join(userData(), 'modules', ID)
-    for (const name of readdirSync(moduleDir)) {
-      if (/^combine-(tmp|manifest-)/.test(name)) {
-        rmSync(join(moduleDir, name), { recursive: true, force: true })
+    for (const name of readdirSync(moduleDir())) {
+      if (/^combine-(tmp|manifest-)/.test(name) && !keepManifests.has(name)) {
+        rmSync(join(moduleDir(), name), { recursive: true, force: true })
         console.log(`[${ID}] removed stale combine scratch: ${name}`)
       }
     }
@@ -286,14 +330,24 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* ------------------------------ download ------------------------------- */
 
-  ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
-    const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
-    const jobId =
-      typeof r.jobId === 'string' && r.jobId
-        ? r.jobId
-        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-    const url = typeof r.url === 'string' ? r.url.trim() : ''
-    if (!/^https?:\/\//i.test(url)) return { ok: false, jobId, error: 'A YouTube URL is required.' }
+  interface JobParams {
+    jobId: string
+    url: string
+    quality: string
+    isPlaylist: boolean
+    combine: boolean
+    title: string
+    /** original start time — preserved across a crash resume for the combine */
+    startedAt: number
+    attempts: number
+    resumed: boolean
+  }
+
+  /** The whole download (+ optional combine) session; shared by the manual
+   *  handler and the launch-time crash resume. `started: true` in the result
+   *  means the job actually claimed a slot (and job-start/job-end events fired). */
+  async function performJob(p: JobParams): Promise<Record<string, unknown>> {
+    const { jobId } = p
     if (jobs.size >= MAX_JOBS)
       return {
         ok: false,
@@ -308,26 +362,50 @@ export default function register(ctx: ModuleIpcContext): void {
     const sendP = (payload: Record<string, unknown>): void =>
       send(`${ID}:progress`, { jobId, ...payload })
 
+    addPending({
+      jobId,
+      url: p.url,
+      quality: p.quality,
+      isPlaylist: p.isPlaylist,
+      combine: p.combine,
+      title: p.title,
+      startedAt: p.startedAt,
+      attempts: p.attempts
+    })
+    sendP({
+      kind: 'job-start',
+      title: p.title || p.url,
+      quality: p.quality,
+      isPlaylist: p.isPlaylist,
+      combine: p.combine,
+      resumed: p.resumed
+    })
+    if (p.resumed)
+      sendP({ kind: 'note', note: 'Resumed after a restart — finished videos are skipped, partial ones continue.' })
+
+    const finish = (outcome: Record<string, unknown>): Record<string, unknown> => {
+      const res = { ...outcome, jobId, started: true }
+      sendP({ kind: 'job-end', ...res })
+      return res
+    }
+
     try {
       const ud = userData()
       if (!hasYtDlp(ud)) {
         const dl = await downloadYtDlp(ud)
-        if (!dl.ok) return { ok: false, jobId, error: 'yt-dlp is not installed: ' + (dl.error ?? '') }
+        if (!dl.ok) return finish({ ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') })
       }
       const dir = downloadDir()
       mkdirSync(dir, { recursive: true })
 
-      const quality = typeof r.quality === 'string' ? r.quality : 'best'
-      const isPlaylist = r.isPlaylist === true
       const ffmpeg = resolveFfmpeg()
       // "Combine clips" only makes sense for a multi-item VIDEO download and needs
       // ffmpeg. It's ignored for single videos and audio jobs.
-      const wantCombine = r.combine === true && isPlaylist && !isAudioQuality(quality) && !!ffmpeg
-      const jobStart = Date.now()
-      const manifestPath = wantCombine ? join(ud, 'modules', ID, `combine-manifest-${jobId}.txt`) : undefined
+      const wantCombine = p.combine && p.isPlaylist && !isAudioQuality(p.quality) && !!ffmpeg
+      const manifestPath = wantCombine ? manifestPathFor(jobId) : undefined
       if (manifestPath) mkdirSync(dirname(manifestPath), { recursive: true })
 
-      const req: DownloadRequest = { url, quality, isPlaylist, downloadDir: dir, manifestPath }
+      const req: DownloadRequest = { url: p.url, quality: p.quality, isPlaylist: p.isPlaylist, downloadDir: dir, manifestPath }
       const args = buildDownloadArgs(req, ffmpeg)
 
       let completed = 0
@@ -335,14 +413,14 @@ export default function register(ctx: ModuleIpcContext): void {
         ytDlpCmd(ud),
         args,
         (line) => {
-          const p = parseProgressLine(line)
-          if (!p) return
-          if ('note' in p) {
-            if (/Downloading item|Destination|Merging|Extracting/.test(p.note)) sendP({ kind: 'note', note: p.note })
-            if (/has already been downloaded/.test(p.note)) completed++
+          const prog = parseProgressLine(line)
+          if (!prog) return
+          if ('note' in prog) {
+            if (/Downloading item|Destination|Merging|Extracting/.test(prog.note)) sendP({ kind: 'note', note: prog.note })
+            if (/has already been downloaded/.test(prog.note)) completed++
           } else {
-            if (p.percent >= 100) completed++
-            sendP({ kind: 'progress', ...p })
+            if (prog.percent >= 100) completed++
+            sendP({ kind: 'progress', ...prog })
           }
         },
         (child) => {
@@ -350,25 +428,24 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       )
 
-      if (result.cancelled) return { ok: false, jobId, cancelled: true }
+      if (result.cancelled) return finish({ ok: false, cancelled: true })
 
       // ---- combine phase (best-effort; never fails the download itself) ----
+      // collectOutputs prefers the manifest, which survives a crash resume (the
+      // startup sweep keeps journaled jobs' manifests), so it lists BOTH runs'
+      // files; the mtime fallback uses the ORIGINAL start for the same reason.
       let combined:
         | { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }
         | null = null
       if (wantCombine && !job.cancelRequested) {
-        const files = collectOutputs(manifestPath ?? null, dir, jobStart)
+        const files = collectOutputs(manifestPath ?? null, dir, p.startedAt)
         if (files.length >= 2 && ffmpeg) {
-          const title = typeof r.title === 'string' && r.title.trim() ? r.title.trim() : 'Playlist'
-          const stamp = new Date(jobStart).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-          // Save the movie ALONGSIDE the clips (playlist downloads land in their
-          // own subfolder), matching what the UI promises.
-          const clipDirs = new Set(files.map((f) => dirname(f)))
-          const outDir = clipDirs.size === 1 ? [...clipDirs][0] : dir
-          const outPath = join(outDir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
+          const title = p.title.trim() ? p.title.trim() : 'Playlist'
+          const stamp = new Date(p.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+          const outPath = join(dir, `${sanitizeName(title)} - Combined ${stamp}.mp4`)
           const tmpDir = join(ud, 'modules', ID, `combine-tmp-${jobId}`)
           sendP({ kind: 'combine', done: 0, total: files.length, label: `Combining ${files.length} clips…` })
-          const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
+          const cRes = await combineClips(files, outPath, tmpDir, canvasFor(p.quality), {
             ffmpeg,
             ffprobe: resolveFfprobe(),
             onNote: (note) => sendP({ kind: 'note', note }),
@@ -393,12 +470,13 @@ export default function register(ctx: ModuleIpcContext): void {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
         // treat as a soft warning when at least something downloaded.
-        return { ok: completed > 0, jobId, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined }
+        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined })
       }
-      return { ok: true, jobId, completed, combined }
+      return finish({ ok: true, completed, combined })
     } finally {
       jobs.delete(jobId)
-      const manifest = join(userData(), 'modules', ID, `combine-manifest-${jobId}.txt`)
+      removePending(jobId)
+      const manifest = manifestPathFor(jobId)
       if (existsSync(manifest)) {
         try {
           rmSync(manifest, { force: true })
@@ -407,7 +485,43 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       }
     }
+  }
+
+  ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
+    const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
+    const jobId =
+      typeof r.jobId === 'string' && r.jobId
+        ? r.jobId
+        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    const url = typeof r.url === 'string' ? r.url.trim() : ''
+    if (!/^https?:\/\//i.test(url)) return { ok: false, jobId, error: 'A YouTube URL is required.' }
+    return performJob({
+      jobId,
+      url,
+      quality: typeof r.quality === 'string' ? r.quality : 'best',
+      isPlaylist: r.isPlaylist === true,
+      combine: r.combine === true,
+      title: typeof r.title === 'string' ? r.title : '',
+      startedAt: Date.now(),
+      attempts: 0,
+      resumed: false
+    })
   })
+
+  // Resume jobs the last session never finished (crash, power loss, app close).
+  if (survivors.length > 0) {
+    setTimeout(() => {
+      for (const p of survivors) {
+        if (p.attempts >= MAX_RESUME_ATTEMPTS) {
+          console.error(`[${ID}] giving up on job ${p.jobId} after ${p.attempts} resume attempts`)
+          removePending(p.jobId)
+          continue
+        }
+        console.log(`[${ID}] resuming interrupted job: ${p.title || p.url}`)
+        void performJob({ ...p, attempts: p.attempts + 1, resumed: true })
+      }
+    }, RESUME_DELAY_MS)
+  }
 
   // Cancel one job (jobId) or, with no argument, all running jobs — the latter
   // keeps the MCP cancel tool and any older callers working unchanged.

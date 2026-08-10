@@ -350,9 +350,6 @@ export const useYt = create<State>((set, get) => ({
       statusMsg: 'Download started — watch its card on the right. Paste another URL to queue the next one.'
     }))
 
-    const patchJob = (patch: Partial<DownloadJob>): void =>
-      set((s) => ({ jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, ...patch } : j)) }))
-
     const res = (await invoke('download', {
       jobId,
       url: url.trim(),
@@ -360,43 +357,17 @@ export const useYt = create<State>((set, get) => ({
       isPlaylist,
       combine: combineClips,
       title: probe?.title ?? ''
-    }).catch((e) => ({ ok: false, error: String(e) }))) as Res & {
-      warning?: boolean
-      completed?: number
-      cancelled?: boolean
-      combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
-    }
+    }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
 
-    // Describe how the combine step went, appended to the main status line.
-    const c = res.combined
-    const combineMsg = c
-      ? c.ok
-        ? ` 🎬 Combined ${Number(c.used) || 0} clip(s) into one video.`
-        : c.cancelled
-          ? ' (Combine cancelled.)'
-          : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
-      : ''
-    const combinedInfo =
-      c?.ok && c.path ? { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } : null
-
-    if (res.cancelled) {
-      patchJob({ state: 'cancelled', message: 'Download cancelled.', progress: null })
-    } else if (res.ok === true && !res.warning) {
-      patchJob({
-        state: c && !c.ok && !c.cancelled ? 'warning' : 'done',
-        message: `Done — downloaded ${Number(res.completed) || ''} item(s).${combineMsg}`,
-        combinedInfo,
-        progress: null
-      })
-    } else if (res.warning) {
-      patchJob({
-        state: 'warning',
-        message: `Finished with some skips — ${Number(res.completed) || 0} downloaded.${combineMsg} ${(res as Err).error ?? ''}`.trim(),
-        combinedInfo,
-        progress: null
-      })
-    } else {
-      patchJob({ state: 'error', message: (res as Err).error ?? 'Download failed.', progress: null })
+    // Once a job claims a slot (started), its lifecycle arrives as job-start /
+    // job-end events — which also cover crash-resumed jobs the UI never
+    // invoked. Only pre-claim rejections (slots full, bad URL) are handled here.
+    if (res.started !== true && res.ok !== true) {
+      set((s) => ({
+        jobs: s.jobs.map((j) =>
+          j.id === jobId ? { ...j, state: 'error' as JobState, message: (res as Err).error ?? 'Download failed.', progress: null } : j
+        )
+      }))
     }
   },
 
@@ -409,7 +380,27 @@ export const useYt = create<State>((set, get) => ({
   },
 
   _onProgress: (raw) => {
-    const p = raw as { jobId?: string; kind?: string; note?: string; done?: number; total?: number; label?: string } & Progress
+    const p = raw as {
+      jobId?: string
+      kind?: string
+      note?: string
+      done?: number
+      total?: number
+      label?: string
+      // job-start extras
+      title?: string
+      quality?: string
+      isPlaylist?: boolean
+      combine?: boolean
+      resumed?: boolean
+      // job-end extras
+      ok?: boolean
+      warning?: boolean
+      cancelled?: boolean
+      completed?: number
+      error?: string
+      combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
+    } & Progress
     const jobId = p.jobId
     if (!jobId) return
     const patchJob = (fn: (j: DownloadJob) => Partial<DownloadJob>): void =>
@@ -429,6 +420,54 @@ export const useYt = create<State>((set, get) => ({
       patchJob(() => ({
         progress: { index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title }
       }))
+    } else if (p.kind === 'job-start') {
+      // A job started in main that this UI doesn't have a card for yet — a
+      // crash-resumed job restarting itself after launch. Give it a card.
+      if (!get().jobs.some((j) => j.id === jobId)) {
+        const qLabel = QUALITIES.find((q) => q.id === p.quality)?.label ?? String(p.quality ?? '')
+        const job: DownloadJob = {
+          id: jobId,
+          title: String(p.title ?? 'Download'),
+          detail: `${qLabel}${p.isPlaylist ? ' · playlist' : ''}${p.combine ? ' · combine' : ''}`,
+          state: 'running',
+          progress: null,
+          log: [],
+          message: p.resumed ? 'Resumed after restart — finished videos are skipped.' : 'Starting download…',
+          combinedInfo: null,
+          startedAt: Date.now()
+        }
+        set((s) => ({ jobs: [job, ...s.jobs] }))
+      }
+    } else if (p.kind === 'job-end') {
+      const c = p.combined
+      const combineMsg = c
+        ? c.ok
+          ? ` 🎬 Combined ${Number(c.used) || 0} clip(s) into one video.`
+          : c.cancelled
+            ? ' (Combine cancelled.)'
+            : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
+        : ''
+      const combinedInfo =
+        c?.ok && c.path ? { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } : null
+      if (p.cancelled) {
+        patchJob(() => ({ state: 'cancelled', message: 'Download cancelled.', progress: null }))
+      } else if (p.ok === true && !p.warning) {
+        patchJob(() => ({
+          state: c && !c.ok && !c.cancelled ? 'warning' : 'done',
+          message: `Done — downloaded ${Number(p.completed) || ''} item(s).${combineMsg}`,
+          combinedInfo,
+          progress: null
+        }))
+      } else if (p.warning) {
+        patchJob(() => ({
+          state: 'warning',
+          message: `Finished with some skips — ${Number(p.completed) || 0} downloaded.${combineMsg} ${p.error ?? ''}`.trim(),
+          combinedInfo,
+          progress: null
+        }))
+      } else {
+        patchJob(() => ({ state: 'error', message: p.error ?? 'Download failed.', progress: null }))
+      }
     }
   },
 
