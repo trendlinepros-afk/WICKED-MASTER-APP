@@ -40,7 +40,11 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         combine: z
           .boolean()
           .optional()
-          .describe('Stitch all videos into one chronological movie after downloading (default true).'),
+          .describe('Stitch all videos into one movie after downloading (default true).'),
+        randomize: z
+          .boolean()
+          .optional()
+          .describe('Stitch in RANDOM order (default false = oldest → newest). File names stay numbered oldest-first either way.'),
         channel: z.string().optional().describe('Channel name used to title the stitched movie.'),
         confirm: z.boolean().optional().describe('Set true to actually start.')
       },
@@ -54,6 +58,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           url: args.url,
           quality: args.quality ?? '1080',
           combine: args.combine !== false,
+          shuffle: args.randomize === true,
           channel: args.channel
         })
       }

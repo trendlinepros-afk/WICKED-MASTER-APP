@@ -151,13 +151,14 @@ export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): 
   // missing artist/album degrades to uploader/playlist title rather than
   // erroring or producing "NA".
   const audio = isAudioQuality(req.quality)
+  // 4-digit numbering so 1000+-item playlists still zero-pad and sort correctly
   const out = req.isPlaylist
     ? join(
         req.downloadDir,
         audio ? '%(playlist_title,album,uploader)s' : '%(playlist_title,uploader)s',
         audio
-          ? '%(playlist_index)03d - %(artist,creator,uploader)s - %(title)s [%(id)s].%(ext)s'
-          : '%(playlist_index)03d - %(title)s [%(id)s].%(ext)s'
+          ? '%(playlist_index)04d - %(artist,creator,uploader)s - %(title)s [%(id)s].%(ext)s'
+          : '%(playlist_index)04d - %(title)s [%(id)s].%(ext)s'
       )
     : join(
         req.downloadDir,

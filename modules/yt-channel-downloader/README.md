@@ -24,11 +24,12 @@ properties:
 - Numbering is stable across re-runs (new uploads only append at the end), so
   already-downloaded videos are skipped cleanly.
 
-The optional stitch reuses the shared `combineClips` with `shuffle: false` —
-the manifest (yt-dlp's `--print-to-file after_move:filepath`) preserves
-download order, so the movie plays the channel's story oldest → newest. The
-movie is saved in the channel's own subfolder as
-`<Channel> - Full Channel <stamp>.mp4`.
+The optional stitch is **oldest → newest by default**; a "Randomize export"
+sub-checkbox (available only when stitching is on) shuffles the stitch order
+instead. Either way, FILE NAMES are always numbered chronologically — stitch
+order never affects them. Stitch normalization runs at 60fps so high-frame-rate
+source videos keep their smoothness. The movie is saved in the channel's own
+subfolder as `<Channel> - Full Channel <stamp>.mp4`.
 
 ## History, rescan and auto-rescan
 

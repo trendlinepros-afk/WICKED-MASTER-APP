@@ -117,7 +117,9 @@ export function buildNormalizeArgs(
   output: string,
   canvas: { w: number; h: number },
   hasAudio: boolean,
-  fps = 30
+  // 60 so high-frame-rate source clips keep their smoothness in the stitched
+  // movie (30fps sources are frame-doubled, which is visually lossless)
+  fps = 60
 ): string[] {
   const vf =
     `scale=${canvas.w}:${canvas.h}:force_original_aspect_ratio=decrease,` +

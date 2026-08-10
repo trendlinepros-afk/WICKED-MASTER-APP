@@ -121,6 +121,8 @@ interface State {
   musicFormat: string
   /** setting: after a playlist video download, stitch the clips into one movie */
   combineClips: boolean
+  /** setting: stitch in RANDOM order (off = oldest → newest / playlist order) */
+  combineShuffle: boolean
   /** true when the current URL looks like a YouTube Music link (live, no probe) */
   urlIsMusic: boolean
   /** user explicitly picked a video quality for this music URL — respect it */
@@ -137,6 +139,7 @@ interface State {
   setMusicAudioOnly: (v: boolean) => Promise<void>
   setMusicFormat: (v: string) => Promise<void>
   setCombineClips: (v: boolean) => Promise<void>
+  setCombineShuffle: (v: boolean) => Promise<void>
   clearMusicOverride: () => void
   dismissError: () => void
 
@@ -167,6 +170,7 @@ export const useYt = create<State>((set, get) => ({
   musicAudioOnly: true,
   musicFormat: 'audio',
   combineClips: false,
+  combineShuffle: false,
   urlIsMusic: false,
   musicOverride: false,
 
@@ -216,6 +220,11 @@ export const useYt = create<State>((set, get) => ({
     await invoke('prefs-set', { combineClips: v })
   },
 
+  setCombineShuffle: async (v) => {
+    set({ combineShuffle: v })
+    await invoke('prefs-set', { combineShuffle: v })
+  },
+
   clearMusicOverride: () => {
     const { musicFormat } = get()
     set({ musicOverride: false, quality: musicFormat })
@@ -224,12 +233,13 @@ export const useYt = create<State>((set, get) => ({
   dismissError: () => set({ error: '' }),
 
   loadPrefs: async () => {
-    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean }>('prefs-get')
+    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean; combineShuffle?: boolean }>('prefs-get')
     if (res.ok)
       set({
         musicAudioOnly: res.musicAudioOnly !== false,
         musicFormat: res.musicFormat === 'audio-native' ? 'audio-native' : 'audio',
-        combineClips: res.combineClips === true
+        combineClips: res.combineClips === true,
+        combineShuffle: res.combineShuffle === true
       })
   },
 
@@ -307,7 +317,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, wholePlaylist, combineClips, jobs } = get()
+    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, jobs } = get()
     if (!url.trim()) return
     if (jobs.filter(isJobActive).length >= MAX_JOBS) {
       set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
@@ -356,6 +366,7 @@ export const useYt = create<State>((set, get) => ({
       quality,
       isPlaylist,
       combine: combineClips,
+      shuffle: combineShuffle,
       title: probe?.title ?? ''
     }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
 

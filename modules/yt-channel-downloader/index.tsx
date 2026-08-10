@@ -83,6 +83,7 @@ export default function ChannelDownloader(): React.JSX.Element {
   const [probe, setProbe] = useState<ChannelProbe | null>(null)
   const [quality, setQuality] = useState('1080')
   const [combine, setCombine] = useState(true)
+  const [shuffleStitch, setShuffleStitch] = useState(false)
   const [error, setError] = useState('')
   const [downloadDir, setDownloadDir] = useState('')
   const [ffmpegReady, setFfmpegReady] = useState(true)
@@ -207,6 +208,7 @@ export default function ChannelDownloader(): React.JSX.Element {
     url: string
     quality: string
     combine: boolean
+    shuffle?: boolean
     channel: string
     folder?: string | null
   }): Promise<void> => {
@@ -394,12 +396,30 @@ export default function ChannelDownloader(): React.JSX.Element {
                     Stitch everything into one movie
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">
-                    After the downloads finish, all videos are re-encoded to a matching format and joined into a
-                    single file <strong>in order, oldest → newest</strong>. Saved in the channel's folder. If you
-                    skip it now, a later rescan can complete the full movie any time.
+                    After the downloads finish, all videos are re-encoded to a matching format and joined into
+                    a single file. Saved in the channel's folder. If you skip it now, a later rescan can
+                    complete the full movie any time.
                   </span>
                 </span>
               </label>
+              {combine && (
+                <label className="mt-3 flex cursor-pointer items-start gap-2.5 border-t border-edge pt-3">
+                  <input
+                    type="checkbox"
+                    checked={shuffleStitch}
+                    onChange={(e) => setShuffleStitch(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                  />
+                  <span className="min-w-0">
+                    <span className="text-sm font-medium">Randomize export</span>
+                    <span className="mt-0.5 block text-xs text-muted">
+                      Stitch the videos in <strong>random</strong> order. Off = oldest → newest (the
+                      creator's whole story in order). The downloaded files stay numbered oldest-first
+                      either way.
+                    </span>
+                  </span>
+                </label>
+              )}
               {combine && !ffmpegReady && (
                 <p className="mt-2 flex items-start gap-1.5 border-t border-edge pt-2 text-xs text-warn">
                   <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -411,7 +431,7 @@ export default function ChannelDownloader(): React.JSX.Element {
             <div className="rounded-xl border border-edge bg-surface p-4">
               <button
                 onClick={() =>
-                  void runDownload({ url, quality, combine, channel: probe?.channel ?? '' })
+                  void runDownload({ url, quality, combine, shuffle: shuffleStitch, channel: probe?.channel ?? '' })
                 }
                 disabled={busy || !url.trim()}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-accent-ink hover:opacity-90 disabled:opacity-40"

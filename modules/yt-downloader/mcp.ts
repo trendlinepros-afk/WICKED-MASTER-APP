@@ -44,7 +44,11 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         combine: z
           .boolean()
           .optional()
-          .describe('After a playlist VIDEO download, shuffle the clips and stitch them into a single movie file (re-encodes; needs ffmpeg). Ignored for single videos and audio downloads.'),
+          .describe('After a playlist VIDEO download, stitch the clips into a single movie file (re-encodes; needs ffmpeg). Ignored for single videos and audio downloads.'),
+        randomize: z
+          .boolean()
+          .optional()
+          .describe('Stitch in RANDOM order (default false = oldest → newest / playlist order). File names stay numbered oldest-first either way.'),
         title: z.string().optional().describe('Optional title used to name the combined movie file.'),
         confirm: z.boolean().optional().describe('Set true to actually start the download.')
       },
@@ -59,6 +63,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           quality: args.quality,
           isPlaylist: args.isPlaylist === true,
           combine: args.combine === true,
+          shuffle: args.randomize === true,
           title: args.title
         })
       }

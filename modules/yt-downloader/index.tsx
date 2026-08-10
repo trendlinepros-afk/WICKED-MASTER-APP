@@ -69,6 +69,8 @@ export default function YtDownloader(): React.JSX.Element {
   }
 
   const videoSelected = !isAudioPreset(s.quality) && !musicForced
+  /** which side of the Video/Music toggle the current quality belongs to */
+  const musicMode = isAudioPreset(s.quality)
   /** whether this run will actually stitch a movie (playlist + video + toggle) */
   const willCombine =
     s.combineClips &&
@@ -297,7 +299,24 @@ export default function YtDownloader(): React.JSX.Element {
             {/* quality */}
             <div className="rounded-xl border border-edge bg-surface p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-semibold">Quality</div>
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-semibold">Quality</div>
+                  {/* Video vs Music: the grid shows only the mode's own options */}
+                  <div className="flex overflow-hidden rounded-lg border border-edge text-xs">
+                    <button
+                      onClick={() => s.setQuality('1080')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 font-medium ${!musicMode ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+                    >
+                      <Video size={12} /> Video
+                    </button>
+                    <button
+                      onClick={() => s.setQuality(s.musicFormat)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 font-medium ${musicMode ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}
+                    >
+                      <Music size={12} /> Music
+                    </button>
+                  </div>
+                </div>
                 {musicForced && (
                   <span className="flex items-center gap-1.5 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger">
                     <Music size={11} /> Music link — audio only (setting)
@@ -314,29 +333,24 @@ export default function YtDownloader(): React.JSX.Element {
                 )}
               </div>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                {QUALITIES.map((q) => {
-                  const dimmed = musicForced && !isAudioPreset(q.id)
-                  return (
-                    <button
-                      key={q.id}
-                      onClick={() => s.setQuality(q.id)}
-                      title={dimmed ? `${q.note} — click to override audio-only for this link` : q.note}
-                      className={`rounded-lg border px-3 py-2 text-left text-xs ${
-                        s.quality === q.id
-                          ? 'border-accent bg-accent/10 text-ink'
-                          : dimmed
-                            ? 'border-edge/60 bg-raised/40 text-muted/50 hover:text-muted'
-                            : 'border-edge bg-raised text-muted hover:text-ink'
-                      }`}
-                    >
-                      <div className="font-semibold">{q.label}</div>
-                    </button>
-                  )
-                })}
+                {QUALITIES.filter((q) => isAudioPreset(q.id) === musicMode).map((q) => (
+                  <button
+                    key={q.id}
+                    onClick={() => s.setQuality(q.id)}
+                    title={q.note}
+                    className={`rounded-lg border px-3 py-2 text-left text-xs ${
+                      s.quality === q.id
+                        ? 'border-accent bg-accent/10 text-ink'
+                        : 'border-edge bg-raised text-muted hover:text-ink'
+                    }`}
+                  >
+                    <div className="font-semibold">{q.label}</div>
+                  </button>
+                ))}
               </div>
               <p className="mt-2 text-xs text-muted">
                 {QUALITIES.find((q) => q.id === s.quality)?.note}
-                {musicForced && ' · Video tiers are dimmed because this is a Music link — click one anyway to override.'}
+                {musicForced && ' · This is a Music link — flip to Video to override the audio-only setting.'}
               </p>
             </div>
 
@@ -356,12 +370,29 @@ export default function YtDownloader(): React.JSX.Element {
                       Combine clips into one video
                     </span>
                     <span className="mt-0.5 block text-xs text-muted">
-                      After a <strong>playlist or album</strong> finishes downloading, shuffle all the clips
-                      and stitch them into a single movie file — saved alongside the individual videos. Clips
-                      are re-encoded to a matching format, so large playlists can take a while.
+                      After a <strong>playlist or album</strong> finishes downloading, stitch all the clips
+                      into a single movie file — saved alongside the individual videos. Clips are re-encoded
+                      to a matching format, so large playlists can take a while.
                     </span>
                   </span>
                 </label>
+                {s.combineClips && (
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5 border-t border-edge pt-3">
+                    <input
+                      type="checkbox"
+                      checked={s.combineShuffle}
+                      onChange={(e) => void s.setCombineShuffle(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                    />
+                    <span className="min-w-0">
+                      <span className="text-sm font-medium">Randomize export</span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Stitch the clips in <strong>random</strong> order. Off = oldest → newest (playlist
+                        order). Either way the downloaded files stay numbered oldest-first.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 {s.combineClips && status && !status.ffmpegReady && (
                   <p className="mt-2 flex items-start gap-1.5 border-t border-edge pt-2 text-xs text-warn">
                     <AlertTriangle size={13} className="mt-0.5 shrink-0" />

@@ -70,6 +70,14 @@ song, so pulling video is almost never what you want):
   its own status card in the right-hand column, and cancellable independently
   (cancel with no jobId kills all, which is what the MCP tool does). The setup
   form resets when a job starts so the next one can be queued immediately.
+- **Combine order.** The playlist stitch is oldest → newest (playlist order) by
+  default; the "Randomize export" sub-checkbox (persisted, only shown when
+  combining is on) shuffles the stitch instead. File names are always numbered
+  in playlist order (`%(playlist_index)04d` — 4 digits so 1000+-item playlists
+  sort correctly) regardless of stitch order, and normalization runs at 60fps
+  so high-frame-rate sources keep their smoothness.
+- **Quality picker modes.** The Quality card has a Video / Music toggle: Video
+  shows the resolution tiers, Music shows only the two audio presets.
 - **Crash resume.** Started jobs are journaled to `pending-jobs.json` and
   cleared on completion/cancel. If the app or the whole PC dies mid-job, the
   next launch restarts the survivors (max 3 attempts): yt-dlp skips finished

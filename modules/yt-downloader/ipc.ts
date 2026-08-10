@@ -45,6 +45,7 @@ const DIR_KEY = `${ID}.downloadDir`
 const MUSIC_AUDIO_ONLY_KEY = `${ID}.musicAudioOnly`
 const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
 const COMBINE_KEY = `${ID}.combineClips`
+const COMBINE_SHUFFLE_KEY = `${ID}.combineShuffle`
 const PROBE_TIMEOUT_MS = 90_000
 const MAX_JOBS = 3
 const RESUME_DELAY_MS = 8000
@@ -56,6 +57,7 @@ interface PendingJob {
   quality: string
   isPlaylist: boolean
   combine: boolean
+  shuffle?: boolean
   title: string
   startedAt: number
   attempts: number
@@ -180,12 +182,13 @@ export default function register(ctx: ModuleIpcContext): void {
    * link is a song, so grabbing video is almost never what's wanted.
    * ---------------------------------------------------------------------- */
 
-  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean } => {
+  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean; combineShuffle: boolean } => {
     const fmt = ctx.storeGet<string>(MUSIC_FORMAT_KEY, 'audio')
     return {
       musicAudioOnly: ctx.storeGet<boolean>(MUSIC_AUDIO_ONLY_KEY, true) !== false,
       musicFormat: fmt === 'audio-native' ? 'audio-native' : 'audio',
-      combineClips: ctx.storeGet<boolean>(COMBINE_KEY, false) === true
+      combineClips: ctx.storeGet<boolean>(COMBINE_KEY, false) === true,
+      combineShuffle: ctx.storeGet<boolean>(COMBINE_SHUFFLE_KEY, false) === true
     }
   }
 
@@ -197,6 +200,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (r.musicFormat === 'audio' || r.musicFormat === 'audio-native')
       ctx.storeSet(MUSIC_FORMAT_KEY, r.musicFormat)
     if (typeof r.combineClips === 'boolean') ctx.storeSet(COMBINE_KEY, r.combineClips)
+    if (typeof r.combineShuffle === 'boolean') ctx.storeSet(COMBINE_SHUFFLE_KEY, r.combineShuffle)
     return { ok: true, ...prefs() }
   })
 
@@ -336,6 +340,8 @@ export default function register(ctx: ModuleIpcContext): void {
     quality: string
     isPlaylist: boolean
     combine: boolean
+    /** true = stitch in random order; false = oldest → newest (file order) */
+    shuffle: boolean
     title: string
     /** original start time — preserved across a crash resume for the combine */
     startedAt: number
@@ -368,6 +374,7 @@ export default function register(ctx: ModuleIpcContext): void {
       quality: p.quality,
       isPlaylist: p.isPlaylist,
       combine: p.combine,
+      shuffle: p.shuffle,
       title: p.title,
       startedAt: p.startedAt,
       attempts: p.attempts
@@ -438,7 +445,10 @@ export default function register(ctx: ModuleIpcContext): void {
         | { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }
         | null = null
       if (wantCombine && !job.cancelRequested) {
-        const files = collectOutputs(manifestPath ?? null, dir, p.startedAt)
+        // Chronological baseline: the zero-padded numbering makes a path sort
+        // equal playlist order. The shuffle (when chosen) happens inside
+        // combineClips; file NAMES are never affected by stitch order.
+        const files = collectOutputs(manifestPath ?? null, dir, p.startedAt).sort()
         if (files.length >= 2 && ffmpeg) {
           const title = p.title.trim() ? p.title.trim() : 'Playlist'
           const stamp = new Date(p.startedAt).toISOString().slice(0, 16).replace(/[:T]/g, '-')
@@ -448,6 +458,7 @@ export default function register(ctx: ModuleIpcContext): void {
           const cRes = await combineClips(files, outPath, tmpDir, canvasFor(p.quality), {
             ffmpeg,
             ffprobe: resolveFfprobe(),
+            shuffle: p.shuffle,
             onNote: (note) => sendP({ kind: 'note', note }),
             onStep: (done, total, label) => sendP({ kind: 'combine', done, total, label }),
             registerChild: (c) => {
@@ -501,6 +512,7 @@ export default function register(ctx: ModuleIpcContext): void {
       quality: typeof r.quality === 'string' ? r.quality : 'best',
       isPlaylist: r.isPlaylist === true,
       combine: r.combine === true,
+      shuffle: r.shuffle === true,
       title: typeof r.title === 'string' ? r.title : '',
       startedAt: Date.now(),
       attempts: 0,
@@ -518,7 +530,7 @@ export default function register(ctx: ModuleIpcContext): void {
           continue
         }
         console.log(`[${ID}] resuming interrupted job: ${p.title || p.url}`)
-        void performJob({ ...p, attempts: p.attempts + 1, resumed: true })
+        void performJob({ ...p, shuffle: p.shuffle === true, attempts: p.attempts + 1, resumed: true })
       }
     }, RESUME_DELAY_MS)
   }

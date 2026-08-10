@@ -70,6 +70,8 @@ interface PendingChannelJob {
   url: string
   quality: string
   combine: boolean
+  /** stitch in random order (false/absent = oldest → newest) */
+  shuffle?: boolean
   channel: string
   folder: string | null
   startedAt: number
@@ -300,11 +302,13 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* ------------------------- the ordered full stitch ---------------------- */
 
-  /** Stitch EVERY numbered video in the channel folder, oldest → newest. */
+  /** Stitch EVERY numbered video in the channel folder — oldest → newest by
+   *  default, random order when `shuffle` is true. File names are untouched. */
   async function stitchFolder(
     folder: string,
     channel: string,
     quality: string,
+    shuffle: boolean,
     onOutPath?: (p: string) => void
   ): Promise<{ ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean }> {
     const ffmpeg = resolveFfmpeg()
@@ -315,11 +319,18 @@ export default function register(ctx: ModuleIpcContext): void {
     const outPath = join(folder, `${sanitizeName(channel)} - Full Channel ${stamp}.mp4`)
     onOutPath?.(outPath)
     const tmpDir = join(moduleDir(), `combine-tmp-${Date.now()}`)
-    send({ kind: 'combine', done: 0, total: files.length, label: `Stitching ${files.length} videos oldest → newest…` })
+    send({
+      kind: 'combine',
+      done: 0,
+      total: files.length,
+      label: shuffle
+        ? `Stitching ${files.length} videos in random order…`
+        : `Stitching ${files.length} videos oldest → newest…`
+    })
     const cRes = await combineClips(files, outPath, tmpDir, canvasFor(quality), {
       ffmpeg,
       ffprobe: resolveFfprobe(),
-      shuffle: false, // chronological, never shuffled
+      shuffle,
       onNote: (note) => send({ kind: 'note', note }),
       onStep: (done, total, label) => send({ kind: 'combine', done, total, label }),
       registerChild: (c) => {
@@ -356,7 +367,7 @@ export default function register(ctx: ModuleIpcContext): void {
     })
     send({ kind: 'job-start', mode: 'stitch', label: p.channel || 'Channel stitch', resumed })
     try {
-      const combined = await stitchFolder(p.folder, p.channel, p.quality, (out) => patchPendingJob({ stitchOut: out }))
+      const combined = await stitchFolder(p.folder, p.channel, p.quality, false, (out) => patchPendingJob({ stitchOut: out }))
       if (combined.ok) {
         upsertRecord({
           id: p.url,
@@ -386,6 +397,7 @@ export default function register(ctx: ModuleIpcContext): void {
     url: string
     quality: string
     combine: boolean
+    shuffle?: boolean
     channel: string
     folder: string | null
     auto: boolean
@@ -401,6 +413,7 @@ export default function register(ctx: ModuleIpcContext): void {
       url: opts.url,
       quality: opts.quality,
       combine: opts.combine,
+      shuffle: opts.shuffle === true,
       channel: opts.channel,
       folder: opts.folder,
       startedAt: Date.now(),
@@ -505,7 +518,9 @@ export default function register(ctx: ModuleIpcContext): void {
       if (opts.combine && !cancelRequested) {
         if (folder) {
           patchPendingJob({ phase: 'stitch', folder, channel })
-          combined = await stitchFolder(folder, channel, opts.quality, (out) => patchPendingJob({ stitchOut: out }))
+          combined = await stitchFolder(folder, channel, opts.quality, opts.shuffle === true, (out) =>
+            patchPendingJob({ stitchOut: out })
+          )
         } else {
           combined = { ok: false, error: 'Could not locate the channel folder to stitch.' }
         }
@@ -591,6 +606,7 @@ export default function register(ctx: ModuleIpcContext): void {
             url: p.url,
             quality: p.quality,
             combine: p.combine,
+            shuffle: p.shuffle === true,
             channel: p.channel,
             folder: p.folder,
             auto: false,
@@ -730,6 +746,7 @@ export default function register(ctx: ModuleIpcContext): void {
       url,
       quality,
       combine: r.combine !== false,
+      shuffle: r.shuffle === true,
       channel: typeof r.channel === 'string' ? r.channel : '',
       folder: typeof r.folder === 'string' ? r.folder : null,
       auto: false
