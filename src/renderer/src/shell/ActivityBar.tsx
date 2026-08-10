@@ -17,7 +17,7 @@ import { useUpdates } from '@/stores/updates'
 import { BrandLogo, BrandMark } from './BrandLogo'
 import ModuleIcon from './ModuleIcon'
 import SyncBadge from './SyncBadge'
-import { effectiveName, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
+import { effectiveName, folderToolCount, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
 
 /** Shared row styling for collapsed (icon-only) vs expanded (icon + label). */
 function rowClass(isActive: boolean, expanded: boolean): string {
@@ -202,6 +202,10 @@ export default function ActivityBar(): React.JSX.Element {
           // you're working inside it (or when manually expanded).
           const g = e.group
           const token = groupDragToken(g.id)
+          // count EVERYTHING the folder holds (nested folders + tools hidden
+          // from the sidebar), matching the home screen's folder tiles — the
+          // row list below still only shows directly-visible members.
+          const count = folderToolCount(g.id, settings)
           const holdsActive = e.modules.some((m) => m.manifest.id === activeModuleId)
           const isActive = activeGroupId === g.id
           const showChildren = openFolders[g.id] ?? (isActive || holdsActive)
@@ -243,14 +247,12 @@ export default function ActivityBar(): React.JSX.Element {
                   {expanded && (
                     <>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{g.name}</span>
-                      <span className="shrink-0 text-[10px] tabular-nums text-muted">
-                        {e.modules.length}
-                      </span>
+                      <span className="shrink-0 text-[10px] tabular-nums text-muted">{count}</span>
                     </>
                   )}
                   {!expanded && (
                     <span className="absolute bottom-0.5 right-1 text-[9px] font-bold tabular-nums text-muted">
-                      {e.modules.length}
+                      {count}
                     </span>
                   )}
                 </NavLink>
