@@ -116,10 +116,12 @@ export function ModuleCard({
           <ModuleIcon name={manifest.icon} size={spec.icon} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">
-          <div className={`flex items-center gap-2 truncate font-semibold ${spec.name}`}>
-            {effectiveName(m, overrides)}
+          <div className={`flex items-start gap-2 font-semibold ${spec.name}`}>
+            <span className="line-clamp-2 min-w-0 break-words leading-snug">
+              {effectiveName(m, overrides)}
+            </span>
             {manifest.status === 'beta' && (
-              <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
+              <span className="mt-0.5 shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
                 Beta
               </span>
             )}
@@ -172,7 +174,7 @@ export function GroupCard({
   commitReorder?: (targetToken: string, after?: boolean) => void
   size?: CardSize
 }): React.JSX.Element {
-  const { dragId, setDragId } = useShellUi()
+  const { openMenu, dragId, setDragId } = useShellUi()
   const [mode, setMode] = useState<'none' | 'nest' | 'reorder'>('none')
   const [side, setSide] = useState<'before' | 'after' | null>(null)
   const spec = cardSpec(size)
@@ -209,6 +211,10 @@ export function GroupCard({
         setSide(null)
       }}
       onClick={onOpen}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        openMenu(token, e.clientX, e.clientY)
+      }}
       onDragOver={(e) => {
         const m = evalMode(e)
         if (m === 'none') {
@@ -265,7 +271,7 @@ export function GroupCard({
           <ModuleIcon name={group.icon} size={spec.icon} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">
-          <div className={`truncate font-semibold ${spec.name}`}>{group.name}</div>
+          <div className={`line-clamp-2 break-words font-semibold leading-snug ${spec.name}`}>{group.name}</div>
           <div className="flex items-center gap-1.5 truncate text-xs font-medium text-warn">
             <Folder size={11} className="shrink-0" />
             {count} tool{count === 1 ? '' : 's'}

@@ -121,6 +121,7 @@ export type GroupSettings = Pick<
   | 'moduleOverrides'
   | 'disabledModules'
   | 'navHiddenModules'
+  | 'navHiddenGroups'
   | 'customGroups'
   | 'moduleGroupOverrides'
   | 'groupOverrides'
@@ -290,6 +291,7 @@ export function scopeSections(
  */
 export function navEntries(s: GroupSettings, opts: { sidebar?: boolean } = {}): NavEntry[] {
   const navHidden = opts.sidebar ? (s.navHiddenModules ?? []) : []
+  const hiddenGroups = opts.sidebar ? (s.navHiddenGroups ?? []) : []
   const visible = orderedModules(s.moduleOrder, s.moduleOverrides).filter(
     (m) => !s.disabledModules.includes(m.manifest.id) && !navHidden.includes(m.manifest.id)
   )
@@ -315,6 +317,11 @@ export function navEntries(s: GroupSettings, opts: { sidebar?: boolean } = {}): 
     }
     const topId = topAncestorId(gid, s)
     if (seenGroups.has(topId)) continue // already emitted at its first member
+    if (hiddenGroups.includes(topId)) {
+      // folder hidden from the sidebar (still on the home screen)
+      seenGroups.add(topId)
+      continue
+    }
     const top = groupById(topId, s)
     if (!top) {
       entries.push({ kind: 'module', module: m })
@@ -327,7 +334,7 @@ export function navEntries(s: GroupSettings, opts: { sidebar?: boolean } = {}): 
   // empty top-level user-created folders still belong on screen
   for (const g of s.customGroups) {
     if (g.parent && groupById(g.parent, s)) continue // nested — shown inside its parent
-    if (seenGroups.has(g.id)) continue
+    if (seenGroups.has(g.id) || hiddenGroups.includes(g.id)) continue
     entries.push({ kind: 'group', group: withOverrides(g, s), modules: [], custom: true })
   }
   return entries

@@ -5,18 +5,20 @@ import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import ModuleIcon from './ModuleIcon'
-import { allGroups, effectiveGroupId, groupPath } from './moduleView'
+import { GROUP_DRAG_PREFIX, allGroups, effectiveGroupId, groupById, groupPath } from './moduleView'
 import { moduleById } from './registry'
 
 /**
- * Right-click menu for a module (shared by the sidebar and home cards).
- * Rendered once at the shell level; positioned at the click point.
+ * Right-click menu for a module or a folder (shared by the sidebar and home
+ * cards — folder targets arrive as `group:<id>` tokens). Rendered once at the
+ * shell level; positioned at the click point.
  */
 export default function ModuleMenu(): React.JSX.Element | null {
   const menu = useShellUi((s) => s.menu)
   const closeMenu = useShellUi((s) => s.closeMenu)
   const openEdit = useShellUi((s) => s.openEdit)
   const openFolderCreate = useShellUi((s) => s.openFolderCreate)
+  const openFolderRename = useShellUi((s) => s.openFolderRename)
   const settings = useSettings((s) => s.settings)
   const update = useSettings((s) => s.update)
   const navigate = useNavigate()
@@ -53,6 +55,59 @@ export default function ModuleMenu(): React.JSX.Element | null {
 
   if (!menu) return null
   const id = menu.id
+
+  const item =
+    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-ink hover:bg-raised'
+
+  /* ------------------------------ folder menu ------------------------------ */
+  if (id.startsWith(GROUP_DRAG_PREFIX)) {
+    const gid = id.slice(GROUP_DRAG_PREFIX.length)
+    const g = groupById(gid, settings)
+    if (!g) return null
+    const hiddenList = settings.navHiddenGroups ?? []
+    const folderHidden = hiddenList.includes(gid)
+    return (
+      <div
+        ref={ref}
+        style={{ left: pos.x, top: pos.y }}
+        className="fixed z-[60] w-56 rounded-xl border border-edge bg-surface p-1 shadow-2xl"
+      >
+        <button
+          className={item}
+          onClick={() => {
+            navigate(`/g/${gid}`)
+            closeMenu()
+          }}
+        >
+          <ExternalLink size={15} className="text-muted" />
+          Open folder
+        </button>
+        <button className={item} onClick={() => openFolderRename(gid)}>
+          <Pencil size={15} className="text-muted" />
+          Rename &amp; edit folder
+        </button>
+        <button
+          className={item}
+          title={
+            folderHidden
+              ? 'Show this folder in the left menu again'
+              : 'Hide from the left menu — the folder and its tools stay on the home screen'
+          }
+          onClick={() => {
+            update({
+              navHiddenGroups: folderHidden ? hiddenList.filter((x) => x !== gid) : [...hiddenList, gid]
+            })
+            closeMenu()
+          }}
+        >
+          {folderHidden ? <Eye size={15} className="text-muted" /> : <EyeOff size={15} className="text-muted" />}
+          {folderHidden ? 'Un-Hide from left menu' : 'Hide from left menu'}
+        </button>
+      </div>
+    )
+  }
+
+  /* ------------------------------ module menu ------------------------------ */
   const mod = moduleById(id)
   const folders = allGroups(settings)
   const currentGroup = mod ? effectiveGroupId(mod, settings) : ''
@@ -68,9 +123,6 @@ export default function ModuleMenu(): React.JSX.Element | null {
     update({ navHiddenModules: navHidden ? list.filter((x) => x !== id) : [...list, id] })
     closeMenu()
   }
-
-  const item =
-    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-ink hover:bg-raised'
 
   return (
     <div

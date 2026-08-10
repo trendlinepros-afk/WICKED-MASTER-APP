@@ -230,6 +230,10 @@ export default function ActivityBar(): React.JSX.Element {
                     setDragId(null)
                     setDropTarget(null)
                   }}
+                  onContextMenu={(e2) => {
+                    e2.preventDefault()
+                    openMenu(token, e2.clientX, e2.clientY)
+                  }}
                   title={expanded ? undefined : `${g.name} (folder)`}
                   className={`${rowClass(isActive || holdsActive, expanded)} min-w-0 flex-1 ${
                     dropTarget === token ? 'ring-1 ring-accent' : ''
