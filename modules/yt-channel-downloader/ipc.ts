@@ -202,6 +202,10 @@ export default function register(ctx: ModuleIpcContext): void {
       join(dir, '%(channel,uploader)s', '%(playlist_autonumber)04d - %(title)s [%(id)s].%(ext)s'),
       '-I',
       '::-1',
+      // save each video's thumbnail alongside it, same basename, as .jpg
+      '--write-thumbnail',
+      '--convert-thumbnails',
+      'jpg',
       '--newline',
       '--no-color',
       '--ignore-errors',

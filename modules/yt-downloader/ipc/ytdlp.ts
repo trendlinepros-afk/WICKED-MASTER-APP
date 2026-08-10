@@ -171,6 +171,10 @@ export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): 
     '-o',
     out,
     req.isPlaylist ? '--yes-playlist' : '--no-playlist',
+    // save each item's thumbnail alongside it, same basename (.jpg — audio
+    // presets already carry --convert-thumbnails jpg for the embedded art)
+    '--write-thumbnail',
+    ...(audio ? [] : ['--convert-thumbnails', 'jpg']),
     '--newline',
     '--no-color',
     '--ignore-errors', // one bad video in a playlist shouldn't abort the rest

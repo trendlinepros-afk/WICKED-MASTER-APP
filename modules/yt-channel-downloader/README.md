@@ -30,6 +30,12 @@ download order, so the movie plays the channel's story oldest → newest. The
 movie is saved in the channel's own subfolder as
 `<Channel> - Full Channel <stamp>.mp4`.
 
+## Thumbnails
+
+Every video's thumbnail is saved alongside it with the same basename
+(`0001 - Title [id].jpg`), converted to JPG. Thumbnails never enter the stitch
+(the combine manifest and the fallback scan only accept video extensions).
+
 ## Quirks
 
 - Big channels are BIG: hundreds of videos at 1080p, each re-encoded once for
