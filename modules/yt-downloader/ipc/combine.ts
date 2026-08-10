@@ -162,6 +162,8 @@ export interface CombineDeps {
   onStep: (done: number, total: number, label: string) => void
   registerChild: (c: ChildProcess | null) => void
   shouldCancel: () => boolean
+  /** false = keep the given file order (channel stitches); default true = shuffle */
+  shuffle?: boolean
   rng?: () => number
 }
 
@@ -204,8 +206,9 @@ async function probeHasAudio(ffprobe: string, file: string, register: (c: ChildP
 }
 
 /**
- * Shuffle → normalize each clip → concat. Returns the final path. Any clip that
- * fails to normalize is skipped (with a note) rather than aborting the movie.
+ * Order (shuffled by default, as-given when deps.shuffle === false) → normalize
+ * each clip → concat. Returns the final path. Any clip that fails to normalize
+ * is skipped (with a note) rather than aborting the movie.
  */
 export async function combineClips(
   files: string[],
@@ -218,7 +221,7 @@ export async function combineClips(
   if (inputs.length < 2) return { ok: false, error: 'Need at least 2 downloaded clips to combine into a movie.' }
 
   mkdirSync(tmpDir, { recursive: true })
-  const order = shuffle(inputs, deps.rng ?? Math.random)
+  const order = deps.shuffle === false ? [...inputs] : shuffle(inputs, deps.rng ?? Math.random)
   const normalized: string[] = []
 
   try {

@@ -142,7 +142,7 @@ export function formatArgs(quality: string): string[] {
   return ['-f', 'bestvideo*+bestaudio/best', '--merge-output-format', 'mp4', '--embed-metadata']
 }
 
-const PGRESS = 'WKPROG'
+export const PGRESS = 'WKPROG'
 
 /** Build the argv for a download job. */
 export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): string[] {
