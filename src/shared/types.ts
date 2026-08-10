@@ -96,6 +96,8 @@ export interface ShellSettings {
   moduleGroupOverrides: Record<string, string>
   /** user renames / re-icons for any folder (shipped or custom), by group id */
   groupOverrides: Record<string, { name?: string; icon?: string; description?: string }>
+  /** ids of one-time settings migrations already applied on this machine */
+  appliedMigrations: string[]
   /** whole-app backup preferences */
   backup: BackupSettings
   /** user-created color themes (Settings → Appearance → Theme studio) */
@@ -118,6 +120,7 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   customGroups: [],
   moduleGroupOverrides: {},
   groupOverrides: {},
+  appliedMigrations: [],
   backup: {
     destination: '',
     schedule: { enabled: false, intervalHours: 24 },
