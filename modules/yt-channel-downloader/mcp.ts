@@ -59,8 +59,42 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       }
     },
     {
+      name: `${ID}__history`,
+      description:
+        'List downloaded channels from history: id (the normalized URL), channel name, folder, video counts (downloaded vs stitched into the full movie), auto-rescan setting and pending auto-downloads. Read-only.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:history`)
+    },
+    {
+      name: `${ID}__rescan`,
+      description:
+        'Check a saved channel for new uploads: reports how many videos exist remotely vs downloaded, and how many downloaded videos are not yet in the stitched movie. Read-only (does not download).',
+      inputSchema: {
+        id: z.string().describe('Channel id from yt-channel-downloader__history.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:rescan`, { id: args.id })
+    },
+    {
+      name: `${ID}__stitch`,
+      description:
+        'Build the complete full-channel movie for a saved channel from ALL its downloaded videos, oldest → newest (completing a previously deferred stitch). Destructive-scale: re-encodes every video and can run for hours; requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        id: z.string().describe('Channel id from yt-channel-downloader__history.'),
+        confirm: z.boolean().optional()
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(
+          args.confirm as boolean | undefined,
+          'Stitch every downloaded video of this channel into one complete movie (oldest to newest). Re-encodes everything; can take hours and heavy CPU/disk.'
+        )
+        if (gate) return gate
+        return ctx.invoke(`${ID}:stitch`, { id: args.id })
+      }
+    },
+    {
       name: `${ID}__cancel`,
-      description: 'Cancel the channel download currently running, if any. Read-only.',
+      description: 'Cancel the channel download or stitch currently running, if any. Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:cancel`)
     }

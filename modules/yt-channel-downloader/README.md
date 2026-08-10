@@ -30,6 +30,27 @@ download order, so the movie plays the channel's story oldest → newest. The
 movie is saved in the channel's own subfolder as
 `<Channel> - Full Channel <stamp>.mp4`.
 
+## History, rescan and auto-rescan
+
+Every download session records the channel in `history.json`: folder, quality,
+`downloadedCount` (videos on disk) and `stitchedCount` (videos in the last
+full movie). The history card offers per channel:
+
+- **Rescan** — probes the channel and compares counts. New uploads → a popup
+  offering "download + create the complete stitched movie" or "just download"
+  (deferring the stitch). No new uploads but an unstitched backlog → offers to
+  complete the movie now. A **complete stitch always reads the channel folder**
+  (numbered files in name order), so it includes every session's videos no
+  matter when they were downloaded; each stitch writes a new timestamped
+  `- Full Channel` file (old ones are kept and never re-stitched into the next).
+- **Auto rescan** (per-channel toggle) — ~30s after every app launch, enabled
+  channels are probed and new uploads are downloaded automatically in the
+  background (downloads only — stitching ALWAYS waits for the user). Fetched
+  videos count into `autoDownloadedPending`; the next time the tool opens, a
+  popup asks "create the new full-channel movie now, or postpone?". Postponing
+  clears the nag until more videos arrive, but the unstitched backlog stays
+  visible on the history card. The sweep never runs while a user job is active.
+
 ## Thumbnails
 
 Every video's thumbnail is saved alongside it with the same basename
