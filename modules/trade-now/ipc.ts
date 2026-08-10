@@ -357,19 +357,25 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!key) return { ok: false, error: 'No Massive/Polygon key.' }
     const sum = summarize(entry)
     const now = Date.now()
+    const SIX_MONTHS = 183 * DAY_MS
     const spanDays = Math.max(1, (now - sum.firstAt) / DAY_MS)
     const pad = Math.max(3 * DAY_MS, spanDays * 0.08 * DAY_MS)
-    const from = sum.firstAt - pad
-    // interval scaled to the span so the chart stays legible and under row caps
+    // Always load at least ~6 months of history (ending now) so you can zoom/pan
+    // out for context even on a brand-new position; older trades load their full
+    // span. The default on-screen view still frames the trade.
+    const from = Math.min(sum.firstAt - pad, now - SIX_MONTHS)
+    const loadedDays = Math.max(1, (now - from) / DAY_MS)
+    // interval scaled to how much we're loading, so the chart stays legible and
+    // under the provider's row caps
     let mult = 1
     let timespan: 'minute' | 'hour' | 'day' = 'day'
-    if (spanDays <= 10) {
-      mult = 30
-      timespan = 'minute'
-    } else if (spanDays <= 45) {
+    if (loadedDays <= 240) {
+      // ≤ ~8 months → hourly (~1,000–1,500 bars): fine detail for a recent trade
+      // with a full 6 months of context available on zoom-out
       mult = 1
       timespan = 'hour'
-    } else if (spanDays <= 150) {
+    } else if (loadedDays <= 800) {
+      // ≤ ~2 years → 4-hour bars
       mult = 4
       timespan = 'hour'
     }

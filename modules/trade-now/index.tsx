@@ -437,8 +437,10 @@ function PositionView({
   const [drawMode, setDrawMode] = useState(false)
   const [lines, setLines] = useState<TrendLine[]>(entry.drawings ?? [])
   const linesRef = useRef<TrendLine[]>(entry.drawings ?? [])
-  const previewRef = useRef<TrendLine | null>(null)
-  const dragRef = useRef<{ l: number; p: number } | null>(null)
+  // click-to-place drawing state (kept in refs so pointer handlers stay stable)
+  const pendingRef = useRef<{ l: number; p: number } | null>(null) // first point dropped, waiting for the second
+  const hoverRef = useRef<{ l: number; p: number } | null>(null) // pointer position, for the rubber-band preview
+  const dragRef = useRef<{ lineId: string; which: 1 | 2 } | null>(null) // endpoint handle being dragged
   const [reason, setReason] = useState(entry.reason)
   const [prediction, setPrediction] = useState(entry.prediction)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -509,7 +511,19 @@ function PositionView({
         text: `${leg.side === 'buy' ? 'BUY' : 'SELL'} ${qty(leg.quantity)} @ ${money(leg.price)}`
       }))
     candle.setMarkers(markers)
-    chart.timeScale().fitContent()
+    // Default view frames the trade with a sensible minimum window (~3 months),
+    // while up to 6 months of data stays loaded to zoom/pan out into.
+    const firstBuyMs = entry.legs.reduce((m, l) => Math.min(m, l.at), entry.createdAt)
+    const firstBarSec = Math.floor(bars[0].t / 1000)
+    const lastBarSec = Math.floor(bars[bars.length - 1].t / 1000)
+    const minWindowSec = Math.floor((Date.now() - 92 * 86_400_000) / 1000)
+    const tradeFromSec = Math.floor((firstBuyMs - 5 * 86_400_000) / 1000)
+    const fromSec = Math.max(firstBarSec, Math.min(tradeFromSec, minWindowSec))
+    if (fromSec < lastBarSec) {
+      chart.timeScale().setVisibleRange({ from: fromSec as UTCTimestamp, to: lastBarSec as UTCTimestamp })
+    } else {
+      chart.timeScale().fitContent()
+    }
     chartRef.current = chart
     seriesRef.current = candle
 
@@ -534,6 +548,38 @@ function PositionView({
     redrawRef.current()
   }, [lines])
 
+  // leaving draw mode cancels any half-placed line; toggling repaints handles
+  useEffect(() => {
+    if (!drawMode) {
+      pendingRef.current = null
+      hoverRef.current = null
+      dragRef.current = null
+    }
+    redrawRef.current()
+  }, [drawMode])
+
+  // data <-> screen conversions (CSS px within the overlay)
+  const toData = (e: React.PointerEvent): { l: number; p: number } | null => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    const cv = overlayRef.current
+    if (!chart || !series || !cv) return null
+    const rect = cv.getBoundingClientRect()
+    const l = chart.timeScale().coordinateToLogical(e.clientX - rect.left)
+    const p = series.coordinateToPrice(e.clientY - rect.top)
+    if (l == null || p == null) return null
+    return { l: l as number, p }
+  }
+  const toScreen = (l: number, p: number): { x: number; y: number } | null => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series) return null
+    const x = chart.timeScale().logicalToCoordinate(l as Logical)
+    const y = series.priceToCoordinate(p)
+    if (x == null || y == null) return null
+    return { x, y }
+  }
+
   const redraw = (): void => {
     const cv = overlayRef.current
     const host = wrapRef.current
@@ -555,44 +601,93 @@ function PositionView({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
     const accent = cssRGB('--wk-accent', '#e11d48')
+    // committed trendlines
     strokeTrend(ctx, chart, series, linesRef.current, accent, 1.8)
-    if (previewRef.current) strokeTrend(ctx, chart, series, [previewRef.current], accent, 1.8)
+    // rubber-band from the first dropped point to the cursor
+    if (pendingRef.current && hoverRef.current) {
+      const a = toScreen(pendingRef.current.l, pendingRef.current.p)
+      const b = toScreen(hoverRef.current.l, hoverRef.current.p)
+      if (a && b) {
+        ctx.save()
+        ctx.strokeStyle = accent
+        ctx.lineWidth = 1.6
+        ctx.setLineDash([5, 4])
+        ctx.beginPath()
+        ctx.moveTo(a.x, a.y)
+        ctx.lineTo(b.x, b.y)
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
+    // draggable endpoint handles (only while editing)
+    if (drawMode) {
+      const dots: Array<{ l: number; p: number }> = []
+      for (const ln of linesRef.current) dots.push({ l: ln.l1, p: ln.p1 }, { l: ln.l2, p: ln.p2 })
+      if (pendingRef.current) dots.push(pendingRef.current)
+      ctx.save()
+      for (const d of dots) {
+        const spt = toScreen(d.l, d.p)
+        if (!spt) continue
+        ctx.beginPath()
+        ctx.arc(spt.x, spt.y, 5, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffffff'
+        ctx.fill()
+        ctx.lineWidth = 2
+        ctx.strokeStyle = accent
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
   }
   const redrawRef = useRef<() => void>(() => {})
   redrawRef.current = redraw
 
-  const toData = (e: React.PointerEvent): { l: number; p: number } | null => {
-    const chart = chartRef.current
-    const series = seriesRef.current
-    const cv = overlayRef.current
-    if (!chart || !series || !cv) return null
-    const rect = cv.getBoundingClientRect()
-    const l = chart.timeScale().coordinateToLogical(e.clientX - rect.left)
-    const p = series.coordinateToPrice(e.clientY - rect.top)
-    if (l == null || p == null) return null
-    return { l: l as number, p }
+  const persistLines = (next: TrendLine[]): void => {
+    linesRef.current = next
+    setLines(next)
+    void invoke('set-drawings', { id: entry.id, drawings: next })
   }
+
+  // find a committed endpoint handle near a screen point (CSS px), if any
+  const hitHandle = (px: number, py: number): { lineId: string; which: 1 | 2 } | null => {
+    const R = 11
+    for (const ln of linesRef.current) {
+      const a = toScreen(ln.l1, ln.p1)
+      if (a && Math.hypot(a.x - px, a.y - py) <= R) return { lineId: ln.id, which: 1 }
+      const b = toScreen(ln.l2, ln.p2)
+      if (b && Math.hypot(b.x - px, b.y - py) <= R) return { lineId: ln.id, which: 2 }
+    }
+    return null
+  }
+
   const onDrawDown = (e: React.PointerEvent): void => {
     if (!drawMode) return
+    const cv = overlayRef.current
+    if (!cv) return
+    const rect = cv.getBoundingClientRect()
+    const px = e.clientX - rect.left
+    const py = e.clientY - rect.top
+    // 1) grab an existing endpoint to fine-tune it
+    const hit = hitHandle(px, py)
+    if (hit) {
+      dragRef.current = hit
+      cv.setPointerCapture(e.pointerId)
+      return
+    }
+    // 2) otherwise place points: first click drops A, second click commits A→B
     const d = toData(e)
     if (!d) return
-    dragRef.current = d
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }
-  const onDrawMove = (e: React.PointerEvent): void => {
-    if (!drawMode || !dragRef.current) return
-    const d = toData(e)
-    if (!d) return
-    previewRef.current = { id: 'preview', l1: dragRef.current.l, p1: dragRef.current.p, l2: d.l, p2: d.p }
-    redraw()
-  }
-  const onDrawUp = (e: React.PointerEvent): void => {
-    if (!drawMode || !dragRef.current) return
-    const d = toData(e)
-    const start = dragRef.current
-    dragRef.current = null
-    previewRef.current = null
-    if (d && (Math.abs(d.l - start.l) > 0.15 || Math.abs(d.p - start.p) > 1e-9)) {
+    if (!pendingRef.current) {
+      pendingRef.current = d
+      hoverRef.current = d
+      redraw()
+      return
+    }
+    const start = pendingRef.current
+    pendingRef.current = null
+    hoverRef.current = null
+    // ignore an accidental double-click landing on the same spot
+    if (Math.abs(d.l - start.l) > 0.05 || Math.abs(d.p - start.p) > 1e-9) {
       const line: TrendLine = {
         id: `tl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
         l1: start.l,
@@ -600,17 +695,45 @@ function PositionView({
         l2: d.l,
         p2: d.p
       }
-      const next = [...linesRef.current, line]
-      linesRef.current = next
-      setLines(next)
-      void invoke('set-drawings', { id: entry.id, drawings: next })
+      persistLines([...linesRef.current, line])
+    } else {
+      redraw()
     }
-    redraw()
   }
-  const persistLines = (next: TrendLine[]): void => {
-    linesRef.current = next
-    setLines(next)
-    void invoke('set-drawings', { id: entry.id, drawings: next })
+
+  const onDrawMove = (e: React.PointerEvent): void => {
+    if (!drawMode) return
+    // dragging an endpoint handle → move it live
+    if (dragRef.current) {
+      const d = toData(e)
+      if (!d) return
+      const { lineId, which } = dragRef.current
+      linesRef.current = linesRef.current.map((ln) =>
+        ln.id === lineId ? (which === 1 ? { ...ln, l1: d.l, p1: d.p } : { ...ln, l2: d.l, p2: d.p }) : ln
+      )
+      redraw()
+      return
+    }
+    // waiting to place the second point → rubber-band from the first
+    if (pendingRef.current) {
+      const d = toData(e)
+      if (d) {
+        hoverRef.current = d
+        redraw()
+      }
+    }
+  }
+
+  const onDrawUp = (e: React.PointerEvent): void => {
+    if (!drawMode || !dragRef.current) return
+    const cv = overlayRef.current
+    try {
+      cv?.releasePointerCapture(e.pointerId)
+    } catch {
+      /* no capture to release */
+    }
+    dragRef.current = null
+    persistLines(linesRef.current) // commit the moved handle
   }
 
   const scheduleSaveNotes = (r: string, p: string): void => {
@@ -961,7 +1084,7 @@ function PositionView({
       <div className="rounded-xl border border-edge bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs font-semibold text-muted">
-            Chart from your first buy to now — green dot = buy, red dot = sell
+            Green dot = buy, red dot = sell — up to 6 months of history (zoom / pan)
           </div>
           {bars.length > 0 && (
             <div className="flex items-center gap-1.5">
@@ -1000,13 +1123,20 @@ function PositionView({
                 onPointerDown={onDrawDown}
                 onPointerMove={onDrawMove}
                 onPointerUp={onDrawUp}
+                onPointerCancel={onDrawUp}
                 className="absolute inset-0"
-                style={{ pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default' }}
+                style={{
+                  zIndex: 2,
+                  touchAction: 'none',
+                  pointerEvents: drawMode ? 'auto' : 'none',
+                  cursor: drawMode ? 'crosshair' : 'default'
+                }}
               />
             </div>
             <p className="mt-1.5 text-[11px] text-muted">
-              Scroll to zoom, drag to pan. Whatever view you set — and any trendlines you draw — carries into
-              the exported PDF.
+              {drawMode
+                ? 'Click two points to drop a trendline, then drag the white dots to fine-tune. Toggle “Drawing…” off to zoom / pan again.'
+                : 'Scroll to zoom, drag to pan. Set the view first, then Draw trendline. Your view and lines carry into the exported PDF.'}
             </p>
           </>
         ) : (

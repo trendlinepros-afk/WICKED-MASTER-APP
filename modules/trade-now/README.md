@@ -25,18 +25,26 @@ the open shares (from the delayed feed), and realized P/L on what you've sold.
 
 ## The chart
 
-The chart spans from your **first buy to now** and marks **every** order —
-**green dots for buys** (below the bar), **red dots for sells** (above) — each
-labeled with its quantity and price. It refreshes as you add legs (interval
-scales with the trade's age).
+The chart marks **every** order — **green dots for buys** (below the bar),
+**red dots for sells** (above) — each labeled with its quantity and price, and
+refreshes as you add legs. It always loads **at least ~6 months of history**
+(ending now) so there's real context to zoom out into even on a brand-new
+position; the default view frames the trade (about the last three months, or
+the trade's full span if it's older). Older trades load their whole span. The
+bar interval scales with how much is loaded (hourly out to ~8 months, then
+coarser).
 
-**Zoom / pan / draw.** Scroll to zoom and drag to pan (native). A **Draw
-trendline** toggle lets you click-drag straight trendlines over the chart
-(Undo / Clear alongside); lines are anchored to data (logical index + price) so
-they hold their place through zoom/pan and persist on the position
-(`drawings`). On **Export PDF** the report chart is rendered light-themed for
-the white page, framed to the **exact view you have on screen**, with your
-trendlines composited on top.
+**Zoom / pan.** Scroll to zoom and drag to pan (native lightweight-charts).
+Set the view however you like — that's what the PDF captures.
+
+**Draw trendlines.** Toggle **Draw trendline**, then **click two points** to
+drop a line between them; **drag the white endpoint dots** to fine-tune each
+end precisely. Undo / Clear sit alongside. Lines are anchored to data (logical
+index + price) so they hold their place through zoom/pan and persist on the
+position (`drawings`). Toggle drawing **off** to go back to zoom/pan. On
+**Export PDF** the report chart is rendered light-themed for the white page,
+framed to the **exact view you have on screen**, with your trendlines
+composited on top.
 
 ## Printable PDF
 
