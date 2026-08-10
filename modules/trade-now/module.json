@@ -2,7 +2,7 @@
   "id": "trade-now",
   "name": "Trade Now",
   "icon": "Camera",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Track a position from the moment you buy: buy/sell legs, quantity, order value, live P/L and status, with the chart marking every order",
   "status": "stable",
   "group": {

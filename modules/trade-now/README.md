@@ -28,6 +28,16 @@ as up-arrows (▲) below the bar, sells as down-arrows (▼) above — each labe
 with its quantity and price. It refreshes as you add legs (interval scales with
 the trade's age).
 
+## Printable PDF
+
+**Export PDF** (top-right of a position) saves a printable report to
+`Downloads/Trade Now/` and reveals it. It leads with the headline P/L — for a
+**closed** trade that's the **total realized profit or loss** (with % return),
+for an open trade it's realized + unrealized — followed by the stat summary, the
+full order ledger, the marked chart image, and your notes. The renderer builds
+the PDF with jsPDF (chart via `takeScreenshot()`); main writes the bytes to
+Downloads.
+
 ## Storage & migration
 
 `userData/modules/trade-now/snapshots.json` — positions with their leg ledger,

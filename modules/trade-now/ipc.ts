@@ -344,6 +344,29 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   })
 
+  // The renderer builds the printable PDF (jsPDF, incl. the chart image) and
+  // sends the bytes; we save into Downloads/Trade Now so it lands somewhere that
+  // exists on every machine, then reveal it.
+  ctx.ipcMain.handle(`${ID}:save-pdf`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const sym = cleanSymbol(r.symbol) || 'TRADE'
+    const b64 = typeof r.data === 'string' ? r.data : ''
+    if (!b64) return { ok: false, error: 'No PDF data.' }
+    const folder = join(ctx.app.getPath('downloads'), 'Trade Now')
+    try {
+      mkdirSync(folder, { recursive: true })
+      const d = new Date()
+      const p = (n: number): string => String(n).padStart(2, '0')
+      const name = `${sym} - Trade Now - ${p(d.getMonth() + 1)}-${p(d.getDate())}-${d.getFullYear()}.pdf`
+      const outFile = join(folder, name)
+      writeFileSync(outFile, Buffer.from(b64, 'base64'))
+      ctx.shell.showItemInFolder(outFile)
+      return { ok: true, file: outFile }
+    } catch (err) {
+      return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
+    }
+  })
+
   ctx.ipcMain.handle(`${ID}:quote`, async (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
     const symbol = cleanSymbol(r.symbol)

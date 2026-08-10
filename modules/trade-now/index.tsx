@@ -1,14 +1,17 @@
 import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect, useRef, useState } from 'react'
+import { jsPDF } from 'jspdf'
 import {
   ColorType,
   CrosshairMode,
   createChart,
+  type IChartApi,
   type UTCTimestamp
 } from 'lightweight-charts'
 import {
   AlertTriangle,
   Camera,
+  FileDown,
   Loader2,
   Plus,
   Trash2,
@@ -298,12 +301,15 @@ function PositionView({
   onDelete: (id: string) => Promise<void>
 }): React.JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
   const [reason, setReason] = useState(entry.reason)
   const [prediction, setPrediction] = useState(entry.prediction)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [price, setPrice] = useState<number | null>(null)
   const [bars, setBars] = useState<Bar[]>([])
   const [adding, setAdding] = useState<'buy' | 'sell' | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const s = entry.summary
@@ -366,7 +372,11 @@ function PositionView({
       }))
     candle.setMarkers(markers)
     chart.timeScale().fitContent()
-    return () => chart.remove()
+    chartRef.current = chart
+    return () => {
+      chart.remove()
+      chartRef.current = null
+    }
   }, [bars, entry.legs])
 
   const scheduleSaveNotes = (r: string, p: string): void => {
@@ -382,6 +392,194 @@ function PositionView({
   const unrealized = price != null ? Math.max(0, openShares) * (price - s.avgBuy) : null
   const totalPnl = (s.realized || 0) + (unrealized ?? 0)
   const pnlPct = s.avgBuy > 0 && price != null ? ((price - s.avgBuy) / s.avgBuy) * 100 : null
+  const closed = s.status === 'closed'
+
+  const exportPdf = async (): Promise<void> => {
+    setExporting(true)
+    setExportMsg('')
+    try {
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+      const W = 210
+      const M = 15
+      let y = 18
+      const ink = (): void => {
+        doc.setTextColor(20, 24, 31)
+      }
+      const muted = (): void => {
+        doc.setTextColor(110, 118, 130)
+      }
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(18)
+      ink()
+      doc.text(`Trade Now - ${entry.symbol}`, M, y)
+      y += 6
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(11)
+      muted()
+      doc.text(entry.name, M, y)
+
+      y += 9
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      ink()
+      doc.text(closed ? 'CLOSED' : 'IN TRADE', M, y)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+      muted()
+      doc.text(
+        `Opened ${fmtDate(entry.createdAt)}${closed ? `    Closed ${fmtDate(s.lastAt)}` : ''}`,
+        M + 32,
+        y
+      )
+
+      // headline P/L
+      y += 6
+      const headlineVal = closed ? s.realized : (unrealized ?? 0) + s.realized
+      const headlinePct = s.totalBought > 0 ? (headlineVal / s.totalBought) * 100 : null
+      doc.setDrawColor(210, 214, 220)
+      doc.setFillColor(246, 247, 249)
+      doc.roundedRect(M, y, W - 2 * M, 22, 2, 2, 'FD')
+      doc.setFontSize(9.5)
+      muted()
+      doc.text(closed ? 'TOTAL PROFIT / LOSS ON THIS TRADE' : 'OPEN P/L (REALIZED + UNREALIZED)', M + 4, y + 7)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(22)
+      if (headlineVal > 0) doc.setTextColor(22, 163, 74)
+      else if (headlineVal < 0) doc.setTextColor(220, 38, 38)
+      else ink()
+      const sign = headlineVal > 0 ? '+' : ''
+      doc.text(
+        `${sign}${money(headlineVal)}${headlinePct != null ? `   (${headlinePct >= 0 ? '+' : ''}${headlinePct.toFixed(1)}%)` : ''}`,
+        M + 4,
+        y + 17
+      )
+      doc.setFont('helvetica', 'normal')
+      y += 30
+
+      // stats (two columns)
+      const stats: [string, string][] = [
+        ['Shares held', qty(Math.max(0, openShares))],
+        ['Avg buy price', money(s.avgBuy)],
+        ['Total bought', `${money(s.totalBought)} (${qty(s.buyQty)} sh)`],
+        ['Total sold', `${money(s.totalSold)} (${qty(s.sellQty)} sh)`],
+        ['Cost basis (open)', money(s.openCost)],
+        ['Realized P/L', money(s.realized)]
+      ]
+      if (!closed) {
+        stats.push(['Market value', marketValue != null ? money(marketValue) : 'n/a'])
+        stats.push(['Unrealized P/L', unrealized != null ? money(unrealized) : 'n/a'])
+      }
+      if (price != null) stats.push(['Current price', money(price)])
+      stats.push(['52-week range', `${money(entry.low52)} - ${money(entry.high52)}`])
+      doc.setFontSize(10)
+      const colX = [M, M + (W - 2 * M) / 2]
+      for (let i = 0; i < stats.length; i++) {
+        const x = colX[i % 2]
+        if (i % 2 === 0 && i > 0) y += 6
+        muted()
+        doc.text(stats[i][0], x, y)
+        ink()
+        doc.text(stats[i][1], x + 42, y)
+      }
+      y += 9
+
+      // ledger
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(11)
+      ink()
+      doc.text('Order ledger', M, y)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9.5)
+      y += 5
+      for (const leg of [...entry.legs].sort((a, b) => a.at - b.at)) {
+        if (y > 262) {
+          doc.addPage()
+          y = 18
+        }
+        if (leg.side === 'buy') doc.setTextColor(22, 163, 74)
+        else doc.setTextColor(220, 38, 38)
+        doc.text(leg.side.toUpperCase(), M, y)
+        ink()
+        doc.text(
+          `${qty(leg.quantity)} @ ${money(leg.price)}  =  ${money(leg.quantity * leg.price)}`,
+          M + 16,
+          y
+        )
+        muted()
+        doc.text(fmtDate(leg.at), W - M - 28, y)
+        y += 5
+      }
+      y += 3
+
+      // chart image
+      const png = chartRef.current?.takeScreenshot().toDataURL('image/png')
+      if (png) {
+        if (y > 180) {
+          doc.addPage()
+          y = 18
+        }
+        ink()
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(11)
+        doc.text('Chart (every buy up-arrow / sell down-arrow marked)', M, y)
+        y += 3
+        doc.addImage(png, 'PNG', M, y, W - 2 * M, 66)
+        y += 72
+      }
+
+      // notes
+      const addNote = (title: string, body: string): void => {
+        if (!body.trim()) return
+        if (y > 250) {
+          doc.addPage()
+          y = 18
+        }
+        ink()
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(11)
+        doc.text(title, M, y)
+        y += 5
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(10)
+        muted()
+        const lines = doc.splitTextToSize(body, W - 2 * M) as string[]
+        for (const ln of lines) {
+          if (y > 285) {
+            doc.addPage()
+            y = 18
+          }
+          doc.text(ln, M, y)
+          y += 5
+        }
+        y += 3
+      }
+      addNote('Why I bought', reason)
+      addNote('My prediction', prediction)
+
+      // footer
+      doc.setFontSize(8)
+      muted()
+      doc.text(
+        `Generated ${new Date().toLocaleString()} by WICKED - Trade Now. Prices are 15-minute delayed; P/L uses average cost.`,
+        M,
+        290
+      )
+
+      const b64 = (doc.output('datauristring') as string).split(',')[1] ?? ''
+      const res = (await invoke('save-pdf', { symbol: entry.symbol, data: b64 })) as {
+        ok?: boolean
+        file?: string
+        error?: string
+      }
+      setExportMsg(res.ok ? 'Saved to Downloads / Trade Now' : res.error ?? 'Could not save the PDF.')
+    } catch (err) {
+      setExportMsg(err instanceof Error ? err.message : 'Could not build the PDF.')
+    } finally {
+      setExporting(false)
+      setTimeout(() => setExportMsg(''), 4000)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-5">
@@ -402,7 +600,17 @@ function PositionView({
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => void exportPdf()}
+            disabled={exporting}
+            title="Save a printable PDF (chart, orders, notes, and total profit/loss) to Downloads"
+            className="flex items-center gap-1.5 rounded-lg border border-edge px-3 py-1.5 text-xs font-medium text-ink hover:border-accent/60 disabled:opacity-40"
+          >
+            {exporting ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
+            Export PDF
+          </button>
+          {exportMsg && <span className="text-xs text-muted">{exportMsg}</span>}
           {confirmDelete ? (
             <span className="flex items-center gap-1.5 text-xs">
               <span className="text-muted">Delete this position?</span>
