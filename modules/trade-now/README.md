@@ -23,20 +23,21 @@ the open shares (from the delayed feed), and realized P/L on what you've sold.
 
 ## The chart
 
-The chart spans from your **first buy to now** and marks **every** order — buys
-as up-arrows (▲) below the bar, sells as down-arrows (▼) above — each labeled
-with its quantity and price. It refreshes as you add legs (interval scales with
-the trade's age).
+The chart spans from your **first buy to now** and marks **every** order —
+**green dots for buys** (below the bar), **red dots for sells** (above) — each
+labeled with its quantity and price. It refreshes as you add legs (interval
+scales with the trade's age).
 
 ## Printable PDF
 
-**Export PDF** (top-right of a position) saves a printable report to
-`Downloads/Trade Now/` and reveals it. It leads with the headline P/L — for a
-**closed** trade that's the **total realized profit or loss** (with % return),
-for an open trade it's realized + unrealized — followed by the stat summary, the
-full order ledger, the marked chart image, and your notes. The renderer builds
-the PDF with jsPDF (chart via `takeScreenshot()`); main writes the bytes to
-Downloads.
+**Export PDF** (top-right of a position — works whether the trade is open or
+closed) saves a printable report to `Downloads/Trade Now/` and reveals it. The
+top of the document is a grid of small metric cards — ticker, company, status,
+quantity, average buy price, average sold price, buy date, sold date, and
+profit/loss (green when up, red when down). Below that: a secondary stat line,
+the full order ledger, the chart image (with green dots for buys, red dots for
+sells), and your notes. The renderer builds the PDF with jsPDF (chart via
+`takeScreenshot()`); main writes the bytes to Downloads.
 
 ## Storage & migration
 

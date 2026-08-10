@@ -361,13 +361,14 @@ function PositionView({
     candle.setData(
       bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c }))
     )
+    // Green DOT for a buy (below the bar), red DOT for a sell (above the bar).
     const markers = [...entry.legs]
       .sort((a, b) => a.at - b.at)
       .map((leg) => ({
         time: Math.floor(leg.at / 1000) as UTCTimestamp,
         position: leg.side === 'buy' ? ('belowBar' as const) : ('aboveBar' as const),
         color: leg.side === 'buy' ? up : down,
-        shape: leg.side === 'buy' ? ('arrowUp' as const) : ('arrowDown' as const),
+        shape: 'circle' as const,
         text: `${leg.side === 'buy' ? 'BUY' : 'SELL'} ${qty(leg.quantity)} @ ${money(leg.price)}`
       }))
     candle.setMarkers(markers)
@@ -409,60 +410,80 @@ function PositionView({
         doc.setTextColor(110, 118, 130)
       }
 
+      // compact title
       doc.setFont('helvetica', 'bold')
-      doc.setFontSize(18)
+      doc.setFontSize(13)
       ink()
-      doc.text(`Trade Now - ${entry.symbol}`, M, y)
-      y += 6
+      doc.text('Trade Now', M, y)
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(11)
-      muted()
-      doc.text(entry.name, M, y)
-
-      y += 9
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(12)
-      ink()
-      doc.text(closed ? 'CLOSED' : 'IN TRADE', M, y)
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(10)
+      doc.setFontSize(9)
       muted()
       doc.text(
-        `Opened ${fmtDate(entry.createdAt)}${closed ? `    Closed ${fmtDate(s.lastAt)}` : ''}`,
-        M + 32,
+        `${closed ? 'Closed trade' : 'Open position'}  -  generated ${new Date().toLocaleDateString()}`,
+        M + 26,
         y
       )
+      y += 5
 
-      // headline P/L
-      y += 6
+      // --- metric cards across the top ---
+      const buyLegs = entry.legs.filter((l) => l.side === 'buy')
+      const sellLegs = entry.legs.filter((l) => l.side === 'sell')
+      const firstBuyAt = buyLegs.length ? Math.min(...buyLegs.map((l) => l.at)) : entry.createdAt
+      const lastSellAt = sellLegs.length ? Math.max(...sellLegs.map((l) => l.at)) : null
+      const avgSell = s.sellQty > 0 ? s.totalSold / s.sellQty : null
       const headlineVal = closed ? s.realized : (unrealized ?? 0) + s.realized
       const headlinePct = s.totalBought > 0 ? (headlineVal / s.totalBought) * 100 : null
-      doc.setDrawColor(210, 214, 220)
-      doc.setFillColor(246, 247, 249)
-      doc.roundedRect(M, y, W - 2 * M, 22, 2, 2, 'FD')
-      doc.setFontSize(9.5)
-      muted()
-      doc.text(closed ? 'TOTAL PROFIT / LOSS ON THIS TRADE' : 'OPEN P/L (REALIZED + UNREALIZED)', M + 4, y + 7)
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(22)
-      if (headlineVal > 0) doc.setTextColor(22, 163, 74)
-      else if (headlineVal < 0) doc.setTextColor(220, 38, 38)
-      else ink()
-      const sign = headlineVal > 0 ? '+' : ''
-      doc.text(
-        `${sign}${money(headlineVal)}${headlinePct != null ? `   (${headlinePct >= 0 ? '+' : ''}${headlinePct.toFixed(1)}%)` : ''}`,
-        M + 4,
-        y + 17
-      )
-      doc.setFont('helvetica', 'normal')
-      y += 30
+      const plColor: [number, number, number] =
+        headlineVal > 0 ? [22, 163, 74] : headlineVal < 0 ? [220, 38, 38] : [20, 24, 31]
 
-      // stats (two columns)
+      const cards: { label: string; value: string; size?: number; color?: [number, number, number] }[] = [
+        { label: 'Ticker', value: entry.symbol, size: 14 },
+        { label: 'Company', value: entry.name, size: 8 },
+        { label: 'Status', value: closed ? 'Closed' : 'In Trade' },
+        { label: 'Quantity', value: `${qty(s.buyQty)} sh` },
+        { label: 'Buy price (avg)', value: money(s.avgBuy) },
+        { label: 'Sold price (avg)', value: avgSell != null ? money(avgSell) : '-' },
+        { label: 'Buy date', value: fmtDate(firstBuyAt) },
+        { label: 'Sold date', value: lastSellAt != null ? fmtDate(lastSellAt) : 'In trade' },
+        {
+          label: closed ? 'Profit / Loss' : 'Open P/L',
+          value: `${headlineVal > 0 ? '+' : ''}${money(headlineVal)}${headlinePct != null ? ` (${headlinePct >= 0 ? '+' : ''}${headlinePct.toFixed(1)}%)` : ''}`,
+          size: 10,
+          color: plColor
+        }
+      ]
+      const cols = 3
+      const gap = 3
+      const cardW = (W - 2 * M - (cols - 1) * gap) / cols
+      const cardH = 15
+      const cardsTop = y
+      cards.forEach((c, i) => {
+        const cx = M + (i % cols) * (cardW + gap)
+        const cy = cardsTop + Math.floor(i / cols) * (cardH + gap)
+        doc.setDrawColor(220, 224, 230)
+        doc.setFillColor(248, 249, 251)
+        doc.roundedRect(cx, cy, cardW, cardH, 1.5, 1.5, 'FD')
+        muted()
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(7)
+        doc.text(c.label.toUpperCase(), cx + 2.5, cy + 4.5)
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(c.size ?? 11)
+        if (c.color) doc.setTextColor(c.color[0], c.color[1], c.color[2])
+        else ink()
+        const lines = (doc.splitTextToSize(c.value, cardW - 5) as string[]).slice(0, 2)
+        doc.text(lines, cx + 2.5, cy + 10)
+      })
+      const cardRows = Math.ceil(cards.length / cols)
+      y = cardsTop + cardRows * cardH + (cardRows - 1) * gap + 9
+
+      // secondary stats
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
       const stats: [string, string][] = [
-        ['Shares held', qty(Math.max(0, openShares))],
-        ['Avg buy price', money(s.avgBuy)],
         ['Total bought', `${money(s.totalBought)} (${qty(s.buyQty)} sh)`],
         ['Total sold', `${money(s.totalSold)} (${qty(s.sellQty)} sh)`],
+        ['Shares held', qty(Math.max(0, openShares))],
         ['Cost basis (open)', money(s.openCost)],
         ['Realized P/L', money(s.realized)]
       ]
@@ -472,15 +493,14 @@ function PositionView({
       }
       if (price != null) stats.push(['Current price', money(price)])
       stats.push(['52-week range', `${money(entry.low52)} - ${money(entry.high52)}`])
-      doc.setFontSize(10)
       const colX = [M, M + (W - 2 * M) / 2]
       for (let i = 0; i < stats.length; i++) {
         const x = colX[i % 2]
-        if (i % 2 === 0 && i > 0) y += 6
+        if (i % 2 === 0 && i > 0) y += 5.5
         muted()
         doc.text(stats[i][0], x, y)
         ink()
-        doc.text(stats[i][1], x + 42, y)
+        doc.text(stats[i][1], x + 40, y)
       }
       y += 9
 
