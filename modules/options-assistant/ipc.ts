@@ -276,8 +276,9 @@ export default function register(ctx: ModuleIpcContext): void {
     const horizon = HORIZONS[String(r.horizon ?? '2d')] ?? HORIZONS['2d']
     const optionType: 'CALL' | 'PUT' = r.direction === 'down' ? 'PUT' : 'CALL'
     try {
-      const snaps = await stockSnapshots(keys, [sym])
-      const snap = snaps.get(sym)
+      const batch = await stockSnapshots(keys, [sym])
+      if (batch.invalid.includes(sym)) return { ok: false, error: `Webull does not recognize the ticker ${sym}.` }
+      const snap = batch.snaps.get(sym)
       const spot = snap ? fnum(snap, 'last', 'close', 'price', 'last_price', 'lastPrice') : null
       const band = 0.06 + 0.006 * horizon.days
       const contracts: Record<string, unknown>[] = []
@@ -332,7 +333,9 @@ export default function register(ctx: ModuleIpcContext): void {
     cancelRequested = false
     try {
       step(`Pulling live quotes for ${watchlist.length} ticker(s)…`)
-      const snaps = await stockSnapshots(keys, watchlist)
+      const { snaps, invalid } = await stockSnapshots(keys, watchlist)
+      if (invalid.length > 0)
+        step(`Webull doesn't recognize: ${invalid.join(', ')} — skipped (remove them from the watchlist).`)
       checkCancel()
 
       // per-ticker dossier build with a small worker pool. Big watchlists get a

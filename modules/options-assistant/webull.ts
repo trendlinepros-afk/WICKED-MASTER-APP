@@ -96,7 +96,10 @@ export async function webullGet(
     const code = String(o.error_code ?? o.code ?? resp.status)
     const msg = String(o.message ?? o.msg ?? text.slice(0, 200) ?? '')
     let hint = ''
-    if (resp.status === 401 || resp.status === 403 || /INVALID.*(KEY|SIGN)|AUTH/i.test(code)) {
+    if (/MARKET_DATA_NOT_SUBSCRIBED|NOT_SUBSCRIBED/i.test(`${code} ${msg}`)) {
+      hint =
+        ' — the "Market Data" checkbox on your app is only the PERMISSION; the quotes themselves need a (separate) OpenAPI subscription. On webull.com: avatar → Advanced Quotes → OpenAPI Advanced Quotes → subscribe to the package named in this error (app/desktop quote subscriptions do not carry over).'
+    } else if (resp.status === 401 || resp.status === 403 || /INVALID.*(KEY|SIGN)|AUTH/i.test(code)) {
       hint = ' — check your Webull App Key/Secret in Settings → API Keys, and that your OpenAPI subscription covers this endpoint.'
     } else if (resp.status === 429) {
       hint = ' — Webull rate limit; wait a moment and retry.'
@@ -182,21 +185,48 @@ export function parseOcc(sym: string): OccParts | null {
 
 /* ------------------------------- API wrappers ----------------------------- */
 
-/** Latest stock snapshots (max 20 symbols per call — chunked). */
-export async function stockSnapshots(keys: WebullKeys, symbols: string[]): Promise<Map<string, Record<string, unknown>>> {
-  const out = new Map<string, Record<string, unknown>>()
-  for (let i = 0; i < symbols.length; i += 20) {
-    const chunk = symbols.slice(i, i + 20)
+export interface SnapshotBatch {
+  snaps: Map<string, Record<string, unknown>>
+  /** symbols Webull rejected as unknown (typos, unsupported instruments) */
+  invalid: string[]
+}
+
+const isBadSymbolError = (res: { status?: number; error: string }): boolean =>
+  res.status === 417 || /INVALID_SYMBOL|does not exist/i.test(res.error)
+
+/**
+ * Latest stock snapshots (max 20 symbols per call — chunked). One unknown
+ * ticker must NOT sink the batch: Webull 417s the whole chunk, so on
+ * INVALID_SYMBOL the chunk is binary-split until the bad symbol(s) are
+ * isolated into `invalid` and every good symbol still gets its quote. Real
+ * errors (auth, subscription, rate limit) still throw.
+ */
+export async function stockSnapshots(keys: WebullKeys, symbols: string[]): Promise<SnapshotBatch> {
+  const out: SnapshotBatch = { snaps: new Map(), invalid: [] }
+
+  const fetchChunk = async (chunk: string[]): Promise<void> => {
     const res = await webullGet(keys, '/openapi/market-data/stock/snapshot', {
       symbols: chunk.join(','),
       category: 'US_STOCK'
     })
-    if (!res.ok) throw new Error(res.error)
-    for (const row of rowsOf(res.data)) {
-      const sym = fstr(row, 'symbol', 'ticker').toUpperCase()
-      if (sym) out.set(sym, row)
+    if (res.ok) {
+      for (const row of rowsOf(res.data)) {
+        const sym = fstr(row, 'symbol', 'ticker').toUpperCase()
+        if (sym) out.snaps.set(sym, row)
+      }
+      return
     }
+    if (!isBadSymbolError(res)) throw new Error(res.error)
+    if (chunk.length === 1) {
+      out.invalid.push(chunk[0])
+      return
+    }
+    const mid = Math.ceil(chunk.length / 2)
+    await fetchChunk(chunk.slice(0, mid))
+    await fetchChunk(chunk.slice(mid))
   }
+
+  for (let i = 0; i < symbols.length; i += 20) await fetchChunk(symbols.slice(i, i + 20))
   return out
 }
 
