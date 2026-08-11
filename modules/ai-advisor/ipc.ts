@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import Anthropic from '@anthropic-ai/sdk'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
@@ -700,6 +701,33 @@ export default function register(ctx: ModuleIpcContext): void {
       const win = ctx.getMainWindow()
       if (win && !win.isDestroyed()) win.webContents.send(AI_ADVISOR_EVENT, { requestId: rid, type: 'error', error } as AdvisorEvent)
       return { ok: false, error, conversation: k !== -1 ? back[k] : null, restore: userText }
+    }
+  })
+
+  // Export a conversation to PDF. The renderer sends a self-contained HTML
+  // document (the transcript re-skinned with the app's stylesheet in light
+  // theme); the shell prints it with real Chromium layout so markdown tables
+  // and the inline-SVG charts come out exactly as rendered.
+  ctx.ipcMain.handle(`${ID}:export-pdf`, async (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const html = typeof r.html === 'string' ? r.html : ''
+    if (!html) return { ok: false, error: 'Nothing to export.' }
+    if (html.length > 30_000_000) return { ok: false, error: 'Conversation too large to export in one PDF.' }
+    const rawTitle = typeof r.title === 'string' ? r.title : 'Conversation'
+    const safeTitle = rawTitle.replace(/[\\/:*?"<>|]/g, '').trim().slice(0, 60) || 'Conversation'
+    try {
+      const pdf = await ctx.printHtmlToPdf(html)
+      const folder = join(ctx.app.getPath('downloads'), 'AI Advisor')
+      mkdirSync(folder, { recursive: true })
+      const d = new Date()
+      const p = (n: number): string => String(n).padStart(2, '0')
+      const name = `AI Advisor - ${safeTitle} - ${p(d.getMonth() + 1)}-${p(d.getDate())}-${d.getFullYear()} ${p(d.getHours())}${p(d.getMinutes())}.pdf`
+      const outFile = join(folder, name)
+      writeFileSync(outFile, pdf)
+      ctx.shell.showItemInFolder(outFile)
+      return { ok: true, file: outFile }
+    } catch (err) {
+      return { ok: false, error: 'Could not export the PDF: ' + (err instanceof Error ? err.message : String(err)) }
     }
   })
 

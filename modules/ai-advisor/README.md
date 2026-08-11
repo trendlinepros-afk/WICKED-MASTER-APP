@@ -77,6 +77,17 @@ The chat text and column width **scale with the window** — on a large/maximize
 screen the bubbles and font grow so the conversation isn't stuck tiny in a narrow
 column.
 
+## Export PDF
+
+**Export PDF** (header, top-right) turns the current conversation into a
+printable document saved to `Downloads/AI Advisor/` (revealed on save). It's
+not a hand-drawn PDF: the transcript DOM is re-skinned with the app's own
+stylesheet in **light theme** and printed through Chromium's real layout
+engine (a hidden shell-owned window + `printToPDF`), so markdown **tables**,
+the inline-SVG **charts** (bar/line/pie/candles), tool chips and per-reply
+cost/model footers come out pixel-faithful — just on white, with page numbers
+and sane page breaks (charts and table rows don't get sliced).
+
 ## MCP
 
 `mcp.ts` exposes read-only `ai-advisor__list-chats` and `ai-advisor__get-chat`.

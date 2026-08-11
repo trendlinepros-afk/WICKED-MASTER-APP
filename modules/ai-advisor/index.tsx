@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   DollarSign,
+  FileDown,
   Loader2,
   Pencil,
   Plus,
@@ -181,6 +182,65 @@ export default function AiAdvisor(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
+  const transcriptRef = useRef<HTMLDivElement>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
+
+  /**
+   * Export the current conversation to PDF. Snapshot the transcript DOM,
+   * re-skin it with the app's own compiled stylesheet in LIGHT theme (the
+   * light tokens live on :root — simply omitting the .dark class flips every
+   * Tailwind color, including the SVG charts' fill-current), and let the main
+   * process print it with real Chromium layout. Tables, charts and markdown
+   * come out exactly as rendered on screen — but print-friendly.
+   */
+  const exportPdf = async (): Promise<void> => {
+    const el = transcriptRef.current
+    if (!el || exporting) return
+    setExporting(true)
+    setExportMsg('')
+    try {
+      const css = [...document.styleSheets]
+        .flatMap((sh) => {
+          try {
+            return [...sh.cssRules].map((r) => r.cssText)
+          } catch {
+            return []
+          }
+        })
+        .join('\n')
+      const clone = el.cloneNode(true) as HTMLElement
+      clone.querySelectorAll('button, input, textarea, [data-noprint]').forEach((n) => n.remove())
+      clone.style.maxWidth = '100%'
+      const title = s.metas.find((m) => m.id === s.currentId)?.title || 'Conversation'
+      const count = s.convo?.messages.length ?? 0
+      const esc = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const printCss = [
+        'body{background:#ffffff;margin:0;padding:26px 30px;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}',
+        'svg{max-width:100% !important;height:auto}',
+        '[class*="max-w-"]{max-width:100% !important}',
+        'tr,thead{break-inside:avoid}',
+        '.rounded-xl,.rounded-2xl{break-inside:avoid}',
+        'table{width:100%;border-collapse:collapse}'
+      ].join('\n')
+      const header =
+        `<div style="margin-bottom:18px">` +
+        `<div style="font-size:20px;font-weight:700;color:#181c24">${esc(title)}</div>` +
+        `<div style="margin-top:3px;font-size:11px;color:#697080">AI Advisor · exported ${esc(new Date().toLocaleString())} · ${count} message(s) · WICKED</div>` +
+        `<div style="margin-top:10px;border-top:1px solid #d8dce4"></div></div>`
+      const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style><style>${printCss}</style></head><body>${header}${clone.outerHTML}</body></html>`
+      const res = (await window.wicked.invoke(`ai-advisor:export-pdf`, { html, title })) as {
+        ok?: boolean
+        file?: string
+        error?: string
+      }
+      setExportMsg(res.ok ? 'PDF saved to Downloads/AI Advisor' : (res.error ?? 'Export failed.'))
+    } catch (err) {
+      setExportMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Drag the rail's right edge to resize the conversation list (persisted).
   const startRailResize = (e: React.MouseEvent): void => {
@@ -370,10 +430,16 @@ export default function AiAdvisor(): React.JSX.Element {
               Chat ~{fmtCost(sessionCost)}
             </span>
           )}
-          <label
-            className={`${sessionCost > 0 ? '' : 'ml-auto'} flex items-center gap-1.5`}
-            title="AI model — pick a cheaper one to lower cost"
+          <button
+            onClick={() => void exportPdf()}
+            disabled={exporting || s.streaming || messages.length === 0}
+            title="Save this conversation — charts and tables included — as a PDF in Downloads/AI Advisor"
+            className={`${sessionCost > 0 ? '' : 'ml-auto'} flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1 text-xs font-medium text-ink hover:border-accent/60 disabled:opacity-40`}
           >
+            {exporting ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
+            Export PDF
+          </button>
+          <label className="flex items-center gap-1.5" title="AI model — pick a cheaper one to lower cost">
             <span className="text-[10px] text-muted">Model</span>
             <select
               value={s.model}
@@ -401,8 +467,17 @@ export default function AiAdvisor(): React.JSX.Element {
           </div>
         )}
 
+        {exportMsg && (
+          <div className="flex items-center justify-between gap-2 border-b border-edge px-4 py-1.5 text-[11px] text-muted">
+            <span className="min-w-0 truncate">{exportMsg}</span>
+            <button onClick={() => setExportMsg('')} className="shrink-0 hover:text-ink">
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto space-y-4 p-4" style={{ maxWidth: colMax, fontSize: fontPx }}>
+          <div ref={transcriptRef} className="mx-auto space-y-4 p-4" style={{ maxWidth: colMax, fontSize: fontPx }}>
             {messages.length === 0 && !showLive && (
               <div className="mt-10 text-center text-muted">
                 <Bot size={40} strokeWidth={1.5} className="mx-auto opacity-40" />
