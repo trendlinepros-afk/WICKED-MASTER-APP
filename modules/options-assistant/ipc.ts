@@ -36,8 +36,7 @@ import {
  */
 const ID = 'options-assistant'
 const DAY_MS = 86_400_000
-const MAX_WATCHLIST = 25
-const MAX_CONTRACTS_PER_TICKER = 14
+const MAX_WATCHLIST = 50
 const MAX_EXPIRY_DATES = 6
 
 /* ------------------------------ ET calendar ------------------------------- */
@@ -336,9 +335,13 @@ export default function register(ctx: ModuleIpcContext): void {
       const snaps = await stockSnapshots(keys, watchlist)
       checkCancel()
 
-      // per-ticker dossier build with a small worker pool
+      // per-ticker dossier build with a small worker pool. Big watchlists get a
+      // leaner dossier (fewer contracts, no raw quote passthrough) so the AI
+      // context stays within budget at 50 tickers.
       const dossiers: Record<string, unknown>[] = []
       const strikeBand = 0.06 + 0.006 * horizon.days // ±6% for 0DTE → ±~19% a month out
+      const bigScan = watchlist.length > 25
+      const contractsPerTicker = bigScan ? 10 : 14
       let idx = 0
       const worker = async (): Promise<void> => {
         while (idx < watchlist.length) {
@@ -379,11 +382,11 @@ export default function register(ctx: ModuleIpcContext): void {
           for (const list of byExpiry.values()) list.sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))
           const picked: { occ: string; strike: number; expiry: string }[] = []
           const expiries = [...byExpiry.keys()].sort()
-          for (let round = 0; picked.length < MAX_CONTRACTS_PER_TICKER; round++) {
+          for (let round = 0; picked.length < contractsPerTicker; round++) {
             let took = false
             for (const exp of expiries) {
               const list = byExpiry.get(exp) ?? []
-              if (round < list.length && picked.length < MAX_CONTRACTS_PER_TICKER) {
+              if (round < list.length && picked.length < contractsPerTicker) {
                 picked.push({ occ: list[round].occ, strike: list[round].strike, expiry: exp })
                 took = true
               }
@@ -416,7 +419,13 @@ export default function register(ctx: ModuleIpcContext): void {
                 spread_pct:
                   bid != null && ask != null && mid ? Number((((ask - bid) / mid) * 100).toFixed(1)) : null,
                 est_cost_per_contract: mid != null ? Number((mid * 100).toFixed(0)) : null,
-                quote: q ? trimRow(q) : null
+                volume: q ? fnum(q, 'volume', 'total_volume', 'totalVolume') : null,
+                open_interest: q ? fnum(q, 'open_interest', 'openInterest', 'open_int') : null,
+                iv: q ? fnum(q, 'implied_volatility', 'impliedVolatility', 'iv') : null,
+                delta: q ? fnum(q, 'delta') : null,
+                theta: q ? fnum(q, 'theta') : null,
+                // big scans skip the raw quote passthrough to keep AI context lean
+                quote: q && !bigScan ? trimRow(q) : null
               }
             })
             // budget cap: drop contracts the user can't afford (keep unknown-cost rows)

@@ -38,7 +38,10 @@ on the latest scan's data.
 
 Build it in the left rail (type tickers), or click **From Webull** to import a
 watchlist you already built in the Webull app (uses the OpenAPI watchlist
-endpoints). Capped at 25 tickers to keep scans fast and the analysis focused.
+endpoints). Capped at 50 tickers. Scans over 25 tickers automatically go lean
+(10 contracts per ticker instead of 14, no raw-quote passthrough) so the AI
+context stays sharp; the computed per-contract metrics (mid, spread, cost,
+volume, OI, IV, delta/theta when Webull returns them) are always included.
 
 ## How the Webull client works
 

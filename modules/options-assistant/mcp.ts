@@ -26,7 +26,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     },
     {
       name: `${ID}__watchlist-add`,
-      description: 'Add a ticker to the Options Assistant watchlist (capped at 25).',
+      description: 'Add a ticker to the Options Assistant watchlist (capped at 50).',
       inputSchema: { symbol: z.string().describe('Ticker symbol, e.g. AAPL.') },
       handler: (args) => ctx.invoke(`${ID}:watchlist-add`, { symbol: args.symbol })
     },
