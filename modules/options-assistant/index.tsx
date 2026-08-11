@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { jsPDF } from 'jspdf'
 import {
   ArrowDownRight,
   ArrowUpRight,
   CircleDot,
   Download,
+  FileDown,
   Loader2,
+  MessageSquarePlus,
   Plus,
   Send,
   Target,
@@ -116,6 +119,23 @@ interface Status {
 const money = (v: number | null | undefined): string =>
   v == null ? '—' : `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
+interface ChatMeta {
+  id: string
+  title: string
+  updatedAt: number
+  count: number
+}
+
+const newConvoId = (): string => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+
+const relDate = (ms: number): string => {
+  const d = new Date(ms)
+  const days = Math.floor((Date.now() - ms) / 86_400_000)
+  if (days === 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (days < 7) return `${days}d ago`
+  return d.toLocaleDateString()
+}
+
 export default function OptionsAssistant(): React.JSX.Element {
   const [status, setStatus] = useState<Status | null>(null)
   const [watchlist, setWatchlist] = useState<string[]>([])
@@ -131,9 +151,14 @@ export default function OptionsAssistant(): React.JSX.Element {
   const [wbLists, setWbLists] = useState<{ id: string; name: string }[] | null>(null)
   const [wbListsBusy, setWbListsBusy] = useState(false)
   const [testMsg, setTestMsg] = useState('')
+  const [convoId, setConvoId] = useState<string>('')
+  const [chats, setChats] = useState<ChatMeta[]>([])
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState('')
   const threadRef = useRef<HTMLDivElement>(null)
   const msgsRef = useRef<Msg[]>([])
   msgsRef.current = messages
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refreshStatus = async (): Promise<void> => {
     const st = (await invoke('status')) as Status & { ok?: boolean }
@@ -143,6 +168,21 @@ export default function OptionsAssistant(): React.JSX.Element {
 
   useEffect(() => {
     void refreshStatus()
+    // restore the most recent conversation so closing the tool never loses a chat
+    void (async () => {
+      const cl = (await invoke('chats-list')) as { ok?: boolean; chats?: ChatMeta[] }
+      const list = cl.ok && cl.chats ? cl.chats : []
+      setChats(list)
+      if (list.length > 0) {
+        const r = (await invoke('chat-load', { id: list[0].id })) as { ok?: boolean; convo?: { id: string; messages: Msg[] } }
+        if (r.ok && r.convo) {
+          setConvoId(r.convo.id)
+          setMessages(r.convo.messages)
+          return
+        }
+      }
+      setConvoId(newConvoId())
+    })()
     const off = window.wicked.on(`${ID}:progress`, (raw) => {
       const p = raw as { kind?: string; text?: string }
       if (p.kind === 'step' && p.text) {
@@ -165,6 +205,194 @@ export default function OptionsAssistant(): React.JSX.Element {
     const el = threadRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages])
+
+  /* -------------------------- conversation persistence -------------------- */
+
+  const persistNow = async (id: string, msgs: Msg[]): Promise<void> => {
+    const storable = msgs.filter((m) => m.kind !== 'working')
+    if (!id || storable.length === 0) return
+    const res = (await invoke('chat-save', { id, messages: storable })) as { ok?: boolean; chats?: ChatMeta[] }
+    if (res.ok && res.chats && res.chats.length > 0) setChats(res.chats)
+  }
+
+  // autosave (debounced) whenever the transcript changes
+  useEffect(() => {
+    if (!convoId || messages.length === 0) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
+      void persistNow(convoId, messages)
+    }, 800)
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+    }
+  }, [messages, convoId])
+
+  const flushSave = async (): Promise<void> => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    await persistNow(convoId, msgsRef.current)
+  }
+
+  const startNewChat = async (): Promise<void> => {
+    await flushSave()
+    setConvoId(newConvoId())
+    setMessages([])
+  }
+
+  const openChat = async (id: string): Promise<void> => {
+    if (id === convoId) return
+    await flushSave()
+    const r = (await invoke('chat-load', { id })) as { ok?: boolean; convo?: { id: string; messages: Msg[] } }
+    if (r.ok && r.convo) {
+      setConvoId(r.convo.id)
+      setMessages(r.convo.messages)
+    }
+  }
+
+  const deleteChat = async (id: string): Promise<void> => {
+    const res = (await invoke('chat-delete', { id })) as { ok?: boolean; chats?: ChatMeta[] }
+    if (res.ok) {
+      setChats(res.chats ?? [])
+      if (id === convoId) {
+        setConvoId(newConvoId())
+        setMessages([])
+      }
+    }
+  }
+
+  /* ------------------------------ PDF export ------------------------------ */
+
+  const exportPdf = async (): Promise<void> => {
+    const msgs = msgsRef.current.filter((m) => m.kind !== 'working')
+    if (exporting || msgs.length === 0) return
+    setExporting(true)
+    setExportMsg('')
+    try {
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+      const W = 210
+      const M = 14
+      const CW = W - 2 * M
+      let y = 16
+
+      const ink = (): void => {
+        doc.setTextColor(20, 24, 31)
+      }
+      const muted = (): void => {
+        doc.setTextColor(90, 99, 112)
+      }
+      const pageBreak = (need: number): void => {
+        if (y + need > 282) {
+          doc.addPage()
+          y = 16
+        }
+      }
+      const para = (text: string, size: number, bold = false, color?: [number, number, number]): void => {
+        doc.setFont('helvetica', bold ? 'bold' : 'normal')
+        doc.setFontSize(size)
+        if (color) doc.setTextColor(...color)
+        else ink()
+        const lines = doc.splitTextToSize(text, CW) as string[]
+        for (const line of lines) {
+          pageBreak(5)
+          doc.text(line, M, y)
+          y += size * 0.42 + 1.1
+        }
+      }
+      const label = (text: string, color: [number, number, number]): void => {
+        pageBreak(9)
+        y += 2
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(8.5)
+        doc.setTextColor(...color)
+        doc.text(text.toUpperCase(), M, y)
+        y += 4
+      }
+      const imgSize = (src: string): Promise<{ w: number; h: number }> =>
+        new Promise((resolve) => {
+          const im = new Image()
+          im.onload = () => resolve({ w: im.width || 4, h: im.height || 3 })
+          im.onerror = () => resolve({ w: 4, h: 3 })
+          im.src = src
+        })
+
+      // header
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(16)
+      ink()
+      doc.text('Options Assistant — Conversation', M, y)
+      y += 6
+      muted()
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.text(`Exported ${new Date().toLocaleString()} · ${msgs.length} message(s) · WICKED`, M, y)
+      y += 3
+      doc.setDrawColor(200, 205, 212)
+      doc.line(M, y, W - M, y)
+      y += 5
+
+      for (const m of msgs) {
+        if (m.kind === 'user') {
+          label('You', [190, 18, 60])
+          for (const src of m.images ?? []) {
+            const fmt = src.startsWith('data:image/png') ? 'PNG' : src.startsWith('data:image/jpeg') ? 'JPEG' : null
+            if (!fmt) {
+              para('[pasted image]', 9)
+              continue
+            }
+            const s = await imgSize(src)
+            const w = Math.min(110, CW)
+            const h = (w * s.h) / s.w
+            pageBreak(h + 4)
+            doc.addImage(src, fmt, M, y, w, h)
+            y += h + 3
+          }
+          if (m.text) para(m.text, 10.5)
+        } else if (m.kind === 'assistant') {
+          label(m.provider ? `Assistant (${m.provider})` : 'Assistant', [51, 65, 85])
+          para(m.text, 10.5)
+        } else if (m.kind === 'error') {
+          label('Error', [190, 18, 60])
+          para(m.text, 9.5, false, [190, 18, 60])
+        } else if (m.kind === 'result') {
+          const r = m.result
+          label(`Scan result — ${r.direction === 'up' ? 'CALLS (up)' : 'PUTS (down)'} · ${r.horizonLabel}`, [51, 65, 85])
+          if (r.summary) para(r.summary, 10)
+          if (r.best) {
+            y += 1
+            para(`THE PICK: ${r.best.ticker} — ${r.best.label || r.best.option_symbol} (confidence ${r.best.confidence}/100)`, 11, true)
+            const c = r.best.contract
+            if (c)
+              para(
+                `Expiry ${String(c.expiry ?? '—')} · Strike ${c.strike != null ? `$${c.strike}` : '—'} · Mid ${money(c.mid)} · Per contract ${
+                  c.est_cost_per_contract != null ? `$${c.est_cost_per_contract}` : '—'
+                }`,
+                9.5
+              )
+            for (const wline of r.best.why) para(`+ ${wline}`, 9.5, false, [22, 101, 52])
+            for (const rline of r.best.risks) para(`– ${rline}`, 9.5, false, [153, 27, 27])
+            if (r.best.entry) para(`Entry: ${r.best.entry}`, 9.5, true)
+          } else {
+            para('No trade worth taking in this window.', 10, true)
+          }
+          for (const ru of r.runners_up)
+            para(`Runner-up: ${ru.ticker} — ${ru.label || ru.option_symbol}${ru.note ? ` · ${ru.note}` : ''}`, 9)
+          if (r.avoided.length > 0) para(`Avoided: ${r.avoided.map((a) => `${a.ticker} (${a.reason})`).join(' · ')}`, 9)
+        }
+        y += 2
+      }
+
+      const data = doc.output('datauristring').split(',')[1]
+      const res = (await invoke('save-pdf', { data })) as { ok?: boolean; file?: string; error?: string }
+      setExportMsg(res.ok ? 'Saved to Downloads/Options Assistant' : (res.error ?? 'Export failed.'))
+    } catch (err) {
+      setExportMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   /* ------------------------------ watchlist ------------------------------ */
 
@@ -337,6 +565,24 @@ export default function OptionsAssistant(): React.JSX.Element {
             {testMsg && <span className="ml-1.5">{testMsg}</span>}
           </p>
         </div>
+        <div className="flex items-center gap-2">
+          {exportMsg && <span className="max-w-[260px] truncate text-xs text-muted">{exportMsg}</span>}
+          <button
+            onClick={() => void startNewChat()}
+            title="Start a fresh conversation (this one stays in Past chats)"
+            className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
+          >
+            <MessageSquarePlus size={14} /> New chat
+          </button>
+          <button
+            onClick={() => void exportPdf()}
+            disabled={exporting || messages.filter((m) => m.kind !== 'working').length === 0}
+            title="Save this conversation as a PDF in Downloads/Options Assistant"
+            className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+          >
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />} Export Conversation
+          </button>
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-hidden p-4">
@@ -467,6 +713,41 @@ export default function OptionsAssistant(): React.JSX.Element {
                   </span>
                 ))}
               </div>
+            </section>
+
+            {/* past chats */}
+            <section className="rounded-xl border border-edge bg-surface p-3">
+              <h2 className="text-sm font-semibold">Past chats</h2>
+              {chats.length === 0 ? (
+                <p className="mt-1.5 text-xs text-muted">
+                  Conversations save automatically and show up here after you close the tool or start a new chat.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1">
+                  {chats.map((c) => (
+                    <div
+                      key={c.id}
+                      className={`group flex items-center gap-1.5 rounded-lg border px-2 py-1.5 ${
+                        c.id === convoId ? 'border-accent/60 bg-raised' : 'border-edge hover:bg-raised'
+                      }`}
+                    >
+                      <button onClick={() => void openChat(c.id)} className="min-w-0 flex-1 text-left">
+                        <p className="truncate text-xs font-medium">{c.title}</p>
+                        <p className="text-[10px] text-muted">
+                          {relDate(c.updatedAt)} · {c.count} message(s)
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => void deleteChat(c.id)}
+                        title="Delete this conversation"
+                        className="text-muted opacity-0 hover:text-danger group-hover:opacity-100"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
           </div>
 

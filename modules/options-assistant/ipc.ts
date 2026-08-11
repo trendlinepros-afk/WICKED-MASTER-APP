@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -165,6 +166,8 @@ export default function register(ctx: ModuleIpcContext): void {
   const WATCHLIST_KEY = `${ID}.watchlist`
   const HISTORY_KEY = `${ID}.history`
   const LASTSCAN_KEY = `${ID}.lastScan`
+  const moduleDir = join(ctx.app.getPath('userData'), 'modules', ID)
+  const chatsFile = join(moduleDir, 'chats.json')
 
   let scanBusy = false
   let cancelRequested = false
@@ -623,6 +626,121 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, text: ai.text, provider: ai.provider }
   })
 
+  /* --------------------------- saved conversations -------------------------- *
+   * Chats persist across app restarts as plain JSON in the module folder.
+   * The renderer autosaves the visible transcript (debounced); reopening the
+   * tool restores the most recent conversation, and older ones are listed in
+   * the "Past chats" panel. Newest 20 conversations are kept; if the file
+   * would balloon (pasted screenshots), images are dropped oldest-first.
+   * ------------------------------------------------------------------------- */
+
+  interface StoredConvo {
+    id: string
+    title: string
+    startedAt: number
+    updatedAt: number
+    messages: Record<string, unknown>[]
+  }
+
+  const readConvos = (): StoredConvo[] => {
+    try {
+      const j = JSON.parse(readFileSync(chatsFile, 'utf8')) as { conversations?: unknown }
+      return Array.isArray(j.conversations) ? (j.conversations as StoredConvo[]) : []
+    } catch {
+      return []
+    }
+  }
+
+  const saveConvos = (convos: StoredConvo[]): void => {
+    mkdirSync(moduleDir, { recursive: true })
+    writeFileSync(chatsFile, JSON.stringify({ conversations: convos }), 'utf8')
+  }
+
+  const MSG_KINDS = new Set(['user', 'assistant', 'result', 'error'])
+
+  ctx.ipcMain.handle(`${ID}:chat-save`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const id = String(r.id ?? '')
+    if (!id) return { ok: false, error: 'No conversation id.' }
+    const messages = (Array.isArray(r.messages) ? r.messages : [])
+      .map((m) => (typeof m === 'object' && m !== null ? (m as Record<string, unknown>) : {}))
+      .filter((m) => MSG_KINDS.has(String(m.kind)))
+      .slice(-200)
+    if (messages.length === 0) return { ok: true, chats: [] }
+    const first = messages.find((m) => m.kind === 'user')
+    const title = String(first?.text ?? 'Conversation').slice(0, 60) || 'Conversation'
+    const convos = readConvos()
+    const now = Date.now()
+    const existing = convos.find((c) => c.id === id)
+    if (existing) {
+      existing.messages = messages
+      existing.title = title
+      existing.updatedAt = now
+    } else {
+      convos.unshift({ id, title, startedAt: now, updatedAt: now, messages })
+    }
+    let keep = convos.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 20)
+    // size guard: pasted screenshots are big — drop images oldest-convo-first
+    // until the file is a sane size (text always survives)
+    let json = JSON.stringify({ conversations: keep })
+    for (let i = keep.length - 1; i >= 0 && json.length > 12_000_000; i--) {
+      for (const m of keep[i].messages) delete m.images
+      json = JSON.stringify({ conversations: keep })
+    }
+    try {
+      mkdirSync(moduleDir, { recursive: true })
+      writeFileSync(chatsFile, json, 'utf8')
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+    return { ok: true, chats: keep.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length })) }
+  })
+
+  ctx.ipcMain.handle(`${ID}:chats-list`, () => ({
+    ok: true,
+    chats: readConvos()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length }))
+  }))
+
+  ctx.ipcMain.handle(`${ID}:chat-load`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const convo = readConvos().find((c) => c.id === r.id)
+    return convo ? { ok: true, convo } : { ok: false, error: 'Conversation not found.' }
+  })
+
+  ctx.ipcMain.handle(`${ID}:chat-delete`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const next = readConvos().filter((c) => c.id !== r.id)
+    try {
+      saveConvos(next)
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+    return { ok: true, chats: next.map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messages.length })) }
+  })
+
+  // The renderer builds the conversation PDF (jsPDF) and sends the bytes; we
+  // save into Downloads/Options Assistant and reveal it (same as Trade Now).
+  ctx.ipcMain.handle(`${ID}:save-pdf`, (_e, raw: unknown) => {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+    const b64 = typeof r.data === 'string' ? r.data : ''
+    if (!b64) return { ok: false, error: 'No PDF data.' }
+    const folder = join(ctx.app.getPath('downloads'), 'Options Assistant')
+    try {
+      mkdirSync(folder, { recursive: true })
+      const d = new Date()
+      const p = (n: number): string => String(n).padStart(2, '0')
+      const name = `Options Chat - ${p(d.getMonth() + 1)}-${p(d.getDate())}-${d.getFullYear()} ${p(d.getHours())}${p(d.getMinutes())}.pdf`
+      const outFile = join(folder, name)
+      writeFileSync(outFile, Buffer.from(b64, 'base64'))
+      ctx.shell.showItemInFolder(outFile)
+      return { ok: true, file: outFile }
+    } catch (err) {
+      return { ok: false, error: 'Could not save the PDF: ' + errMsg(err) }
+    }
+  })
+
   /* ------------------------------- history --------------------------------- */
 
   ctx.ipcMain.handle(`${ID}:history`, () => {
@@ -635,6 +753,11 @@ export default function register(ctx: ModuleIpcContext): void {
       label: 'Watchlist + scan history',
       path: join(ctx.app.getPath('userData'), 'wicked-settings.json'),
       note: 'Stored in the shared module store (options-assistant.* keys)'
+    },
+    {
+      label: 'Saved conversations',
+      path: existsSync(chatsFile) ? chatsFile : null,
+      note: 'Chat transcripts incl. scan results (newest 20, JSON)'
     }
   ])
 }

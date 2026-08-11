@@ -22,6 +22,19 @@ The result renders as a card in the chat; follow-up questions ("why not the
 $230s?", "what's my exit if it gaps down?") go to the same assistant grounded
 on the latest scan's data.
 
+**Conversations persist.** Every chat autosaves (debounced) to
+`userData/modules/options-assistant/chats.json` — closing the tool or the app
+never loses a conversation. Reopening restores the most recent chat; the
+**Past chats** panel (left rail) lists the newest 20 with open/delete, and
+**New chat** (header) starts fresh while keeping the old one listed. If the
+file would balloon from pasted screenshots, images are dropped oldest-first
+(text always survives).
+
+**Export Conversation** (header, top-right) renders the whole transcript —
+your messages, pasted screenshots, assistant replies (tagged with the
+provider), and scan-result cards with the pick/why/risks — to a PDF saved in
+`Downloads/Options Assistant/` and reveals it.
+
 **Screenshots in chat.** Paste (Ctrl+V) or drag-drop images anywhere in the
 chat panel — charts, option chains, positions, headlines. Up to 3 attach per
 message (big screenshots are downscaled client-side); the vision-capable
