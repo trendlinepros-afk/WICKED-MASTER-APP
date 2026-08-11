@@ -1,0 +1,14 @@
+{
+  "id": "options-assistant",
+  "name": "Options Assistant",
+  "icon": "Target",
+  "version": "1.0.0",
+  "description": "Chat assistant that scans every options chain on your watchlist through your Webull OpenAPI and picks the contract with the best odds for your direction and timeframe",
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}

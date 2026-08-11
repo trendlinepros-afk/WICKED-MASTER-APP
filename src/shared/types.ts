@@ -173,7 +173,9 @@ export const API_PROVIDERS = [
   { id: 'x', name: 'X / Twitter (Bearer Token — social ticker trends)', placeholder: 'AAAAAAAA… (OAuth 2.0 App-Only Bearer Token)' },
   { id: 'opusclip', name: 'OpusClip — shorts (Automatic Editing)', placeholder: '' },
   { id: 's3-access', name: 'S3 access key (Automatic Editing uploads)', placeholder: '' },
-  { id: 's3-secret', name: 'S3 secret key (Automatic Editing uploads)', placeholder: '' }
+  { id: 's3-secret', name: 'S3 secret key (Automatic Editing uploads)', placeholder: '' },
+  { id: 'webull-app-key', name: 'Webull OpenAPI — App Key (Options Assistant)', placeholder: '' },
+  { id: 'webull-app-secret', name: 'Webull OpenAPI — App Secret (Options Assistant)', placeholder: '' }
 ] as const
 
 export type ApiProviderId = (typeof API_PROVIDERS)[number]['id']
