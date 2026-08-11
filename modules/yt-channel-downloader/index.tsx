@@ -108,6 +108,12 @@ export default function ChannelDownloader(): React.JSX.Element {
     return channels
   }
 
+  // Open a native folder picker to set THIS tool's default save location.
+  const pickFolder = async (): Promise<void> => {
+    const res = (await invoke('pick-folder')) as { ok?: boolean; downloadDir?: string }
+    if (res.ok && res.downloadDir) setDownloadDir(res.downloadDir)
+  }
+
   useEffect(() => {
     void (async () => {
       const st = (await invoke('status')) as { downloadDir?: string; ffmpegReady?: boolean }
@@ -284,18 +290,25 @@ export default function ChannelDownloader(): React.JSX.Element {
           <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Total Channel Downloader" /></h1>
           <p className="truncate text-xs text-muted">
             Every long-form video from a creator (no Shorts), oldest → newest — optionally as one giant movie.
-            {downloadDir && (
-              <>
-                {' '}·{' '}
-                <button onClick={() => void invoke('open-folder')} className="text-accent hover:underline">
-                  {downloadDir}
-                </button>
-              </>
-            )}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] text-muted">
+            Saving to{' '}
+            <button
+              onClick={() => void invoke('open-folder')}
+              className="text-accent hover:underline"
+              title="Open this folder"
+            >
+              {downloadDir || 'default folder'}
+            </button>
+            {' · '}
+            <button onClick={() => void pickFolder()} className="text-accent hover:underline">
+              Set default save location
+            </button>
           </p>
         </div>
         <button
           onClick={() => void invoke('open-folder')}
+          title="Open your save location"
           className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
         >
           <FolderOpen size={14} /> Folder

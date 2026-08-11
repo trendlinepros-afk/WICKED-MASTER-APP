@@ -90,8 +90,16 @@ export default function YtDownloader(): React.JSX.Element {
             {binReady ? (
               <>
                 yt-dlp {status?.version ?? ''} {status?.ffmpegReady ? '· ffmpeg ready' : '· ffmpeg missing'} ·{' '}
-                <button onClick={() => void s.openFolder()} className="text-accent hover:underline">
+                <button
+                  onClick={() => void s.openFolder()}
+                  className="text-accent hover:underline"
+                  title="Open this folder"
+                >
                   {status?.downloadDir}
+                </button>
+                {' · '}
+                <button onClick={() => void s.pickFolder()} className="text-accent hover:underline">
+                  Set default save location
                 </button>
               </>
             ) : (
@@ -103,9 +111,9 @@ export default function YtDownloader(): React.JSX.Element {
           {binReady && (
             <>
               <button
-                onClick={() => void s.pickFolder()}
+                onClick={() => void s.openFolder()}
                 className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
-                title="Change download folder"
+                title="Open your save location"
               >
                 <FolderOpen size={14} /> Folder
               </button>

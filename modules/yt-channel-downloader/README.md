@@ -4,7 +4,17 @@ Paste a YouTube **channel** URL (`@handle`, `/channel/UC…`, `/c/…`, `/user/�
 and download the creator's **entire long-form library**, then optionally stitch
 it into **one movie in chronological order** (oldest → newest). Lives in the
 "YouTube Downloader" folder next to the Custom Playlist Downloader and shares
-its yt-dlp binary, bundled ffmpeg and download folder.
+its yt-dlp binary and bundled ffmpeg.
+
+## Save location
+
+This tool keeps its **own** default save location, separate from the Custom
+Playlist Downloader, so the two can point at different folders. Defaults to
+`Downloads/WICKED YouTube Channels`. In the header, **Set default save
+location** opens a folder picker; the **Folder** button just opens whatever the
+current save location is. Each channel still gets its own subfolder inside it.
+Changing the location only affects **new** channels — already-downloaded
+channels keep their saved paths (rescans continue in place).
 
 ## How the filtering works
 

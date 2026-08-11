@@ -2,7 +2,7 @@
   "id": "yt-downloader",
   "name": "Custom Playlist Downloader",
   "icon": "ListVideo",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Download YouTube videos or whole playlists in your chosen quality — optionally stitch a playlist into one shuffled movie (powered by yt-dlp + ffmpeg)",
   "status": "beta",
   "group": {

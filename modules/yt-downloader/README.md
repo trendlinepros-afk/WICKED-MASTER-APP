@@ -142,7 +142,11 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
 ## Data / MCP
 
 - Download folder defaults to `Downloads/WICKED YouTube` (changeable; can be a
-  network share). yt-dlp binary + module folder are shown in Settings → Modules.
+  network share) — set it with the **Set default save location** link in the
+  header; the **Folder** button opens the current one. This is a **separate**
+  save location from the Total Channel Downloader, so the two tools can target
+  different folders. yt-dlp binary + module folder are shown in Settings →
+  Modules.
 - MCP: `yt-downloader__status` / `__probe` (read-only), `__download`
   (destructive, confirm-gated — writes files, can run long; takes an optional
   `combine` flag), `__update`, `__cancel`.

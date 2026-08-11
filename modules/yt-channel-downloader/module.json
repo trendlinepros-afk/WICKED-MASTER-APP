@@ -2,7 +2,7 @@
   "id": "yt-channel-downloader",
   "name": "Total Channel Downloader",
   "icon": "Tv",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Paste a YouTube channel URL and download the creator's entire long-form library (no Shorts) in order — then stitch it into one movie, oldest to newest",
   "status": "beta",
   "group": {

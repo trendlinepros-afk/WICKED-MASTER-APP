@@ -37,6 +37,9 @@ import { canvasFor, collectOutputs, combineClips, isVideoFile, sanitizeName } fr
  * ------------------------------------------------------------------------ */
 
 const ID = 'yt-channel-downloader'
+/** save-location override key — kept separate from the Custom Playlist
+ *  Downloader so the two tools can point at different folders */
+const DIR_KEY = `${ID}.downloadDir`
 const PROBE_TIMEOUT_MS = 120_000
 const AUTO_SWEEP_DELAY_MS = 30_000
 const RESUME_DELAY_MS = 8000
@@ -136,10 +139,12 @@ export default function register(ctx: ModuleIpcContext): void {
   const historyFile = (): string => join(moduleDir(), 'history.json')
   const pendingFile = (): string => join(moduleDir(), 'pending-job.json')
 
-  // Same destination as the Custom Playlist Downloader — one YouTube folder.
+  // Channel downloads have their OWN save location (separate from the Custom
+  // Playlist Downloader) so the two tools can target different folders. Defaults
+  // to a distinct "WICKED YouTube Channels" folder; override with pick-folder.
   const downloadDir = (): string => {
-    const v = ctx.storeGet<string>('yt-downloader.downloadDir', '')
-    return v && v.trim() ? v : join(ctx.app.getPath('downloads'), 'WICKED YouTube')
+    const v = ctx.storeGet<string>(DIR_KEY, '')
+    return v && v.trim() ? v : join(ctx.app.getPath('downloads'), 'WICKED YouTube Channels')
   }
 
   const send = (payload: unknown): void => {
@@ -666,6 +671,22 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true }
   })
 
+  // Set this tool's default save location (its own folder, independent of the
+  // Custom Playlist Downloader). Existing channels keep their saved absolute
+  // paths; only new channels use the new location.
+  ctx.ipcMain.handle(`${ID}:pick-folder`, async () => {
+    const win = ctx.getMainWindow()
+    const opts = {
+      title: 'Choose where to save downloaded channels',
+      properties: ['openDirectory' as const, 'createDirectory' as const],
+      defaultPath: downloadDir()
+    }
+    const res = win ? await ctx.dialog.showOpenDialog(win, opts) : await ctx.dialog.showOpenDialog(opts)
+    if (res.canceled || res.filePaths.length === 0) return { ok: false, canceled: true }
+    ctx.storeSet(DIR_KEY, res.filePaths[0])
+    return { ok: true, downloadDir: res.filePaths[0] }
+  })
+
   ctx.ipcMain.handle(`${ID}:history`, () => ({
     ok: true,
     channels: readHistory().sort((a, b) => b.lastDownloadAt - a.lastDownloadAt)
@@ -768,7 +789,7 @@ export default function register(ctx: ModuleIpcContext): void {
       {
         label: 'Downloads folder',
         path: existsSync(dir) ? dir : null,
-        note: 'Shared with the Custom Playlist Downloader — each channel gets its own subfolder'
+        note: 'This tool’s own save location (set it in the app) — each channel gets its own subfolder'
       },
       {
         label: 'Channel history',
