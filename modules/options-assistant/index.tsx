@@ -71,15 +71,43 @@ interface ScanResultMsg {
 }
 
 type Msg =
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
+  | { kind: 'user'; text: string; images?: string[] }
+  | { kind: 'assistant'; text: string; provider?: string }
   | { kind: 'working'; lines: string[] }
   | { kind: 'result'; result: ScanResultMsg }
   | { kind: 'error'; text: string }
 
+/** Read a pasted/dropped image file and downscale big screenshots (longest
+ *  edge 1568px, JPEG) so they stay friendly to the vision models. */
+const fileToDataUrl = (file: File): Promise<string | null> =>
+  new Promise((resolve) => {
+    const fr = new FileReader()
+    fr.onerror = () => resolve(null)
+    fr.onload = () => {
+      const raw = String(fr.result ?? '')
+      const img = new Image()
+      img.onerror = () => resolve(raw || null)
+      img.onload = () => {
+        const MAX = 1568
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height))
+        if (scale === 1 && raw.length < 2_000_000) return resolve(raw)
+        const cv = document.createElement('canvas')
+        cv.width = Math.max(1, Math.round(img.width * scale))
+        cv.height = Math.max(1, Math.round(img.height * scale))
+        const c2d = cv.getContext('2d')
+        if (!c2d) return resolve(raw)
+        c2d.drawImage(img, 0, 0, cv.width, cv.height)
+        resolve(cv.toDataURL('image/jpeg', 0.88))
+      }
+      img.src = raw
+    }
+    fr.readAsDataURL(file)
+  })
+
 interface Status {
   hasWebull: boolean
   hasAi: boolean
+  aiProvider?: string | null
   hasMassive: boolean
   watchlist: string[]
   busy: boolean
@@ -97,6 +125,7 @@ export default function OptionsAssistant(): React.JSX.Element {
   const [budget, setBudget] = useState('')
   const [messages, setMessages] = useState<Msg[]>([])
   const [chatInput, setChatInput] = useState('')
+  const [pendingImgs, setPendingImgs] = useState<string[]>([])
   const [scanning, setScanning] = useState(false)
   const [chatBusy, setChatBusy] = useState(false)
   const [wbLists, setWbLists] = useState<{ id: string; name: string }[] | null>(null)
@@ -224,22 +253,57 @@ export default function OptionsAssistant(): React.JSX.Element {
 
   /* -------------------------------- chat --------------------------------- */
 
+  const addImageFiles = async (files: File[]): Promise<void> => {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue
+      const url = await fileToDataUrl(f)
+      if (url) setPendingImgs((cur) => (cur.length >= 3 ? cur : [...cur, url]))
+    }
+  }
+
+  /** Ctrl+V anywhere in the chat panel attaches pasted screenshots. */
+  const onPanelPaste = (e: React.ClipboardEvent): void => {
+    const files = [...e.clipboardData.items]
+      .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null)
+    if (files.length > 0) {
+      e.preventDefault()
+      void addImageFiles(files)
+    }
+  }
+
+  const onPanelDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    void addImageFiles([...e.dataTransfer.files])
+  }
+
   const sendChat = async (): Promise<void> => {
     const q = chatInput.trim()
-    if (!q || chatBusy) return
+    const images = pendingImgs
+    if ((!q && images.length === 0) || chatBusy) return
     setChatInput('')
+    setPendingImgs([])
     setChatBusy(true)
-    setMessages((m) => [...m, { kind: 'user', text: q }])
+    const shown = q || 'Look at this screenshot.'
+    setMessages((m) => [...m, { kind: 'user', text: shown, images: images.length ? images : undefined }])
     try {
       // visible transcript (text turns only) becomes the chat history
       const history = msgsRef.current
         .filter((m): m is { kind: 'user' | 'assistant'; text: string } => m.kind === 'user' || m.kind === 'assistant')
         .slice(-12)
         .map((m) => ({ role: m.kind, text: m.text }))
-      const res = (await invoke('chat', { question: q, history })) as { ok?: boolean; text?: string; error?: string }
+      const res = (await invoke('chat', { question: q, history, images })) as {
+        ok?: boolean
+        text?: string
+        provider?: string
+        error?: string
+      }
       setMessages((m) => [
         ...m,
-        res.ok && res.text ? { kind: 'assistant', text: res.text } : { kind: 'error', text: res.error ?? 'Chat failed.' }
+        res.ok && res.text
+          ? { kind: 'assistant', text: res.text, provider: res.provider }
+          : { kind: 'error', text: res.error ?? 'Chat failed.' }
       ])
     } finally {
       setChatBusy(false)
@@ -407,7 +471,12 @@ export default function OptionsAssistant(): React.JSX.Element {
           </div>
 
           {/* chat */}
-          <div className="flex min-h-0 flex-col rounded-xl border border-edge bg-surface">
+          <div
+            className="flex min-h-0 flex-col rounded-xl border border-edge bg-surface"
+            onPaste={onPanelPaste}
+            onDrop={onPanelDrop}
+            onDragOver={(e) => e.preventDefault()}
+          >
             <div ref={threadRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {messages.length === 0 && (
                 <div className="py-14 text-center text-sm text-muted">
@@ -424,6 +493,13 @@ export default function OptionsAssistant(): React.JSX.Element {
                   return (
                     <div key={i} className="flex justify-end">
                       <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent px-3.5 py-2 text-sm text-accent-ink">
+                        {m.images && m.images.length > 0 && (
+                          <div className="mb-1.5 flex flex-wrap gap-1.5">
+                            {m.images.map((src, j) => (
+                              <img key={j} src={src} alt="pasted screenshot" className="max-h-44 rounded-lg" />
+                            ))}
+                          </div>
+                        )}
                         {m.text}
                       </div>
                     </div>
@@ -456,14 +532,31 @@ export default function OptionsAssistant(): React.JSX.Element {
                 if (m.kind === 'result') return <ResultCard key={i} r={m.result} />
                 return (
                   <div key={i} className="flex">
-                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-md border border-edge bg-raised px-3.5 py-2 text-sm">
-                      {m.text}
+                    <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-edge bg-raised px-3.5 py-2 text-sm">
+                      <span className="whitespace-pre-wrap">{m.text}</span>
+                      {m.provider && <p className="mt-1.5 text-right text-[10px] text-muted">via {m.provider}</p>}
                     </div>
                   </div>
                 )
               })}
             </div>
             <div className="border-t border-edge p-3">
+              {pendingImgs.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {pendingImgs.map((src, i) => (
+                    <span key={i} className="relative">
+                      <img src={src} alt="attached screenshot" className="h-14 w-14 rounded-lg border border-edge object-cover" />
+                      <button
+                        onClick={() => setPendingImgs((cur) => cur.filter((_, j) => j !== i))}
+                        title="Remove"
+                        className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-white"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
                 <input
                   value={chatInput}
@@ -471,19 +564,20 @@ export default function OptionsAssistant(): React.JSX.Element {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) void sendChat()
                   }}
-                  placeholder="Ask about the pick, a ticker, liquidity, exits…"
+                  placeholder="Ask about the pick, a ticker, liquidity, exits… (paste a screenshot with Ctrl+V)"
                   className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
                 />
                 <button
                   onClick={() => void sendChat()}
-                  disabled={chatBusy || !chatInput.trim()}
+                  disabled={chatBusy || (!chatInput.trim() && pendingImgs.length === 0)}
                   className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
                 >
                   {chatBusy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 </button>
               </div>
               <p className="mt-1.5 text-center text-[10px] text-muted">
-                Analysis, not financial advice — options can go to zero. Quotes via your Webull OpenAPI.
+                {status?.aiProvider ? `AI: ${status.aiProvider} · ` : ''}Analysis, not financial advice — options can go
+                to zero. Quotes via your Webull OpenAPI.
               </p>
             </div>
           </div>

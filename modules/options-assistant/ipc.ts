@@ -187,6 +187,11 @@ export default function register(ctx: ModuleIpcContext): void {
     openai: ctx.getApiKey('openai')
   })
   const hasAi = (): boolean => Object.values(aiKeys()).some(Boolean)
+  /** Which provider the shared AI cascade will try first (mirrors callAi's order). */
+  const aiProviderName = (): string | null => {
+    const k = aiKeys()
+    return k.anthropic ? 'Claude' : k.gemini ? 'Gemini' : k.deepseek ? 'DeepSeek' : k.openai ? 'OpenAI' : null
+  }
 
   const getWatchlist = (): string[] => {
     const raw = ctx.storeGet<unknown[]>(WATCHLIST_KEY, [])
@@ -204,6 +209,7 @@ export default function register(ctx: ModuleIpcContext): void {
     ok: true,
     hasWebull: webullKeys() !== null,
     hasAi: hasAi(),
+    aiProvider: aiProviderName(),
     hasMassive: !!ctx.getApiKey('massive'),
     hasFinnhub: !!ctx.getApiKey('finnhub'),
     watchlist: getWatchlist(),
@@ -580,7 +586,14 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!hasAi())
       return { ok: false, error: 'Add an AI key (Anthropic, Gemini, DeepSeek or OpenAI) in Settings → API Keys.' }
     const question = typeof r.question === 'string' ? r.question.slice(0, 4000) : ''
-    if (!question.trim()) return { ok: false, error: 'Ask something first.' }
+    // pasted screenshots: data URLs, validated + capped (vision goes to
+    // Claude/Gemini/OpenAI via the shared cascade; DeepSeek is skipped)
+    const images = (Array.isArray(r.images) ? r.images : [])
+      .filter((s): s is string => typeof s === 'string' && /^data:image\/(png|jpe?g|webp);base64,/.test(s))
+      .slice(0, 3)
+    if (images.reduce((n, s) => n + s.length, 0) > 15_000_000)
+      return { ok: false, error: 'Screenshot(s) too large — paste smaller crops.' }
+    if (!question.trim() && images.length === 0) return { ok: false, error: 'Ask something first.' }
     const last = ctx.storeGet<Record<string, unknown> | null>(LASTSCAN_KEY, null)
     const history = Array.isArray(r.history)
       ? (r.history as { role?: string; text?: string }[])
@@ -593,13 +606,19 @@ export default function register(ctx: ModuleIpcContext): void {
       text: [
         'You are the Options Assistant inside WICKED — a sharp, plain-spoken options analyst chatting with a self-directed trader.',
         'Answer from the latest scan context below when relevant; be concrete about strikes, expiries, liquidity and risk. If you lack the data to answer, say exactly what to re-scan.',
+        'The user may paste screenshots (charts, option chains, positions, news) — read them carefully and tie what you see to the scan data.',
         'Keep answers tight (a few short paragraphs or bullets). No boilerplate disclaimers.',
         last && typeof last.dossier === 'string'
           ? `LATEST SCAN (direction=${String(last.direction)}, horizon=${String(last.horizon)}):\nRESULT: ${String(last.result ?? '')}\nDOSSIER: ${String(last.dossier).slice(0, 100_000)}`
           : 'No scan has been run yet this session — tell the user to run one for contract-level answers.'
       ].join('\n')
     }
-    const ai = await callAi(aiKeys(), [system, ...history, { role: 'user', text: question }], { tier: 'pro' })
+    const userTurn: AiMessage = {
+      role: 'user',
+      text: question.trim() || 'Here is a screenshot — read it and relate it to my scan.',
+      images: images.length > 0 ? images : undefined
+    }
+    const ai = await callAi(aiKeys(), [system, ...history, userTurn], { tier: 'pro' })
     if (!ai.ok) return { ok: false, error: ai.error }
     return { ok: true, text: ai.text, provider: ai.provider }
   })

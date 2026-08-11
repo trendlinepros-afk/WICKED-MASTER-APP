@@ -22,6 +22,13 @@ The result renders as a card in the chat; follow-up questions ("why not the
 $230s?", "what's my exit if it gaps down?") go to the same assistant grounded
 on the latest scan's data.
 
+**Screenshots in chat.** Paste (Ctrl+V) or drag-drop images anywhere in the
+chat panel — charts, option chains, positions, headlines. Up to 3 attach per
+message (big screenshots are downscaled client-side); the vision-capable
+providers (Claude / Gemini / OpenAI) read them alongside the scan context.
+Each reply is tagged with the provider that answered ("via Claude"), and the
+footer shows which provider the AI cascade will use.
+
 ## Setup (Settings → API Keys)
 
 - **Webull OpenAPI — App Key** and **App Secret** (required). Create them on
