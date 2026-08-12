@@ -1,6 +1,11 @@
 /** Shared types for the Live Trade Copilot (main ⟷ renderer). */
 
-export type Action = 'BUY' | 'SELL' | 'HOLD' | 'WAIT'
+/**
+ * Position-explicit signals. WAIT is only legal when FLAT; in a position the
+ * copilot must answer HOLD (stay) or the position's exit action — so "wait"
+ * can never be misread as "flatten".
+ */
+export type Action = 'BUY_LONG' | 'SELL_LONG' | 'SELL_SHORT' | 'BUY_COVER' | 'HOLD' | 'WAIT'
 
 export interface PatternCall {
   name: string
@@ -20,7 +25,7 @@ export interface Verdict {
 }
 
 export interface PositionState {
-  inPosition: boolean
+  state: 'flat' | 'long' | 'short'
   entryPrice?: number
 }
 
@@ -46,7 +51,8 @@ export type AnalyzeResult =
   | { ok: false; error: string }
 
 export type SignalDir = 'long' | 'short'
-export type CloseReason = 'flip' | 'timeout' | 'session-end'
+/** 'flip' is the legacy name for 'signal' in old stored rows */
+export type CloseReason = 'signal' | 'flip' | 'timeout' | 'session-end'
 
 /** A hypothetical trade opened by a BUY/SELL flip, scored for the track record. */
 export interface Signal {

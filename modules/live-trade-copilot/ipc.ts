@@ -70,9 +70,33 @@ interface Session {
 
 /* ------------------------------ verdict parse ------------------------------ */
 
-const ACTIONS: Action[] = ['BUY', 'SELL', 'HOLD', 'WAIT']
+const ACTIONS: Action[] = ['BUY_LONG', 'SELL_LONG', 'SELL_SHORT', 'BUY_COVER', 'HOLD', 'WAIT']
 
-function parseVerdict(raw: string): Verdict | null {
+/**
+ * Clamp the model's action to what is LEGAL for the user's position:
+ *   flat  → BUY_LONG | SELL_SHORT | WAIT
+ *   long  → HOLD | SELL_LONG   (WAIT is never valid in a position)
+ *   short → HOLD | BUY_COVER
+ * Legacy loose outputs ('BUY'/'SELL') map to the flat entries.
+ */
+function clampAction(raw: string, posState: 'flat' | 'long' | 'short'): Action {
+  let a = raw.toUpperCase().replace(/[\s-]+/g, '_')
+  if (a === 'BUY' || a === 'LONG') a = 'BUY_LONG'
+  if (a === 'SELL' || a === 'SHORT') a = 'SELL_SHORT'
+  if (a === 'BUY_TO_COVER' || a === 'COVER') a = 'BUY_COVER'
+  if (a === 'SELL_TO_CLOSE' || a === 'EXIT') a = posState === 'short' ? 'BUY_COVER' : 'SELL_LONG'
+  if (a === 'HOLD_POSITION') a = 'HOLD'
+  const action = (ACTIONS as string[]).includes(a) ? (a as Action) : posState === 'flat' ? 'WAIT' : 'HOLD'
+  if (posState === 'flat') {
+    return action === 'BUY_LONG' || action === 'SELL_SHORT' || action === 'WAIT' ? action : 'WAIT'
+  }
+  if (posState === 'long') {
+    return action === 'SELL_LONG' ? action : 'HOLD'
+  }
+  return action === 'BUY_COVER' ? action : 'HOLD'
+}
+
+function parseVerdict(raw: string, posState: 'flat' | 'long' | 'short'): Verdict | null {
   try {
     let s = raw.trim()
     const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/)
@@ -81,8 +105,7 @@ function parseVerdict(raw: string): Verdict | null {
     const b = s.lastIndexOf('}')
     if (a >= 0 && b > a) s = s.slice(a, b + 1)
     const o = JSON.parse(s) as Record<string, unknown>
-    const actionRaw = String(o.action ?? '').toUpperCase()
-    const action: Action = (ACTIONS as string[]).includes(actionRaw) ? (actionRaw as Action) : 'WAIT'
+    const action = clampAction(String(o.action ?? ''), posState)
     const biasRaw = String(o.bias ?? '').toLowerCase()
     const bias = biasRaw === 'bullish' || biasRaw === 'bearish' ? biasRaw : 'neutral'
     const nums = (v: unknown): number[] =>
@@ -288,7 +311,13 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!image) return { ok: false, error: 'No frame captured.' }
     if (image.length > 6_000_000) return { ok: false, error: 'Captured frame too large.' }
     const model = r.model === 'pro' ? 'pro' : 'lite'
-    const pos = (typeof r.position === 'object' && r.position !== null ? r.position : {}) as PositionState
+    const posRaw = (typeof r.position === 'object' && r.position !== null ? r.position : {}) as Record<string, unknown>
+    const posState: PositionState['state'] =
+      posRaw.state === 'long' || posRaw.state === 'short' ? posRaw.state : 'flat'
+    const pos: PositionState = {
+      state: posState,
+      entryPrice: Number(posRaw.entryPrice) > 0 ? Number(posRaw.entryPrice) : undefined
+    }
 
     // live numeric context (fail-soft: a bad tick degrades to vision-only)
     const keys = webullKeys()
@@ -319,9 +348,13 @@ export default function register(ctx: ModuleIpcContext): void {
     }
 
     session.model = model
-    const posLine = pos.inPosition
-      ? `POSITION: LONG from $${Number(pos.entryPrice ?? 0).toFixed(2)} — exit management comes FIRST: HOLD = stay in, SELL = exit NOW.`
-      : 'POSITION: FLAT — BUY = enter long now, SELL = short bias / do not buy, WAIT = no edge yet.'
+    const entryTxt = pos.entryPrice != null ? ` from $${pos.entryPrice.toFixed(2)}` : ''
+    const posLine =
+      pos.state === 'long'
+        ? `POSITION: LONG${entryTxt}. Exit management comes FIRST. You may answer ONLY: HOLD (stay in the long) or SELL_LONG (exit NOW). WAIT is NEVER a valid answer while in a position.`
+        : pos.state === 'short'
+          ? `POSITION: SHORT${entryTxt}. Exit management comes FIRST. You may answer ONLY: HOLD (stay in the short) or BUY_COVER (cover NOW). WAIT is NEVER a valid answer while in a position.`
+          : 'POSITION: FLAT. You may answer ONLY: BUY_LONG (enter long now), SELL_SHORT (enter short now), or WAIT (no edge yet — the only valid "do nothing" while flat).'
     // self-track-record + latest lessons make the copilot learn across sessions
     const trackRecord = trackRecordDigest(computeStats(readSignals()), readLessons())
     const memoryBlock =
@@ -339,18 +372,18 @@ export default function register(ctx: ModuleIpcContext): void {
         'Trust the NUMBERS for exact prices and levels; use the IMAGE for indicators, drawings, and structure the numbers cannot show. If they disagree, say so.',
         posLine,
         'Rules:',
-        '- WAIT is the default. Call BUY or SELL only on concrete visible evidence, and name in `detail` what confirmed it (or what would).',
+        '- When flat, WAIT is the default. Call an entry (BUY_LONG or SELL_SHORT) only on concrete visible evidence, and name in `detail` what confirmed it (or what would).',
         '- Call out patterns (bull/bear flag, double top/bottom, VWAP reclaim/reject, break-and-retest, engulfing, higher-lows/lower-highs, range break) ONLY when the chart supports them, with status forming/confirmed/failed. Never invent a pattern to sound useful.',
         '- Evaluate LONG and SHORT setups with EQUAL priority every check — a breakout, VWAP reclaim or higher-low is a BUY candidate exactly as a breakdown, rejection or lower-high is a SELL candidate. Do not default to the short side.',
-        '- Anti-whipsaw: never flip into a BUY or SELL you would plausibly reverse within a minute — if the next bar could negate your call, stay WAIT. If you DO flip away from a call made within your last 2 checks, state in `detail` exactly what changed.',
+        '- Anti-whipsaw: never call an entry (BUY_LONG/SELL_SHORT) you would plausibly reverse within a minute — if the next bar could negate your call, stay WAIT. If you DO reverse a call made within your last 2 checks, state in `detail` exactly what changed.',
         '- Mind liquidity: a wide NBBO spread makes fast scalps expensive — factor it into confidence.',
         '- Stay consistent with YOUR RECENT CALLS below; if you flip, explain why in `detail`.',
         '- confidence is honest, 0-100.',
         trackRecord,
         'YOUR RECENT CALLS (oldest first):',
         memoryBlock,
-        'Respond with ONLY this JSON — no fences, no prose:',
-        '{"action":"BUY|SELL|HOLD|WAIT","bias":"bullish|bearish|neutral","confidence":0,"patterns":[{"name":"","status":"forming|confirmed|failed"}],"levels":{"support":[],"resistance":[]},"one_liner":"<=120 chars","detail":"2-3 sentences","exit_hint":"target/stop or -"}'
+        'Respond with ONLY this JSON — no fences, no prose. action MUST be one of the legal answers for the position stated above:',
+        '{"action":"BUY_LONG|SELL_LONG|SELL_SHORT|BUY_COVER|HOLD|WAIT","bias":"bullish|bearish|neutral","confidence":0,"patterns":[{"name":"","status":"forming|confirmed|failed"}],"levels":{"support":[],"resistance":[]},"one_liner":"<=120 chars","detail":"2-3 sentences","exit_hint":"target/stop or -"}'
       ]
         .filter(Boolean)
         .join('\n')
@@ -363,7 +396,7 @@ export default function register(ctx: ModuleIpcContext): void {
 
     const ai = await callAi(aiKeys(), [system, user], { json: true, tier: model })
     if (!ai.ok) return { ok: false, error: ai.error }
-    const verdict = parseVerdict(ai.text)
+    const verdict = parseVerdict(ai.text, pos.state)
     if (!verdict) return { ok: false, error: 'The model returned unreadable output — skipping this tick.' }
 
     const t = Date.now()
@@ -388,22 +421,28 @@ export default function register(ctx: ModuleIpcContext): void {
     })
     if (session.log.length > LOG_CAP) session.log.splice(0, session.log.length - LOG_CAP)
 
-    // hypothetical trade tracking: BUY flip opens a long, SELL flip a short.
-    // Close on the opposite flip or the 10-minute scalp timeout (flip wins when
-    // both land on the same tick); HOLD/WAIT never close a signal.
+    // Hypothetical trade tracking follows the copilot's OWN signals as a
+    // virtual position: BUY_LONG/SELL_SHORT open, SELL_LONG/BUY_COVER close,
+    // an opposite ENTRY reverses (close + open). HOLD/WAIT never close; the
+    // 10-minute scalp timeout and session-end are the backstops.
     const events: SignalEvent[] = []
-    const flip = verdict.action !== prevAction && (verdict.action === 'BUY' || verdict.action === 'SELL')
+    const changed = verdict.action !== prevAction
+    const act = verdict.action
+    const isEntry = changed && (act === 'BUY_LONG' || act === 'SELL_SHORT')
+    const entryDir: 'long' | 'short' = act === 'BUY_LONG' ? 'long' : 'short'
     const open = session.openSignal
     if (open) {
-      const oppositeFlip = flip && (verdict.action === 'BUY' ? open.dir === 'short' : open.dir === 'long')
-      if (oppositeFlip) events.push({ type: 'close', signal: closeSignal(session, t, price, 'flip') })
+      const exitCall =
+        changed && ((open.dir === 'long' && act === 'SELL_LONG') || (open.dir === 'short' && act === 'BUY_COVER'))
+      const reversal = isEntry && open.dir !== entryDir
+      if (exitCall || reversal) events.push({ type: 'close', signal: closeSignal(session, t, price, 'signal') })
       else if (t - open.entryT >= SIGNAL_TIMEOUT_MS)
         events.push({ type: 'close', signal: closeSignal(session, t, price, 'timeout') })
     }
-    if (flip && session.openSignal === null) {
+    if (isEntry && session.openSignal === null) {
       session.openSignal = {
         symbol: session.symbol,
-        dir: verdict.action === 'BUY' ? 'long' : 'short',
+        dir: entryDir,
         entryT: t,
         entryP: price,
         patterns: verdict.patterns.map((p) => p.name),

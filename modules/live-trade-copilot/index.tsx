@@ -80,10 +80,29 @@ function chime(ctx: AudioContext, kind: 'buy' | 'sell'): void {
 }
 
 const ACTION_STYLE: Record<Action, string> = {
-  BUY: 'bg-ok text-white',
-  SELL: 'bg-danger text-white',
-  HOLD: 'bg-warn text-black',
+  BUY_LONG: 'bg-ok text-white',
+  SELL_SHORT: 'bg-danger text-white',
+  SELL_LONG: 'bg-warn text-black',
+  BUY_COVER: 'bg-warn text-black',
+  HOLD: 'bg-accent text-accent-ink',
   WAIT: 'bg-raised text-muted'
+}
+
+const ACTION_LABEL: Record<Action, string> = {
+  BUY_LONG: 'Buy Long',
+  SELL_LONG: 'Sell Long',
+  SELL_SHORT: 'Sell Short',
+  BUY_COVER: 'Buy to Cover',
+  HOLD: 'Hold Position',
+  WAIT: 'Wait'
+}
+
+/** Buying actions chime rising, selling actions falling. */
+const CHIME_KIND: Partial<Record<Action, 'buy' | 'sell'>> = {
+  BUY_LONG: 'buy',
+  BUY_COVER: 'buy',
+  SELL_LONG: 'sell',
+  SELL_SHORT: 'sell'
 }
 
 export default function LiveTradeCopilot(): React.JSX.Element {
@@ -94,7 +113,7 @@ export default function LiveTradeCopilot(): React.JSX.Element {
   const [intervalSec, setIntervalSec] = useState(15)
   const [model, setModel] = useState<'lite' | 'pro'>('lite')
   const [soundOn, setSoundOn] = useState(true)
-  const [position, setPosition] = useState<PositionState>({ inPosition: false })
+  const [position, setPosition] = useState<PositionState>({ state: 'flat' })
   const [entryText, setEntryText] = useState('')
   const [running, setRunning] = useState(false)
   const [paused, setPaused] = useState(false)
@@ -276,9 +295,10 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         }
         const prev = lastActionRef.current
         const act = res.verdict.action
-        if (act !== prev && (act === 'BUY' || act === 'SELL')) {
-          flipsRef.current++
-          if (soundRef.current && audioRef.current) chime(audioRef.current, act === 'BUY' ? 'buy' : 'sell')
+        const chimeKind = CHIME_KIND[act]
+        if (act !== prev && chimeKind) {
+          if (act === 'BUY_LONG' || act === 'SELL_SHORT') flipsRef.current++ // entry signals
+          if (soundRef.current && audioRef.current) chime(audioRef.current, chimeKind)
         }
         lastActionRef.current = act
       } else {
@@ -390,9 +410,11 @@ export default function LiveTradeCopilot(): React.JSX.Element {
 
   /* ---------------------------------- UI ----------------------------------- */
 
-  const setInPosition = (inPos: boolean): void => {
+  const setPosState = (state: PositionState['state']): void => {
     const entry = Number(entryText)
-    setPosition(inPos ? { inPosition: true, entryPrice: Number.isFinite(entry) && entry > 0 ? entry : undefined } : { inPosition: false })
+    setPosition(
+      state === 'flat' ? { state } : { state, entryPrice: Number.isFinite(entry) && entry > 0 ? entry : undefined }
+    )
   }
 
   return (
@@ -498,29 +520,35 @@ export default function LiveTradeCopilot(): React.JSX.Element {
 
               {/* position state */}
               <label className="mt-3 block text-xs font-medium text-muted">Your position (advice adapts)</label>
-              <div className="mt-1 grid grid-cols-2 gap-1.5">
+              <div className="mt-1 grid grid-cols-3 gap-1.5">
                 <button
-                  onClick={() => setInPosition(false)}
-                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${!position.inPosition ? 'border-accent bg-accent/10 text-accent' : 'border-edge text-muted'}`}
+                  onClick={() => setPosState('flat')}
+                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${position.state === 'flat' ? 'border-accent bg-accent/10 text-accent' : 'border-edge text-muted'}`}
                 >
-                  I&apos;m flat
+                  Flat
                 </button>
                 <button
-                  onClick={() => setInPosition(true)}
-                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${position.inPosition ? 'border-ok bg-ok/10 text-ok' : 'border-edge text-muted'}`}
+                  onClick={() => setPosState('long')}
+                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${position.state === 'long' ? 'border-ok bg-ok/10 text-ok' : 'border-edge text-muted'}`}
                 >
-                  I&apos;m in
+                  Long
+                </button>
+                <button
+                  onClick={() => setPosState('short')}
+                  className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${position.state === 'short' ? 'border-danger bg-danger/10 text-danger' : 'border-edge text-muted'}`}
+                >
+                  Short
                 </button>
               </div>
-              {position.inPosition && (
+              {position.state !== 'flat' && (
                 <input
                   value={entryText}
                   onChange={(e) => {
                     setEntryText(e.target.value.replace(/[^0-9.]/g, ''))
                     const v = Number(e.target.value)
-                    if (Number.isFinite(v) && v > 0) setPosition({ inPosition: true, entryPrice: v })
+                    if (Number.isFinite(v) && v > 0) setPosition({ state: position.state, entryPrice: v })
                   }}
-                  placeholder="Entry price $"
+                  placeholder={`${position.state === 'long' ? 'Long' : 'Short'} entry price $`}
                   className="mt-1.5 w-full rounded-lg border border-edge bg-raised px-2.5 py-1.5 text-sm outline-none focus:border-accent"
                 />
               )}
@@ -572,7 +600,9 @@ export default function LiveTradeCopilot(): React.JSX.Element {
             {/* verdict banner */}
             <section className="rounded-xl border border-edge bg-surface p-3">
               <div className={`rounded-xl px-4 py-5 text-center ${verdict ? ACTION_STYLE[verdict.action] : 'bg-raised text-muted'}`}>
-                <div className="text-3xl font-black tracking-wide">{verdict?.action ?? '—'}</div>
+                <div className="text-2xl font-black uppercase tracking-wide">
+                  {verdict ? ACTION_LABEL[verdict.action] : '—'}
+                </div>
                 {verdict && (
                   <div className="mt-1 text-xs font-medium opacity-90">
                     {verdict.bias} · confidence {verdict.confidence} · {fmtClock(verdict.t)}
@@ -686,7 +716,7 @@ export default function LiveTradeCopilot(): React.JSX.Element {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-[11px] text-muted">{fmtClock(item.t)}</span>
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${ACTION_STYLE[item.verdict!.action]}`}>
-                          {item.verdict!.action}
+                          {ACTION_LABEL[item.verdict!.action]}
                         </span>
                         <span className="text-[11px] text-muted">conf {item.verdict!.confidence}</span>
                         {item.verdict!.patterns.map((p, j) => (

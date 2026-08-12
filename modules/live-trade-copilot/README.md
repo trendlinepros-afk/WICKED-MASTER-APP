@@ -1,8 +1,27 @@
 # Live Trade Copilot
 
 Watches your **TradingView chart window live** — Firefox, or any window/screen —
-and calls **BUY / SELL / HOLD / WAIT** for 1–10 minute scalp holds, naming
+and calls position-explicit signals for 1–10 minute scalp holds, naming
 technical patterns as they form.
+
+## Signals vocabulary
+
+The six actions are **position-explicit** so nothing is ever ambiguous:
+
+| Signal | Meaning | When it can fire |
+|---|---|---|
+| **Buy Long** | enter a long now | flat only |
+| **Sell Long** | exit your long NOW | while long |
+| **Sell Short** | enter a short now | flat only |
+| **Buy to Cover** | cover your short NOW | while short |
+| **Hold Position** | stay in what you hold | while long or short |
+| **Wait** | no edge — stay flat | **flat only — never while in a position** |
+
+The **position control has three states** — Flat / Long @ $ / Short @ $ — and
+the prompt restricts the model to the legal answers for your state (a stray
+illegal answer is clamped: WAIT-in-position becomes Hold Position). Entries
+chime rising, exits/sells chime falling. In the hypothetical tracker, an
+opposite ENTRY while a signal is open counts as a reversal (close + open).
 
 ## How a session works
 

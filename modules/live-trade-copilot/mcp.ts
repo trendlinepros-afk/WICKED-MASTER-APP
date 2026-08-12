@@ -12,7 +12,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__status`,
       description:
-        'Read-only: whether a Live Trade Copilot session is running, which ticker it is watching, how many checks it has made, and the last BUY/SELL/HOLD/WAIT verdict with patterns and levels. Cannot start sessions or consume AI tokens.',
+        'Read-only: whether a Live Trade Copilot session is running, which ticker it is watching, how many checks it has made, and the last verdict (Buy Long / Sell Long / Sell Short / Buy to Cover / Hold Position / Wait) with patterns and levels. Cannot start sessions or consume AI tokens.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:status`)
     },
