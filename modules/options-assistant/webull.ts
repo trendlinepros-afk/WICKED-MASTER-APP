@@ -273,6 +273,84 @@ export async function optionSnapshots(keys: WebullKeys, occSymbols: string[]): P
   return out
 }
 
+export interface MinuteBar {
+  t: number
+  o: number
+  h: number
+  l: number
+  c: number
+  v: number
+}
+
+/**
+ * Last `count` 1-minute bars for a stock (oldest → newest), INCLUDING the
+ * still-forming bar (real_time_required). Field names and numeric types vary
+ * across Webull deployments, so parse tolerantly; timestamps normalize to ms.
+ */
+export async function getMinuteBars(keys: WebullKeys, symbol: string, count = 420): Promise<MinuteBar[]> {
+  const res = await webullGet(keys, '/openapi/market-data/stock/bars', {
+    symbol,
+    category: 'US_STOCK',
+    timespan: 'M1',
+    count: String(Math.max(1, Math.min(1200, count))),
+    real_time_required: 'true'
+  })
+  if (!res.ok) throw new Error(res.error)
+  const bars: MinuteBar[] = []
+  for (const row of rowsOf(res.data)) {
+    // some shapes nest the array under a per-symbol object
+    const nested = Array.isArray(row.bars) ? (row.bars as unknown[]).map(rec) : [row]
+    for (const b of nested) {
+      let t = fnum(b, 'timestamp', 'trade_time', 'time', 't')
+      if (t == null) {
+        const parsed = Date.parse(fstr(b, 'timestamp', 'trade_time', 'time'))
+        t = Number.isFinite(parsed) ? parsed : null
+      }
+      const c = fnum(b, 'close', 'c')
+      if (t == null || c == null) continue
+      if (t < 1e12) t *= 1000 // seconds → ms
+      bars.push({
+        t,
+        o: fnum(b, 'open', 'o') ?? c,
+        h: fnum(b, 'high', 'h') ?? c,
+        l: fnum(b, 'low', 'l') ?? c,
+        c,
+        v: fnum(b, 'volume', 'v') ?? 0
+      })
+    }
+  }
+  bars.sort((a, b) => a.t - b.t)
+  return bars
+}
+
+export interface Nbbo {
+  bid: number | null
+  ask: number | null
+  bidSize: number | null
+  askSize: number | null
+}
+
+/** Live top-of-book bid/ask for a stock (depth 1). */
+export async function getNbbo(keys: WebullKeys, symbol: string): Promise<Nbbo> {
+  const res = await webullGet(keys, '/openapi/market-data/stock/quotes', {
+    symbol,
+    category: 'US_STOCK',
+    depth: '1'
+  })
+  if (!res.ok) throw new Error(res.error)
+  const out: Nbbo = { bid: null, ask: null, bidSize: null, askSize: null }
+  for (const row of rowsOf(res.data)) {
+    const bids = Array.isArray(row.bids) ? (row.bids as unknown[]).map(rec) : []
+    const asks = Array.isArray(row.asks) ? (row.asks as unknown[]).map(rec) : []
+    out.bid = bids.length ? fnum(bids[0], 'price', 'p', 'bid') : (fnum(row, 'bid', 'bid_price', 'bidPrice') ?? out.bid)
+    out.ask = asks.length ? fnum(asks[0], 'price', 'p', 'ask') : (fnum(row, 'ask', 'ask_price', 'askPrice') ?? out.ask)
+    out.bidSize = bids.length ? fnum(bids[0], 'size', 'volume') : fnum(row, 'bid_size', 'bidSize')
+    out.askSize = asks.length ? fnum(asks[0], 'size', 'volume') : fnum(row, 'ask_size', 'askSize')
+    if (out.bid != null || out.ask != null) break
+  }
+  return out
+}
+
 export interface WebullWatchlist {
   id: string
   name: string

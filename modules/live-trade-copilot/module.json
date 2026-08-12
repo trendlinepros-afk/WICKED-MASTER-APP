@@ -1,0 +1,14 @@
+{
+  "id": "live-trade-copilot",
+  "name": "Live Trade Copilot",
+  "icon": "Crosshair",
+  "version": "1.0.0",
+  "description": "Watches your TradingView window live and calls BUY/SELL/HOLD/WAIT for 1-10 minute scalps, blending chart vision with live Webull 1-minute bars and NBBO",
+  "status": "beta",
+  "group": {
+    "id": "stocks",
+    "name": "Stocks",
+    "icon": "TrendingUp",
+    "description": "Stock trading tools — journal, analytics and research"
+  }
+}
