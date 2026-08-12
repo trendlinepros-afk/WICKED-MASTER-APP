@@ -40,8 +40,57 @@ export type AnalyzeResult =
       barsOk: boolean
       barsError?: string
       quote: QuoteLite | null
+      /** hypothetical trades opened/closed by this tick (close precedes open) */
+      signalEvents?: SignalEvent[]
     }
   | { ok: false; error: string }
+
+export type SignalDir = 'long' | 'short'
+export type CloseReason = 'flip' | 'timeout' | 'session-end'
+
+/** A hypothetical trade opened by a BUY/SELL flip, scored for the track record. */
+export interface Signal {
+  symbol: string
+  dir: SignalDir
+  entryT: number
+  /** null = vision-only tick (no live quote) — excluded from P/L stats */
+  entryP: number | null
+  exitT?: number
+  exitP?: number | null
+  /** long: (exit-entry)/entry*100 · short: (entry-exit)/entry*100 */
+  pct?: number | null
+  reason?: CloseReason
+  /** pattern names from the ENTRY verdict */
+  patterns: string[]
+  confidence: number
+}
+
+export interface SignalEvent {
+  type: 'open' | 'close'
+  signal: Signal
+}
+
+export interface DirStat {
+  count: number
+  winRate: number
+  avgPct: number
+}
+
+export interface PatternStat extends DirStat {
+  name: string
+}
+
+export interface Stats {
+  /** priced closed signals */
+  signals: number
+  unpriced: number
+  winRate: number
+  avgPct: number
+  netPct: number
+  long: DirStat
+  short: DirStat
+  patterns: PatternStat[]
+}
 
 export interface SessionSummary {
   symbol: string

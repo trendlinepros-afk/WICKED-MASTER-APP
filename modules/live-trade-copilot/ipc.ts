@@ -1,9 +1,30 @@
 import { desktopCapturer } from 'electron'
+import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
 import { getMinuteBars, getNbbo, type MinuteBar, type WebullKeys } from '../options-assistant/webull'
-import type { Action, AnalyzeResult, CopilotStatus, PositionState, QuoteLite, SessionSummary, Verdict } from './types'
+import { safeName, vaultRoot, writeNote } from '../the-brain/lib/brainStore'
+import {
+  computeStats,
+  parseLessons,
+  renderBrainMd,
+  renderSessionMd,
+  trackRecordDigest,
+  type SessionLogRow
+} from './brain'
+import type {
+  Action,
+  AnalyzeResult,
+  CloseReason,
+  CopilotStatus,
+  PositionState,
+  QuoteLite,
+  SessionSummary,
+  Signal,
+  SignalEvent,
+  Verdict
+} from './types'
 
 /**
  * LIVE TRADE COPILOT — main process.
@@ -24,12 +45,25 @@ import type { Action, AnalyzeResult, CopilotStatus, PositionState, QuoteLite, Se
 
 const ID = 'live-trade-copilot'
 const MEMORY_CAP = 10
+const LOG_CAP = 500
+const SIGNALS_CAP = 500
+const LESSONS_CAP = 30
+/** hypothetical trades auto-close after the user's max hold window */
+const SIGNAL_TIMEOUT_MS = 10 * 60_000
 
 interface Session {
   id: string
   symbol: string
   startedAt: number
+  model: string
   memory: { t: number; action: Action; confidence: number; oneLiner: string }[]
+  /** full transcript (every verdict) — feeds the session .md on stop */
+  log: SessionLogRow[]
+  openSignal: Signal | null
+  /** signals closed during this session */
+  signals: Signal[]
+  /** latest live price seen — used to close an open signal at session end */
+  lastQuote: number | null
   lastVerdict: (Verdict & { t: number }) | null
   verdictCount: number
 }
@@ -136,7 +170,50 @@ function liveDataBlock(bars: MinuteBar[], nbbo: QuoteLite): string {
 
 export default function register(ctx: ModuleIpcContext): void {
   const SESSIONS_KEY = `${ID}.sessions`
+  const SIGNALS_KEY = `${ID}.signals`
+  const LESSONS_KEY = `${ID}.lessons`
   let current: Session | null = null
+
+  /* ------------------------- signals & learning store ---------------------- */
+
+  const readSignals = (): Signal[] => {
+    const raw = ctx.storeGet<unknown[]>(SIGNALS_KEY, [])
+    return (Array.isArray(raw) ? raw : []) as Signal[]
+  }
+  const appendSignal = (sig: Signal): void => {
+    const list = readSignals()
+    list.unshift(sig)
+    ctx.storeSet(SIGNALS_KEY, list.slice(0, SIGNALS_CAP))
+  }
+  const readLessons = (): string[] => {
+    const raw = ctx.storeGet<unknown[]>(LESSONS_KEY, [])
+    return (Array.isArray(raw) ? raw : []).map(String)
+  }
+
+  /** Close the session's open hypothetical trade and persist it. */
+  const closeSignal = (session: Session, t: number, price: number | null, reason: CloseReason): Signal => {
+    const s = session.openSignal as Signal
+    s.exitT = t
+    s.exitP = price
+    s.pct =
+      s.entryP != null && price != null && s.entryP > 0
+        ? Math.round((s.dir === 'long' ? (price - s.entryP) / s.entryP : (s.entryP - price) / s.entryP) * 10000) / 100
+        : null
+    s.reason = reason
+    session.signals.push(s)
+    session.openSignal = null
+    appendSignal(s)
+    return s
+  }
+
+  /** Rewrite Brain.md from the store (stats + lessons) — best-effort. */
+  const rewriteBrainMd = (): void => {
+    try {
+      writeNote(ctx.app, 'Notes/Live Trade Copilot/Brain.md', renderBrainMd(computeStats(readSignals()), readLessons()))
+    } catch {
+      /* the Brain must never break the copilot */
+    }
+  }
 
   const webullKeys = (): WebullKeys | null => {
     const appKey = ctx.getApiKey('webull-app-key')
@@ -191,7 +268,12 @@ export default function register(ctx: ModuleIpcContext): void {
       id: `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       symbol,
       startedAt: Date.now(),
+      model: 'lite',
       memory: [],
+      log: [],
+      openSignal: null,
+      signals: [],
+      lastQuote: null,
       lastVerdict: null,
       verdictCount: 0
     }
@@ -236,9 +318,12 @@ export default function register(ctx: ModuleIpcContext): void {
       barsError = 'No ticker set — vision-only.'
     }
 
+    session.model = model
     const posLine = pos.inPosition
       ? `POSITION: LONG from $${Number(pos.entryPrice ?? 0).toFixed(2)} — exit management comes FIRST: HOLD = stay in, SELL = exit NOW.`
       : 'POSITION: FLAT — BUY = enter long now, SELL = short bias / do not buy, WAIT = no edge yet.'
+    // self-track-record + latest lessons make the copilot learn across sessions
+    const trackRecord = trackRecordDigest(computeStats(readSignals()), readLessons())
     const memoryBlock =
       session.memory.length > 0
         ? session.memory
@@ -256,14 +341,19 @@ export default function register(ctx: ModuleIpcContext): void {
         'Rules:',
         '- WAIT is the default. Call BUY or SELL only on concrete visible evidence, and name in `detail` what confirmed it (or what would).',
         '- Call out patterns (bull/bear flag, double top/bottom, VWAP reclaim/reject, break-and-retest, engulfing, higher-lows/lower-highs, range break) ONLY when the chart supports them, with status forming/confirmed/failed. Never invent a pattern to sound useful.',
+        '- Evaluate LONG and SHORT setups with EQUAL priority every check — a breakout, VWAP reclaim or higher-low is a BUY candidate exactly as a breakdown, rejection or lower-high is a SELL candidate. Do not default to the short side.',
+        '- Anti-whipsaw: never flip into a BUY or SELL you would plausibly reverse within a minute — if the next bar could negate your call, stay WAIT. If you DO flip away from a call made within your last 2 checks, state in `detail` exactly what changed.',
         '- Mind liquidity: a wide NBBO spread makes fast scalps expensive — factor it into confidence.',
         '- Stay consistent with YOUR RECENT CALLS below; if you flip, explain why in `detail`.',
         '- confidence is honest, 0-100.',
+        trackRecord,
         'YOUR RECENT CALLS (oldest first):',
         memoryBlock,
         'Respond with ONLY this JSON — no fences, no prose:',
         '{"action":"BUY|SELL|HOLD|WAIT","bias":"bullish|bearish|neutral","confidence":0,"patterns":[{"name":"","status":"forming|confirmed|failed"}],"levels":{"support":[],"resistance":[]},"one_liner":"<=120 chars","detail":"2-3 sentences","exit_hint":"target/stop or -"}'
-      ].join('\n')
+      ]
+        .filter(Boolean)
+        .join('\n')
     }
     const user: AiMessage = {
       role: 'user',
@@ -277,17 +367,127 @@ export default function register(ctx: ModuleIpcContext): void {
     if (!verdict) return { ok: false, error: 'The model returned unreadable output — skipping this tick.' }
 
     const t = Date.now()
+    const price = quote?.last ?? null
+    if (price != null) session.lastQuote = price
+    const prevAction = session.lastVerdict?.action ?? null
+
     session.memory.push({ t, action: verdict.action, confidence: verdict.confidence, oneLiner: verdict.oneLiner })
     if (session.memory.length > MEMORY_CAP) session.memory.splice(0, session.memory.length - MEMORY_CAP)
     session.lastVerdict = { ...verdict, t }
     session.verdictCount++
+    session.log.push({
+      t,
+      action: verdict.action,
+      confidence: verdict.confidence,
+      oneLiner: verdict.oneLiner,
+      detail: verdict.detail,
+      patterns: verdict.patterns,
+      levels: verdict.levels,
+      barsOk,
+      price
+    })
+    if (session.log.length > LOG_CAP) session.log.splice(0, session.log.length - LOG_CAP)
 
-    return { ok: true, verdict, t, provider: ai.provider, barsOk, barsError, quote }
+    // hypothetical trade tracking: BUY flip opens a long, SELL flip a short.
+    // Close on the opposite flip or the 10-minute scalp timeout (flip wins when
+    // both land on the same tick); HOLD/WAIT never close a signal.
+    const events: SignalEvent[] = []
+    const flip = verdict.action !== prevAction && (verdict.action === 'BUY' || verdict.action === 'SELL')
+    const open = session.openSignal
+    if (open) {
+      const oppositeFlip = flip && (verdict.action === 'BUY' ? open.dir === 'short' : open.dir === 'long')
+      if (oppositeFlip) events.push({ type: 'close', signal: closeSignal(session, t, price, 'flip') })
+      else if (t - open.entryT >= SIGNAL_TIMEOUT_MS)
+        events.push({ type: 'close', signal: closeSignal(session, t, price, 'timeout') })
+    }
+    if (flip && session.openSignal === null) {
+      session.openSignal = {
+        symbol: session.symbol,
+        dir: verdict.action === 'BUY' ? 'long' : 'short',
+        entryT: t,
+        entryP: price,
+        patterns: verdict.patterns.map((p) => p.name),
+        confidence: verdict.confidence
+      }
+      events.push({ type: 'open', signal: { ...session.openSignal } })
+    }
+
+    return { ok: true, verdict, t, provider: ai.provider, barsOk, barsError, quote, signalEvents: events.length ? events : undefined }
   })
 
   ctx.ipcMain.handle(`${ID}:stop-session`, (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
-    if (current && r.sessionId === current.id) current = null
+    let ended: Session | null = null
+    if (current && r.sessionId === current.id) {
+      ended = current
+      current = null
+    }
+    if (ended) {
+      // close any open hypothetical at the last seen price, then write the
+      // session transcript + refreshed Brain.md into The Brain vault (both
+      // best-effort — a vault failure must never break Stop)
+      if (ended.openSignal) closeSignal(ended, Date.now(), ended.lastQuote, 'session-end')
+      if (ended.log.length > 0) {
+        try {
+          const d = new Date(ended.startedAt)
+          const p = (n: number): string => String(n).padStart(2, '0')
+          const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}`
+          const name = safeName(`${stamp} ${ended.symbol || 'NO-TICKER'}`, 'session')
+          writeNote(
+            ctx.app,
+            `Notes/Live Trade Copilot/Sessions/${name}.md`,
+            renderSessionMd(
+              {
+                symbol: ended.symbol,
+                startedAt: ended.startedAt,
+                endedAt: Date.now(),
+                model: ended.model,
+                checks: ended.verdictCount
+              },
+              ended.signals,
+              ended.log
+            )
+          )
+        } catch {
+          /* vault write failed — session summary below still persists */
+        }
+        rewriteBrainMd()
+        // fire-and-forget: distill 2-4 lessons from this session's outcomes
+        if (ended.signals.length > 0) {
+          const sess = ended
+          void (async (): Promise<void> => {
+            const sigLines = sess.signals
+              .map(
+                (s) =>
+                  `${s.dir} entry ${s.entryP ?? 'n/a'} exit ${s.exitP ?? 'n/a'} pct ${s.pct ?? 'n/a'} close=${s.reason} conf=${s.confidence} patterns=[${s.patterns.join(', ')}]`
+              )
+              .join('\n')
+            const logLines = sess.log
+              .slice(-40)
+              .map((l) => `${new Date(l.t).toLocaleTimeString('en-US', { hour12: false })} ${l.action} ${l.confidence} ${l.oneLiner}`)
+              .join('\n')
+            const ai = await callAi(
+              aiKeys(),
+              [
+                {
+                  role: 'system',
+                  text: 'You are reviewing your own live scalp-call performance to extract durable lessons for future sessions. Write 2-4 short bullet lessons — each ONE actionable rule under 200 characters (e.g. about whipsaw flips, pattern reliability, spread awareness, long/short balance). Output ONLY the bullets, one per line, starting with "-".'
+                },
+                { role: 'user', text: `SYMBOL ${sess.symbol}\nSIGNAL OUTCOMES:\n${sigLines}\n\nCALL LOG (recent):\n${logLines}` }
+              ],
+              { tier: 'lite' }
+            )
+            if (!ai.ok) return
+            const fresh = parseLessons(ai.text)
+            if (fresh.length === 0) return
+            const stamp = new Date().toISOString().slice(0, 10)
+            const list = [...fresh.map((l) => `${stamp}: ${l}`), ...readLessons()].slice(0, LESSONS_CAP)
+            ctx.storeSet(LESSONS_KEY, list)
+            rewriteBrainMd()
+          })().catch(() => undefined)
+        }
+      }
+    }
     const s = (typeof r.summary === 'object' && r.summary !== null ? r.summary : null) as SessionSummary | null
     if (s && s.symbol != null && Number(s.verdictCount) > 0) {
       const hist = ctx.storeGet<unknown[]>(SESSIONS_KEY, [])
@@ -311,11 +511,22 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, sessions: (Array.isArray(hist) ? hist : []).slice(0, 20) }
   })
 
+  /** Consolidated track record: every closed signal + computed stats. */
+  ctx.ipcMain.handle(`${ID}:get-analytics`, () => {
+    const signals = readSignals()
+    return { ok: true, stats: computeStats(signals), signals: signals.slice(0, 100) }
+  })
+
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => [
     {
-      label: 'Session history',
+      label: 'Session history + signal track record',
       path: null,
-      note: 'Stored in the shared module store (live-trade-copilot.sessions key)'
+      note: 'Shared module store keys: live-trade-copilot.sessions / .signals / .lessons'
+    },
+    {
+      label: 'Session transcripts & learning brain',
+      path: join(vaultRoot(ctx.app), 'Notes', 'Live Trade Copilot'),
+      note: 'Markdown in The Brain vault — Sessions/*.md per session + Brain.md (stats & lessons). Included in Backup & Cloud Sync.'
     }
   ])
 }

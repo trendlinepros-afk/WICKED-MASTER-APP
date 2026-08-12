@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  ArrowLeft,
+  BarChart3,
   Crosshair,
   Loader2,
   MonitorPlay,
+  Pause,
   Play,
   RefreshCw,
   Square,
@@ -12,7 +15,7 @@ import {
   X
 } from 'lucide-react'
 import { ModuleTitle } from '@/shell/moduleContext'
-import type { Action, AnalyzeResult, PositionState, SessionSummary, Verdict } from './types'
+import type { Action, AnalyzeResult, PositionState, SessionSummary, Signal, Stats, Verdict } from './types'
 
 /**
  * LIVE TRADE COPILOT — renderer.
@@ -43,11 +46,12 @@ interface SourceInfo {
 
 interface FeedItem {
   t: number
-  kind: 'verdict' | 'system'
+  kind: 'verdict' | 'system' | 'signal'
   verdict?: Verdict
   provider?: string
   barsOk?: boolean
   text?: string
+  tone?: 'open' | 'win' | 'loss' | 'flat'
 }
 
 const fmtClock = (ms: number): string => new Date(ms).toLocaleTimeString(undefined, { hour12: false })
@@ -102,6 +106,8 @@ export default function LiveTradeCopilot(): React.JSX.Element {
   const [cost, setCost] = useState(0)
   const [history, setHistory] = useState<SessionSummary[]>([])
   const [error, setError] = useState('')
+  const [view, setView] = useState<'live' | 'analytics'>('live')
+  const [analytics, setAnalytics] = useState<{ stats: Stats; signals: Signal[] } | null>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -129,6 +135,11 @@ export default function LiveTradeCopilot(): React.JSX.Element {
   const loadHistory = async (): Promise<void> => {
     const res = (await invoke('get-history')) as { ok?: boolean; sessions?: SessionSummary[] }
     if (res.ok) setHistory(res.sessions ?? [])
+  }
+
+  const loadAnalytics = async (): Promise<void> => {
+    const res = (await invoke('get-analytics')) as { ok?: boolean; stats?: Stats; signals?: Signal[] }
+    if (res.ok && res.stats) setAnalytics({ stats: res.stats, signals: res.signals ?? [] })
   }
 
   useEffect(() => {
@@ -244,6 +255,25 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         setVerdict({ ...res.verdict, t: res.t })
         setBarsWarn(res.barsOk ? '' : (res.barsError ?? 'No live bars — vision only.'))
         pushFeed({ t: res.t, kind: 'verdict', verdict: res.verdict, provider: res.provider, barsOk: res.barsOk })
+        // hypothetical trade markers: entry price on flips, % on closes
+        for (const ev of res.signalEvents ?? []) {
+          const s = ev.signal
+          if (ev.type === 'open') {
+            pushFeed({
+              t: res.t,
+              kind: 'signal',
+              tone: 'open',
+              text: `▶ ${s.dir} opened ${s.entryP != null ? `@${s.entryP.toFixed(2)}` : '(no price)'}`
+            })
+          } else {
+            pushFeed({
+              t: res.t,
+              kind: 'signal',
+              tone: s.pct == null ? 'flat' : s.pct > 0 ? 'win' : s.pct < 0 ? 'loss' : 'flat',
+              text: `✔ ${s.dir} closed ${s.pct != null ? `${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%` : '(no price)'} (${s.reason})`
+            })
+          }
+        }
         const prev = lastActionRef.current
         const act = res.verdict.action
         if (act !== prev && (act === 'BUY' || act === 'SELL')) {
@@ -316,6 +346,14 @@ export default function LiveTradeCopilot(): React.JSX.Element {
     void tick()
   }
 
+  const pauseSession = (): void => {
+    if (!sessionIdRef.current) return
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = null
+    setPaused(true)
+    sys('Paused — session memory, signals and feed are kept. Resume when ready.')
+  }
+
   const resumeSession = (): void => {
     if (!sessionIdRef.current) return
     failsRef.current = 0
@@ -344,8 +382,9 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         note: barsWarn ? 'vision-only' : undefined
       }
       await invoke('stop-session', { sessionId: id, summary })
-      sys('Session stopped.')
+      sys('Session stopped — transcript saved to The Brain.')
       void loadHistory()
+      void loadAnalytics()
     }
   }
 
@@ -503,12 +542,21 @@ export default function LiveTradeCopilot(): React.JSX.Element {
                     </button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => void stopSession()}
-                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-danger/60 px-3 py-2.5 text-sm font-semibold text-danger hover:bg-danger/10"
-                  >
-                    <Square size={15} /> Stop session
-                  </button>
+                  <div className="mt-3 grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={pauseSession}
+                      title="Pause the checks — everything (memory, signals, feed) is kept for Resume"
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-edge px-3 py-2.5 text-sm font-semibold hover:border-accent/60"
+                    >
+                      <Pause size={14} /> Pause
+                    </button>
+                    <button
+                      onClick={() => void stopSession()}
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-danger/60 px-3 py-2.5 text-sm font-semibold text-danger hover:bg-danger/10"
+                    >
+                      <Square size={14} /> Stop
+                    </button>
+                  </div>
                 )
               ) : (
                 <button
@@ -563,9 +611,34 @@ export default function LiveTradeCopilot(): React.JSX.Element {
             )}
           </div>
 
-          {/* right: preview + callouts */}
+          {/* right: preview + callouts, or analytics */}
           <div className="flex min-h-0 flex-col gap-3">
-            <div className="rounded-xl border border-edge bg-surface p-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-muted">{view === 'analytics' ? 'Analytics — signal track record' : 'Live view'}</h2>
+              <button
+                onClick={() => {
+                  if (view === 'live') {
+                    void loadAnalytics()
+                    setView('analytics')
+                  } else setView('live')
+                }}
+                className="flex items-center gap-1.5 rounded-lg border border-edge px-3 py-1.5 text-xs font-medium hover:border-accent/60"
+              >
+                {view === 'live' ? (
+                  <>
+                    <BarChart3 size={13} /> Analytics
+                  </>
+                ) : (
+                  <>
+                    <ArrowLeft size={13} /> Back to live
+                  </>
+                )}
+              </button>
+            </div>
+            {view === 'analytics' && <AnalyticsPanel data={analytics} />}
+            {/* the live view is HIDDEN (never unmounted) in analytics — grabFrame
+                reads the <video>, so a running session keeps ticking */}
+            <div className={`rounded-xl border border-edge bg-surface p-2 ${view === 'analytics' ? 'hidden' : ''}`}>
               <video
                 ref={videoRef}
                 muted
@@ -579,7 +652,7 @@ export default function LiveTradeCopilot(): React.JSX.Element {
                 </p>
               )}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-edge bg-surface p-3">
+            <div className={`min-h-0 flex-1 overflow-y-auto rounded-xl border border-edge bg-surface p-3 ${view === 'analytics' ? 'hidden' : ''}`}>
               <h2 className="text-sm font-semibold">Callouts</h2>
               {feed.length === 0 && (
                 <p className="mt-2 text-xs text-muted">
@@ -592,6 +665,21 @@ export default function LiveTradeCopilot(): React.JSX.Element {
                   item.kind === 'system' ? (
                     <p key={i} className="text-[11px] text-muted">
                       {fmtClock(item.t)} — {item.text}
+                    </p>
+                  ) : item.kind === 'signal' ? (
+                    <p
+                      key={i}
+                      className={`text-xs font-semibold ${
+                        item.tone === 'win'
+                          ? 'text-ok'
+                          : item.tone === 'loss'
+                            ? 'text-danger'
+                            : item.tone === 'open'
+                              ? 'text-accent'
+                              : 'text-muted'
+                      }`}
+                    >
+                      {fmtClock(item.t)} {item.text}
                     </p>
                   ) : (
                     <div key={i} className="rounded-lg border border-edge bg-raised p-2.5">
@@ -633,6 +721,7 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         </div>
       </div>
 
+      {/* analytics panel is rendered inside the right column (see above) */}
       {/* window picker modal */}
       {sources !== null && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 p-6" onClick={() => setSources(null)}>
@@ -673,6 +762,134 @@ export default function LiveTradeCopilot(): React.JSX.Element {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/* ------------------------------ analytics panel ---------------------------- */
+
+const pct = (n: number | null | undefined): string =>
+  n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
+
+function AnalyticsPanel({ data }: { data: { stats: Stats; signals: Signal[] } | null }): React.JSX.Element {
+  if (!data)
+    return (
+      <div className="flex items-center justify-center rounded-xl border border-edge bg-surface p-10 text-sm text-muted">
+        <Loader2 size={15} className="mr-2 animate-spin" /> Loading track record…
+      </div>
+    )
+  const { stats, signals } = data
+  if (stats.signals === 0 && stats.unpriced === 0)
+    return (
+      <div className="rounded-xl border border-edge bg-surface p-10 text-center text-sm text-muted">
+        No signals recorded yet — run sessions and every BUY/SELL flip gets scored here (closed on the opposite flip,
+        a 10-minute timeout, or session end).
+      </div>
+    )
+
+  // cumulative % curve, oldest → newest priced signals
+  const priced = [...signals].filter((s) => s.pct != null).sort((a, b) => (a.exitT ?? 0) - (b.exitT ?? 0))
+  let run = 0
+  const curve = priced.map((s) => (run += s.pct ?? 0))
+  const W = 260
+  const H = 48
+  const min = Math.min(0, ...curve)
+  const max = Math.max(0, ...curve)
+  const span = max - min || 1
+  const pts = curve.map((v, i) => `${(i / Math.max(1, curve.length - 1)) * W},${H - ((v - min) / span) * H}`).join(' ')
+  const zeroY = H - ((0 - min) / span) * H
+
+  const card = (label: string, value: string, tone?: 'ok' | 'danger'): React.JSX.Element => (
+    <div className="rounded-lg border border-edge bg-raised px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+      <p className={`text-lg font-bold ${tone === 'ok' ? 'text-ok' : tone === 'danger' ? 'text-danger' : ''}`}>{value}</p>
+    </div>
+  )
+
+  return (
+    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+      <div className="rounded-xl border border-edge bg-surface p-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {card('Signals', `${stats.signals}${stats.unpriced ? ` (+${stats.unpriced} unpriced)` : ''}`)}
+          {card('Win rate', `${stats.winRate}%`, stats.winRate >= 50 ? 'ok' : 'danger')}
+          {card('Avg / signal', pct(stats.avgPct), stats.avgPct >= 0 ? 'ok' : 'danger')}
+          {card('Net cumulative', pct(stats.netPct), stats.netPct >= 0 ? 'ok' : 'danger')}
+          {card('Long / Short', `${stats.long.winRate}% · ${stats.short.winRate}%`)}
+        </div>
+        {curve.length >= 2 && (
+          <div className="mt-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Cumulative % over signals</p>
+            <svg viewBox={`0 0 ${W} ${H}`} className="mt-1 h-14 w-full" preserveAspectRatio="none">
+              <line x1={0} y1={zeroY} x2={W} y2={zeroY} className="stroke-current text-edge" strokeWidth={1} />
+              <polyline
+                points={pts}
+                fill="none"
+                strokeWidth={1.6}
+                className={`stroke-current ${stats.netPct >= 0 ? 'text-ok' : 'text-danger'}`}
+              />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      {stats.patterns.length > 0 && (
+        <div className="rounded-xl border border-edge bg-surface p-3">
+          <h3 className="text-sm font-semibold">By pattern (at entry)</h3>
+          <table className="mt-2 w-full text-xs">
+            <thead>
+              <tr className="text-left text-muted">
+                <th className="py-1 pr-2 font-medium">Pattern</th>
+                <th className="py-1 pr-2 text-right font-medium">Signals</th>
+                <th className="py-1 pr-2 text-right font-medium">Win %</th>
+                <th className="py-1 text-right font-medium">Avg %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.patterns.map((p) => (
+                <tr key={p.name} className="border-t border-edge">
+                  <td className="py-1 pr-2">{p.name}</td>
+                  <td className="py-1 pr-2 text-right">{p.count}</td>
+                  <td className="py-1 pr-2 text-right">{p.winRate}</td>
+                  <td className={`py-1 text-right ${p.avgPct >= 0 ? 'text-ok' : 'text-danger'}`}>{pct(p.avgPct)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-edge bg-surface p-3">
+        <h3 className="text-sm font-semibold">Recent signals</h3>
+        <table className="mt-2 w-full text-xs">
+          <thead>
+            <tr className="text-left text-muted">
+              <th className="py-1 pr-2 font-medium">When</th>
+              <th className="py-1 pr-2 font-medium">Ticker</th>
+              <th className="py-1 pr-2 font-medium">Dir</th>
+              <th className="py-1 pr-2 font-medium">Entry → Exit</th>
+              <th className="py-1 pr-2 text-right font-medium">%</th>
+              <th className="py-1 font-medium">Close</th>
+            </tr>
+          </thead>
+          <tbody>
+            {signals.map((s, i) => (
+              <tr key={i} className="border-t border-edge">
+                <td className="py-1 pr-2 text-muted">{new Date(s.entryT).toLocaleString()}</td>
+                <td className="py-1 pr-2 font-semibold">{s.symbol || '(no ticker)'}</td>
+                <td className="py-1 pr-2">{s.dir}</td>
+                <td className="py-1 pr-2">
+                  {s.entryP != null ? `$${s.entryP.toFixed(2)}` : 'no price'} →{' '}
+                  {s.exitP != null ? `$${s.exitP.toFixed(2)}` : 'no price'}
+                </td>
+                <td className={`py-1 pr-2 text-right font-semibold ${s.pct == null ? 'text-muted' : s.pct >= 0 ? 'text-ok' : 'text-danger'}`}>
+                  {pct(s.pct)}
+                </td>
+                <td className="py-1 text-muted">{s.reason ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

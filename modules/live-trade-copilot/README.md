@@ -30,7 +30,53 @@ technical patterns as they form.
 6. **Chime** (WebAudio, no assets): two rising notes when the call flips into
    BUY, two falling for SELL. Toggleable.
 
+## Signal tracking & hypothetical P/L
+
+Every flip **into BUY** marks a hypothetical **long entry** at that tick's live
+price; a flip **into SELL** marks a **short entry**. The trade closes on the
+**opposite flip**, a **10-minute timeout** (the max scalp hold), or **session
+end** — whichever comes first — and the % gain/loss is computed (a falling
+price on a short counts as a gain). Openings and closes appear in the feed
+(`▶ long opened @217.45` / `✔ short closed +0.62% (flip)`). Vision-only ticks
+(no live quote) record the signal "(no price)" and stay out of the stats.
+Closed signals persist (`live-trade-copilot.signals`, newest 500).
+
+## Pause / Resume
+
+**Pause** (next to Stop) halts the checks but keeps everything — session
+memory, open signal, feed. **Resume** continues where it left off. A paused
+open signal past its 10-minute window closes on the first check after resume.
+The 60-minute session cap counts wall-clock time, paused or not.
+
+## Analytics
+
+The **Analytics** button above the capture window switches the right panel to
+the consolidated track record: signals / win rate / avg % / net cumulative % /
+long-short split cards, a cumulative-% sparkline, per-pattern win rates, and
+the recent-signals table. Works idle or mid-session (the capture keeps running
+underneath).
+
+## The Brain — transcripts & learning
+
+- On every **Stop**, the full session is written as markdown into **The Brain
+  vault**: `Notes/Live Trade Copilot/Sessions/<date> <ticker>.md` (signals
+  table + complete verdict log). Browsable in The Brain, searchable via
+  `the-brain__search`, and **included in Backup & Cloud Sync**.
+- `Notes/Live Trade Copilot/Brain.md` holds the copilot's accumulated
+  knowledge: a STATS section (recomputed every session from the signal store)
+  and a LESSONS section — after each session that fired signals, a cheap AI
+  review distills 2-4 dated bullet lessons (e.g. about whipsaw flips or
+  unreliable patterns).
+- **The learning loop closes at analysis time**: each check's prompt includes
+  the track record digest (win rates overall/by side, best/worst patterns) and
+  the latest lessons, so the copilot calibrates against its own history.
+
 ## Guard rails
+
+- The prompt demands **equal priority for LONG and SHORT setups** (a breakout
+  or VWAP reclaim is a BUY candidate exactly as a breakdown is a SELL) and has
+  an explicit **anti-whipsaw rule**: never flip into a call you'd plausibly
+  reverse within a minute — reversals within 2 checks must state what changed.
 
 - WAIT is the model's default — it's instructed to only call BUY/SELL on
   concrete evidence and never to invent patterns.
@@ -58,5 +104,6 @@ technical patterns as they form.
 
 ## MCP
 
-- `live-trade-copilot__status` — read-only session/verdict probe. The vision
-  loop consumes AI keys and stays off MCP.
+- `live-trade-copilot__status` — read-only session/verdict probe.
+- `live-trade-copilot__analytics` — read-only track record (win rates, per
+  pattern, recent signals). No AI tokens. The vision loop stays off MCP.

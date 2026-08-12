@@ -15,6 +15,13 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         'Read-only: whether a Live Trade Copilot session is running, which ticker it is watching, how many checks it has made, and the last BUY/SELL/HOLD/WAIT verdict with patterns and levels. Cannot start sessions or consume AI tokens.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:status`)
+    },
+    {
+      name: `${ID}__analytics`,
+      description:
+        'Read-only: the copilot\'s hypothetical P/L track record across all sessions — win rate, avg and net %, long vs short split, per-pattern stats, and recent signals (entry/exit price, %, close reason). Computed locally from the stored signals; consumes no AI tokens.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:get-analytics`)
     }
   ]
 }
