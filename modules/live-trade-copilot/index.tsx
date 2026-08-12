@@ -274,7 +274,11 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         setVerdict({ ...res.verdict, t: res.t })
         setBarsWarn(res.barsOk ? '' : (res.barsError ?? 'No live bars — vision only.'))
         pushFeed({ t: res.t, kind: 'verdict', verdict: res.verdict, provider: res.provider, barsOk: res.barsOk })
-        // hypothetical trade markers: entry price on flips, % on closes
+        // hypothetical trade markers: entry price on signals, % on closes.
+        // The position toggle AUTO-FOLLOWS the copilot's own signals so the
+        // very next check is gated to Hold/exit vocabulary (never Wait while
+        // its own trade is on). Manual clicks still override; timeout and
+        // session-end closes are scoring artifacts and do NOT flip the toggle.
         for (const ev of res.signalEvents ?? []) {
           const s = ev.signal
           if (ev.type === 'open') {
@@ -284,6 +288,9 @@ export default function LiveTradeCopilot(): React.JSX.Element {
               tone: 'open',
               text: `▶ ${s.dir} opened ${s.entryP != null ? `@${s.entryP.toFixed(2)}` : '(no price)'}`
             })
+            setPosition({ state: s.dir, entryPrice: s.entryP ?? undefined })
+            setEntryText(s.entryP != null ? s.entryP.toFixed(2) : '')
+            sys(`Position auto-set: ${s.dir}${s.entryP != null ? ` @${s.entryP.toFixed(2)}` : ''} — click Flat if you didn't take it.`)
           } else {
             pushFeed({
               t: res.t,
@@ -291,6 +298,11 @@ export default function LiveTradeCopilot(): React.JSX.Element {
               tone: s.pct == null ? 'flat' : s.pct > 0 ? 'win' : s.pct < 0 ? 'loss' : 'flat',
               text: `✔ ${s.dir} closed ${s.pct != null ? `${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%` : '(no price)'} (${s.reason})`
             })
+            if (s.reason === 'signal') {
+              setPosition({ state: 'flat' })
+              setEntryText('')
+              sys('Position auto-set: flat.')
+            }
           }
         }
         const prev = lastActionRef.current
@@ -509,7 +521,7 @@ export default function LiveTradeCopilot(): React.JSX.Element {
               </div>
 
               <div className="mt-3 flex items-center justify-between">
-                <span className="text-xs font-medium text-muted">Chime on BUY/SELL flips</span>
+                <span className="text-xs font-medium text-muted">Chime on signals</span>
                 <button
                   onClick={() => setSoundOn((v) => !v)}
                   className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${soundOn ? 'border-accent text-accent' : 'border-edge text-muted'}`}
@@ -519,7 +531,9 @@ export default function LiveTradeCopilot(): React.JSX.Element {
               </div>
 
               {/* position state */}
-              <label className="mt-3 block text-xs font-medium text-muted">Your position (advice adapts)</label>
+              <label className="mt-3 block text-xs font-medium text-muted">
+                Your position (auto-follows signals — click to override)
+              </label>
               <div className="mt-1 grid grid-cols-3 gap-1.5">
                 <button
                   onClick={() => setPosState('flat')}

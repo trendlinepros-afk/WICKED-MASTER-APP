@@ -23,6 +23,14 @@ illegal answer is clamped: WAIT-in-position becomes Hold Position). Entries
 chime rising, exits/sells chime falling. In the hypothetical tracker, an
 opposite ENTRY while a signal is open counts as a reversal (close + open).
 
+**Position auto-follow.** The toggle follows the copilot's own signals: a
+**Buy Long / Sell Short** call auto-sets it to Long/Short with the entry price
+filled, so the very next check is already gated to *Hold Position / exit* —
+the copilot can never say Wait while its own trade is on. An explicit **Sell
+Long / Buy to Cover** flips it back to Flat. Manual clicks always override
+(click Flat if you didn't take the trade). Tracker timeouts and session-end
+closes are scoring artifacts and do **not** move the toggle.
+
 ## How a session works
 
 1. **Pick window to watch** — a thumbnail grid of every open window (Electron

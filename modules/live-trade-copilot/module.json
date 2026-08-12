@@ -2,7 +2,7 @@
   "id": "live-trade-copilot",
   "name": "Live Trade Copilot",
   "icon": "Crosshair",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Watches your TradingView window live and calls position-explicit signals (Buy Long, Sell Long, Sell Short, Buy to Cover, Hold, Wait) for 1-10 minute scalps, blending chart vision with live Webull 1-minute bars and NBBO",
   "status": "beta",
   "group": {
