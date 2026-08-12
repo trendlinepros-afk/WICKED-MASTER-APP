@@ -62,6 +62,8 @@ interface State {
   provider: string
   models: ModelOption[]
   input: string
+  /** pasted screenshots (data URLs) waiting to be sent, max 3 */
+  pendingImages: string[]
   streaming: boolean
   liveText: string
   liveTools: LiveTool[]
@@ -78,6 +80,8 @@ interface State {
   archive: (id: string, archived: boolean) => Promise<void>
   remove: (id: string) => Promise<void>
   setInput: (v: string) => void
+  addImages: (urls: string[]) => void
+  removeImage: (index: number) => void
   send: () => Promise<void>
   stop: () => void
   respondX: (approved: boolean) => Promise<void>
@@ -95,6 +99,7 @@ export const useAdvisor = create<State>((set, get) => ({
   provider: 'anthropic',
   models: [],
   input: '',
+  pendingImages: [],
   streaming: false,
   liveText: '',
   liveTools: [],
@@ -183,10 +188,14 @@ export const useAdvisor = create<State>((set, get) => ({
 
   setInput: (v) => set({ input: v }),
 
+  addImages: (urls) => set({ pendingImages: [...get().pendingImages, ...urls].slice(0, 3) }),
+  removeImage: (index) => set({ pendingImages: get().pendingImages.filter((_, i) => i !== index) }),
+
   send: async () => {
     const text = get().input.trim()
+    const images = get().pendingImages
     const convo = get().convo
-    if (!text || !convo || get().streaming) return
+    if ((!text && images.length === 0) || !convo || get().streaming) return
     if (!get().hasKey) {
       set({ error: 'No Anthropic API key set. Add one in Settings → API Keys.' })
       return
@@ -195,11 +204,21 @@ export const useAdvisor = create<State>((set, get) => ({
     // optimistic user message
     const optimistic: Conversation = {
       ...convo,
-      title: convo.title === 'New chat' ? text.slice(0, 48) : convo.title,
-      messages: [...convo.messages, { role: 'user', text, ts: Date.now() }]
+      title: convo.title === 'New chat' ? (text || 'Screenshot').slice(0, 48) : convo.title,
+      messages: [...convo.messages, { role: 'user', text, ts: Date.now(), ...(images.length ? { images } : {}) }]
     }
-    set({ convo: optimistic, input: '', streaming: true, liveText: '', liveTools: [], xGate: null, error: '', reqId })
-    const res = await invoke<OneRes>('send', reqId, convo.id, text)
+    set({
+      convo: optimistic,
+      input: '',
+      pendingImages: [],
+      streaming: true,
+      liveText: '',
+      liveTools: [],
+      xGate: null,
+      error: '',
+      reqId
+    })
+    const res = await invoke<OneRes>('send', reqId, convo.id, text, images)
     if (res.ok && res.conversation) {
       set({ convo: res.conversation, streaming: false, liveText: '', liveTools: [], xGate: null, reqId: null })
       await get().refreshMetas()
@@ -214,7 +233,9 @@ export const useAdvisor = create<State>((set, get) => ({
         reqId: null,
         error: res.error ?? 'Something went wrong.',
         ...(res.conversation ? { convo: res.conversation } : {}),
-        input: get().input.trim() ? get().input : res.restore ?? ''
+        input: get().input.trim() ? get().input : (res.restore ?? ''),
+        // a failed turn must not eat the pasted screenshots either
+        pendingImages: get().pendingImages.length > 0 ? get().pendingImages : images
       })
       await get().refreshMetas()
     }

@@ -51,6 +51,33 @@ function modelShort(id: string): string {
   return id
 }
 
+/** Read a pasted/dropped image file and downscale big screenshots (longest
+ *  edge 1568px, JPEG) so they stay friendly to the vision models. */
+const fileToDataUrl = (file: File): Promise<string | null> =>
+  new Promise((resolve) => {
+    const fr = new FileReader()
+    fr.onerror = () => resolve(null)
+    fr.onload = () => {
+      const raw = String(fr.result ?? '')
+      const img = new Image()
+      img.onerror = () => resolve(raw || null)
+      img.onload = () => {
+        const MAX = 1568
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height))
+        if (scale === 1 && raw.length < 2_000_000) return resolve(raw)
+        const cv = document.createElement('canvas')
+        cv.width = Math.max(1, Math.round(img.width * scale))
+        cv.height = Math.max(1, Math.round(img.height * scale))
+        const c2d = cv.getContext('2d')
+        if (!c2d) return resolve(raw)
+        c2d.drawImage(img, 0, 0, cv.width, cv.height)
+        resolve(cv.toDataURL('image/jpeg', 0.88))
+      }
+      img.src = raw
+    }
+    fr.readAsDataURL(file)
+  })
+
 const mdCls =
   'leading-relaxed [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5 ' +
   '[&_code]:rounded [&_code]:bg-raised [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.85em] [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg ' +
@@ -148,6 +175,13 @@ function Bubble({ msg }: { msg: ChatMessage }): React.JSX.Element {
               : 'rounded-2xl rounded-tl-sm border border-edge bg-surface px-3.5 py-2'
           }
         >
+          {isUser && msg.images && msg.images.length > 0 && (
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {msg.images.map((src, j) => (
+                <img key={j} src={src} alt="pasted screenshot" className="max-h-44 rounded-lg" />
+              ))}
+            </div>
+          )}
           {isUser ? msg.text : renderRich(msg.text)}
         </div>
         {!isUser && msg.costUsd != null && msg.usage && (
@@ -292,6 +326,34 @@ export default function AiAdvisor(): React.JSX.Element {
     }
   }
 
+  /* --------------------------- pasted screenshots -------------------------- */
+
+  const addImageFiles = async (files: File[]): Promise<void> => {
+    const urls: string[] = []
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue
+      const url = await fileToDataUrl(f)
+      if (url) urls.push(url)
+    }
+    if (urls.length > 0) s.addImages(urls)
+  }
+
+  const onChatPaste = (e: React.ClipboardEvent): void => {
+    const files = [...e.clipboardData.items]
+      .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null)
+    if (files.length > 0) {
+      e.preventDefault()
+      void addImageFiles(files)
+    }
+  }
+
+  const onChatDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    void addImageFiles([...e.dataTransfer.files])
+  }
+
   const messages = s.convo?.messages ?? []
   const showLive = s.streaming || s.liveText || s.liveTools.length > 0 || s.xGate
 
@@ -417,8 +479,14 @@ export default function AiAdvisor(): React.JSX.Element {
         </div>
       </aside>
 
-      {/* chat */}
-      <main ref={mainRef} className="flex min-w-0 flex-1 flex-col bg-bg">
+      {/* chat — paste (Ctrl+V) or drop screenshots anywhere in this pane */}
+      <main
+        ref={mainRef}
+        className="flex min-w-0 flex-1 flex-col bg-bg"
+        onPaste={onChatPaste}
+        onDrop={onChatDrop}
+        onDragOver={(e) => e.preventDefault()}
+      >
         <header className="flex items-center gap-2 border-b border-edge px-4 py-2.5">
           <Bot size={18} className="text-accent" />
           <div className="min-w-0">
@@ -549,6 +617,22 @@ export default function AiAdvisor(): React.JSX.Element {
 
         {/* composer */}
         <div className="border-t border-edge bg-surface p-3">
+          {s.pendingImages.length > 0 && (
+            <div className="mx-auto mb-2 flex flex-wrap gap-2" style={{ maxWidth: colMax }} data-noprint>
+              {s.pendingImages.map((src, i) => (
+                <span key={i} className="relative">
+                  <img src={src} alt="attached screenshot" className="h-14 w-14 rounded-lg border border-edge object-cover" />
+                  <button
+                    onClick={() => s.removeImage(i)}
+                    title="Remove"
+                    className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-white"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="mx-auto flex items-end gap-2" style={{ maxWidth: colMax }}>
             <textarea
               ref={taRef}
@@ -558,7 +642,9 @@ export default function AiAdvisor(): React.JSX.Element {
               rows={1}
               disabled={!s.hasKey}
               style={{ fontSize: fontPx }}
-              placeholder={s.hasKey ? 'Ask about your trades, a ticker, the market…' : 'Add an Anthropic key to start'}
+              placeholder={
+                s.hasKey ? 'Ask about your trades, a ticker, the market… (paste screenshots with Ctrl+V)' : 'Add an Anthropic key to start'
+              }
               className="max-h-40 min-h-[46px] flex-1 resize-none rounded-xl border border-edge bg-raised px-3 py-2.5 outline-none focus:border-accent disabled:opacity-50"
             />
             {s.streaming ? (
@@ -572,7 +658,7 @@ export default function AiAdvisor(): React.JSX.Element {
             ) : (
               <button
                 onClick={() => void s.send()}
-                disabled={!s.input.trim() || !s.hasKey}
+                disabled={(!s.input.trim() && s.pendingImages.length === 0) || !s.hasKey}
                 title="Send"
                 className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl bg-accent text-accent-ink hover:opacity-90 disabled:opacity-40"
               >

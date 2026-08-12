@@ -14,6 +14,8 @@ export interface ToolTrace {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
+  /** pasted screenshots (data URLs) on a user message */
+  images?: string[]
   /** tools used to produce an assistant message */
   tools?: ToolTrace[]
   /** token usage for an assistant turn, summed across all tool rounds */

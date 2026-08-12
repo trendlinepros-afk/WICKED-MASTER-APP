@@ -77,6 +77,18 @@ The chat text and column width **scale with the window** — on a large/maximize
 screen the bubbles and font grow so the conversation isn't stuck tiny in a narrow
 column.
 
+## Screenshots in chat
+
+Paste (Ctrl+V) or drag-drop images anywhere in the chat pane — charts,
+positions, statements, headlines. Up to **3 per message** (big screenshots are
+downscaled client-side to 1568px JPEG); all four models (Claude Sonnet/Haiku,
+Gemini Flash/Pro) are vision-capable. Images render in your bubble, persist
+with the conversation, and come along in **Export PDF**. To keep the shared
+module store lean, if conversations balloon past ~12MB the **oldest chats'
+images are pruned first** (text always survives); prior turns' images are not
+re-sent to the model on later messages — attach a fresh screenshot when it
+matters.
+
 ## Export PDF
 
 **Export PDF** (header, top-right) turns the current conversation into a

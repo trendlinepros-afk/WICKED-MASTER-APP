@@ -102,7 +102,27 @@ function readAll(ctx: ModuleIpcContext): Conversation[] {
   return Array.isArray(list) ? list : []
 }
 function writeAll(ctx: ModuleIpcContext, convos: Conversation[]): void {
-  ctx.storeSet(KEY, convos.slice(0, CONVO_CAP))
+  const keep = convos.slice(0, CONVO_CAP)
+  // Pasted screenshots are big base64 blobs and this key lives in the shared
+  // wicked-modules.json (whole-file rewrites; 64MB backup cap for the file).
+  // If the serialized conversations balloon, strip images oldest-chat-first —
+  // text always survives.
+  let json = JSON.stringify(keep)
+  if (json.length > 12_000_000) {
+    const byAge = [...keep].sort((a, b) => a.updatedAt - b.updatedAt)
+    for (const convo of byAge) {
+      if (json.length <= 12_000_000) break
+      let touched = false
+      for (const m of convo.messages) {
+        if (m.images) {
+          delete m.images
+          touched = true
+        }
+      }
+      if (touched) json = JSON.stringify(keep)
+    }
+  }
+  ctx.storeSet(KEY, keep)
 }
 function sortConvos(convos: Conversation[]): Conversation[] {
   return [...convos].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -255,6 +275,14 @@ async function handleToolCall(
   return { content: run.text, isError: run.status === 'error' }
 }
 
+/** data:image/…;base64,… → mime + payload for provider vision blocks. */
+function imageParts(urls: string[]): { mime: string; data: string }[] {
+  return urls
+    .map((u) => u.match(/^data:([\w/+.-]+);base64,(.+)$/))
+    .filter((m): m is RegExpMatchArray => m !== null)
+    .map((m) => ({ mime: m[1], data: m[2] }))
+}
+
 /** Dispatch to the provider loop for the chosen model. */
 async function runAgent(
   ctx: ModuleIpcContext,
@@ -262,7 +290,8 @@ async function runAgent(
   apiKey: string,
   requestId: string,
   prior: ChatMessage[],
-  userText: string
+  userText: string,
+  images: string[] = []
 ): Promise<AgentOut> {
   const emit = (e: AdvisorEvent): void => {
     const win = ctx.getMainWindow()
@@ -271,8 +300,8 @@ async function runAgent(
   const tools = stocksTools()
   const byName = new Map(tools.map((t) => [t.def.name, t]))
   return model.provider === 'gemini'
-    ? runGeminiAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText)
-    : runAnthropicAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText)
+    ? runGeminiAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText, images)
+    : runAnthropicAgent(emit, apiKey, model.id, requestId, tools, byName, prior, userText, images)
 }
 
 async function runAnthropicAgent(
@@ -283,7 +312,8 @@ async function runAnthropicAgent(
   tools: AdvisorTool[],
   byName: Map<string, AdvisorTool>,
   prior: ChatMessage[],
-  userText: string
+  userText: string,
+  images: string[] = []
 ): Promise<AgentOut> {
   const client = new Anthropic({ apiKey, maxRetries: 3 })
   const anthropicTools: Anthropic.Tool[] = tools.map((t) => ({
@@ -292,10 +322,36 @@ async function runAnthropicAgent(
     input_schema: t.jsonSchema as Anthropic.Tool['input_schema']
   }))
 
-  const messages: Anthropic.MessageParam[] = coalesceMessages([
-    ...prior.filter((m) => m.text.trim()).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam),
-    { role: 'user', content: userText }
-  ])
+  // Coalesce prior text turns first (its merge only understands string
+  // contents), then attach this turn — as vision content blocks when
+  // screenshots are pasted, else a plain string. If a dangling prior user
+  // turn survives coalescing, fold it into the block turn so roles alternate.
+  let messages: Anthropic.MessageParam[]
+  if (images.length > 0) {
+    const blocks: (Anthropic.ImageBlockParam | Anthropic.TextBlockParam)[] = [
+      ...imageParts(images).map(
+        (p): Anthropic.ImageBlockParam => ({
+          type: 'image',
+          source: { type: 'base64', media_type: p.mime as Anthropic.Base64ImageSource['media_type'], data: p.data }
+        })
+      ),
+      { type: 'text', text: userText || 'Look at this screenshot and relate it to my trading data.' }
+    ]
+    messages = coalesceMessages(
+      prior.filter((m) => m.text.trim()).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam)
+    )
+    const last = messages[messages.length - 1]
+    if (last && last.role === 'user' && typeof last.content === 'string') {
+      messages[messages.length - 1] = { role: 'user', content: [{ type: 'text', text: last.content }, ...blocks] }
+    } else {
+      messages.push({ role: 'user', content: blocks })
+    }
+  } else {
+    messages = coalesceMessages([
+      ...prior.filter((m) => m.text.trim()).map((m) => ({ role: m.role, content: m.text }) as Anthropic.MessageParam),
+      { role: 'user', content: userText }
+    ])
+  }
 
   const traces: ToolTrace[] = []
   let assembled = ''
@@ -394,6 +450,8 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 interface GeminiPart {
   text?: string
+  /** pasted screenshot payload (v1beta REST snake_case) */
+  inline_data?: { mime_type: string; data: string }
   functionCall?: { name: string; args?: Record<string, unknown> }
   functionResponse?: { name: string; response: Record<string, unknown> }
 }
@@ -477,7 +535,8 @@ async function runGeminiAgent(
   tools: AdvisorTool[],
   byName: Map<string, AdvisorTool>,
   prior: ChatMessage[],
-  userText: string
+  userText: string,
+  images: string[] = []
 ): Promise<AgentOut> {
   const functionDeclarations = tools.map((t) => {
     const params = sanitizeForGemini(t.jsonSchema)
@@ -489,7 +548,13 @@ async function runGeminiAgent(
   const contents: GeminiContent[] = []
   for (const m of prior)
     if (m.text.trim()) contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })
-  contents.push({ role: 'user', parts: [{ text: userText }] })
+  contents.push({
+    role: 'user',
+    parts: [
+      ...imageParts(images).map((p): GeminiPart => ({ inline_data: { mime_type: p.mime, data: p.data } })),
+      { text: userText || 'Look at this screenshot and relate it to my trading data.' }
+    ]
+  })
 
   const traces: ToolTrace[] = []
   let assembled = ''
@@ -634,7 +699,7 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true }
   })
 
-  ctx.ipcMain.handle(`${ID}:send`, async (_e, requestId: unknown, conversationId: unknown, text: unknown) => {
+  ctx.ipcMain.handle(`${ID}:send`, async (_e, requestId: unknown, conversationId: unknown, text: unknown, imagesRaw?: unknown) => {
     const rid = String(requestId)
     const emitErr = (error: string): { ok: false; error: string } => {
       const win = ctx.getMainWindow()
@@ -643,7 +708,13 @@ export default function register(ctx: ModuleIpcContext): void {
     }
 
     const userText = String(text ?? '').trim()
-    if (!userText) return emitErr('Empty message.')
+    // pasted screenshots (data URLs) attached to this turn
+    const images = (Array.isArray(imagesRaw) ? imagesRaw : [])
+      .filter((s): s is string => typeof s === 'string' && /^data:image\/(png|jpe?g|webp);base64,/.test(s))
+      .slice(0, 3)
+    if (images.reduce((n, s) => n + s.length, 0) > 15_000_000)
+      return emitErr('Screenshot(s) too large — paste smaller crops.')
+    if (!userText && images.length === 0) return emitErr('Empty message.')
     const model = getModel(ctx)
     const apiKey = providerKey(ctx, model.provider)
     if (!apiKey)
@@ -657,13 +728,14 @@ export default function register(ctx: ModuleIpcContext): void {
 
     // append the user's message + auto-title a fresh chat
     const prior = convos[i].messages
-    const userMsg: ChatMessage = { role: 'user', text: userText, ts: Date.now() }
-    const title = convos[i].title === 'New chat' ? userText.slice(0, 48) : convos[i].title
+    const userTs = Date.now()
+    const userMsg: ChatMessage = { role: 'user', text: userText, ts: userTs, ...(images.length ? { images } : {}) }
+    const title = convos[i].title === 'New chat' ? (userText || 'Screenshot').slice(0, 48) : convos[i].title
     convos[i] = { ...convos[i], title, messages: [...prior, userMsg], updatedAt: Date.now() }
     writeAll(ctx, convos)
 
     try {
-      const out = await runAgent(ctx, model, apiKey, rid, prior, userText)
+      const out = await runAgent(ctx, model, apiKey, rid, prior, userText, images)
       const costUsd = (out.usage.input / 1e6) * model.inPer + (out.usage.output / 1e6) * model.outPer
       const assistantMsg: ChatMessage = {
         role: 'assistant',
@@ -692,7 +764,8 @@ export default function register(ctx: ModuleIpcContext): void {
       const k = back.findIndex((x) => x.id === convos[i].id)
       if (k !== -1) {
         const msgs = back[k].messages
-        if (msgs.length && msgs[msgs.length - 1].role === 'user' && msgs[msgs.length - 1].text === userText) {
+        // match by role+ts (not text — image-only sends have empty text)
+        if (msgs.length && msgs[msgs.length - 1].role === 'user' && msgs[msgs.length - 1].ts === userTs) {
           back[k] = { ...back[k], messages: msgs.slice(0, -1) }
           writeAll(ctx, back)
         }
