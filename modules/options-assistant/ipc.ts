@@ -457,7 +457,9 @@ export default function register(ctx: ModuleIpcContext): void {
             /* no earnings info */
           }
           const lastDate = dates[dates.length - 1]
-          const earningsInWindow = !!earnings && earnings.date <= lastDate
+          // inside the window means BETWEEN now and the last candidate expiry —
+          // an earnings date already passed must not flag as an upcoming event
+          const earningsInWindow = !!earnings && earnings.date >= dates[0] && earnings.date <= lastDate
           let news: NewsItem[] = []
           try {
             if (finnhubKey) news = await getCompanyNews(finnhubKey, sym)

@@ -1,4 +1,6 @@
-import { app, dialog, ipcMain, type BrowserWindow } from 'electron'
+import { app, dialog, ipcMain, session, type BrowserWindow } from 'electron'
+import { resolve, sep } from 'path'
+import { runBackupFlushes } from './backup-flush'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { SHELL_IPC, type BackupInfo, type BackupResult, type ShellSettings } from '@shared/types'
@@ -82,6 +84,22 @@ function pruneOld(dir: string): void {
   }
 }
 
+/** True when `p` resolves inside the app's own data folder. */
+function insideUserData(p: string): boolean {
+  const userData = resolve(app.getPath('userData'))
+  const target = resolve(p)
+  return target === userData || target.startsWith(userData + sep)
+}
+
+/** Record the outcome of the latest backup attempt (surfaced in Settings). */
+function recordOutcome(error: string): void {
+  try {
+    setSettings({ backup: { ...getSettings().backup, lastBackupError: error } })
+  } catch {
+    /* never let bookkeeping fail a backup */
+  }
+}
+
 /** Create a backup zip in `destDir` (default = configured destination). */
 export function createBackup(destDir?: string): BackupResult {
   const userData = app.getPath('userData')
@@ -89,11 +107,21 @@ export function createBackup(destDir?: string): BackupResult {
   try {
     mkdirSync(dir, { recursive: true })
   } catch (err) {
+    recordOutcome(`Could not create the backup folder: ${errMsg(err)}`)
     return { ok: false, error: `Could not create the backup folder: ${errMsg(err)}` }
   }
   const file = join(dir, `${BACKUP_PREFIX}${stamp(new Date())}${BACKUP_EXT}`)
   try {
-    const entries = collectEntries(userData).filter(
+    // Consistency first: checkpoint open databases (module-registered flushes)
+    // and flush the renderer's LevelDB stores before reading anything.
+    runBackupFlushes()
+    try {
+      session.defaultSession.flushStorageData()
+    } catch {
+      /* no session yet (early startup) — proceed */
+    }
+    const skipped: string[] = []
+    const entries = collectEntries(userData, undefined, undefined, skipped).filter(
       (e) => e.rel !== PENDING_MARKER && e.rel !== STAGED_ZIP
     )
     // If a backup password is set, add a portable (password-encrypted) copy of
@@ -108,16 +136,18 @@ export function createBackup(destDir?: string): BackupResult {
         keysIncluded = true
       }
     }
-    const count = writeBackupZip(entries, file, app.getVersion(), extras)
+    const count = writeBackupZip(entries, file, app.getVersion(), extras, skipped)
     let size = 0
     try {
       size = statSync(file).size
     } catch {
       /* ignore */
     }
-    setSettings({ backup: { ...getSettings().backup, lastBackupUtc: new Date().toISOString() } })
+    setSettings({
+      backup: { ...getSettings().backup, lastBackupUtc: new Date().toISOString(), lastBackupError: '' }
+    })
     pruneOld(dir)
-    return { ok: true, file, size, fileCount: count, keysIncluded }
+    return { ok: true, file, size, fileCount: count, keysIncluded, skipped: skipped.slice(0, 50) }
   } catch (err) {
     try {
       rmSync(file, { force: true })
@@ -125,6 +155,7 @@ export function createBackup(destDir?: string): BackupResult {
     } catch {
       /* ignore */
     }
+    recordOutcome(`Backup failed: ${errMsg(err)}`)
     return { ok: false, error: `Backup failed: ${errMsg(err)}` }
   }
 }
@@ -175,6 +206,19 @@ export function stageRestore(file: string, password?: string): BackupResult {
     }
   }
 
+  // The restore dialogs promise "a timestamped backup of your current data is
+  // written first" — make that promise TRUE before anything is staged. If the
+  // safety backup can't be written, the restore does not proceed.
+  const safety = createBackup()
+  if (!safety.ok) {
+    return {
+      ok: false,
+      error:
+        `Could not write the pre-restore safety backup (${safety.error ?? 'unknown error'}) — ` +
+        'restore cancelled so your current data stays untouched. Fix the backup destination and retry.'
+    }
+  }
+
   try {
     writeFileSync(join(userData, STAGED_ZIP), readFileSync(file))
     writeFileSync(
@@ -191,12 +235,17 @@ export function stageRestore(file: string, password?: string): BackupResult {
 /* ------------------------------ scheduling ------------------------------- */
 
 let timer: NodeJS.Timeout | null = null
+let kick: NodeJS.Timeout | null = null
 
 /** (Re)configure the scheduled-backup timer from settings. Idempotent. */
 export function scheduleBackups(): void {
   if (timer) {
     clearInterval(timer)
     timer = null
+  }
+  if (kick) {
+    clearTimeout(kick)
+    kick = null
   }
   const { schedule } = getSettings().backup
   if (!schedule.enabled) return
@@ -207,11 +256,12 @@ export function scheduleBackups(): void {
     const last = b.lastBackupUtc ? Date.parse(b.lastBackupUtc) : 0
     if (Number.isNaN(last) || Date.now() - last >= intervalMs) {
       const res = createBackup()
+      // failures also land in backup.lastBackupError (recordOutcome) → Settings UI
       if (!res.ok) console.error('[wicked] scheduled backup failed:', res.error)
       else console.log(`[wicked] scheduled backup written: ${res.file}`)
     }
   }
-  setTimeout(check, 60_000) // shortly after launch (covers "was off overnight")
+  kick = setTimeout(check, 60_000) // shortly after launch (covers "was off overnight")
   timer = setInterval(check, Math.min(intervalMs, 6 * 3_600_000))
 }
 
@@ -244,6 +294,14 @@ export function registerBackupIpc(getWin: () => BrowserWindow | null): void {
     }
     const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (res.canceled || res.filePaths.length === 0) return { ok: false, canceled: true }
+    // a destination inside userData would make every backup contain all
+    // previous backups (and balloon the sync snapshot) — refuse it
+    if (insideUserData(res.filePaths[0])) {
+      return {
+        ok: false,
+        error: 'That folder is inside WICKED’s own data folder — backups there would back up themselves. Pick a folder outside the app data (e.g. Documents or another drive).'
+      }
+    }
     const next: ShellSettings['backup'] = { ...getSettings().backup, destination: res.filePaths[0] }
     setSettings({ backup: next })
     return { ok: true, destination: res.filePaths[0], backups: listBackups() }

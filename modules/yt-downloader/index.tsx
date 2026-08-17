@@ -34,18 +34,28 @@ function fmtDuration(sec: number | null): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`
 }
 
+/* ---------------------------------------------------------------------- *
+ *  Module-scope event wiring (robocopy pattern): downloads keep running in
+ *  main while the user is on another module's route — the component unmounts,
+ *  the zustand store and the jobs do not. Wiring inside useEffect would drop
+ *  every progress/job-end event fired while unmounted, leaving remounted UI
+ *  showing finished jobs as stuck forever.
+ * ---------------------------------------------------------------------- */
+let eventsWired = false
+function wireDownloadEvents(): void {
+  if (eventsWired) return
+  eventsWired = true
+  window.wicked.on(`${ID}:progress`, (p) => useYt.getState()._onProgress(p))
+  window.wicked.on(`${ID}:status-msg`, (m) => useYt.getState()._onStatusMsg(m))
+}
+
 export default function YtDownloader(): React.JSX.Element {
   const s = useYt()
 
   useEffect(() => {
+    wireDownloadEvents()
     void s.loadStatus()
     void s.loadPrefs()
-    const offP = window.wicked.on(`${ID}:progress`, (p) => s._onProgress(p))
-    const offM = window.wicked.on(`${ID}:status-msg`, (m) => s._onStatusMsg(m))
-    return () => {
-      offP()
-      offM()
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

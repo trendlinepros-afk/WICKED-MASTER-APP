@@ -43,7 +43,3 @@ export function checkPrereqs(): Prereq[] {
   ]
 }
 
-/** Prereqs that are absent — the ones worth notifying the user about. */
-export function missingPrereqs(): Prereq[] {
-  return checkPrereqs().filter((p) => !p.installed)
-}

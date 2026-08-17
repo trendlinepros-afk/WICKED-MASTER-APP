@@ -41,8 +41,3 @@ export function ensureLayout(master: string): FolderLayout {
 export function projectsRoot(): string {
   return ensureLayout(masterDir()).projects
 }
-
-/** Where shared assets live: <master>/Assets. */
-export function assetsRoot(): string {
-  return ensureLayout(masterDir()).assets
-}

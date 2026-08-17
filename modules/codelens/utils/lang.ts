@@ -1,5 +1,4 @@
 import type { Language, Severity } from '../shared/types'
-import { SEVERITY_RANK } from '../shared/types'
 
 // Data-viz colors kept as fixed hex (mid-tone so they read on both the light
 // and dark WICKED themes; UI chrome uses the shell's theme tokens instead).
@@ -35,17 +34,6 @@ export function complexityColor(score: number): string {
   if (score <= 5) return '#f59e0b'
   if (score <= 7) return '#f97316'
   return '#ef4444'
-}
-
-export function issueColor(count: number, maxSeverity?: Severity): string {
-  if (count === 0) return '#64748b'
-  return SEVERITY_META[maxSeverity ?? 'low'].text
-}
-
-export function maxSeverityOf(a?: Severity, b?: Severity): Severity | undefined {
-  if (!a) return b
-  if (!b) return a
-  return SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b
 }
 
 export function formatBytes(n: number): string {

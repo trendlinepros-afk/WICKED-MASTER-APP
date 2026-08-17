@@ -25,6 +25,8 @@ export interface Position {
   trailingStop?: number | null
   /** unit of trailingStop: 'usd' = $ distance, 'pct' = % of the peak. Default 'usd'. */
   trailingStopUnit?: 'usd' | 'pct'
+  /** most-favorable price seen since entry — the trailing-stop anchor, persisted between reconciles. */
+  peak?: number | null
   // option-only
   optionType?: OptionType
   strike?: number

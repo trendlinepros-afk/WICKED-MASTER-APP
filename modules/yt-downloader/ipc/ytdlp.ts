@@ -278,6 +278,26 @@ export function spawnYtDlp(
   })
 }
 
+/**
+ * Kill a spawned process AND its children. yt-dlp runs ffmpeg as a child for
+ * merges/remuxes — a plain child.kill() on Windows terminates yt-dlp only and
+ * orphans that ffmpeg (still holding the half-written file open). taskkill /T
+ * takes the whole tree. Callers must track cancellation themselves (e.g. a
+ * cancelRequested flag): taskkill does not set Node's child.killed.
+ */
+export function treeKill(child: ChildProcess): void {
+  const pid = child.pid
+  if (process.platform === 'win32' && pid) {
+    try {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }).on('error', () => child.kill())
+    } catch {
+      child.kill()
+    }
+  } else {
+    child.kill()
+  }
+}
+
 export function isBinaryTooOld(path: string): boolean {
   try {
     // if older than ~45 days, suggest an update (YouTube breaks stale copies)

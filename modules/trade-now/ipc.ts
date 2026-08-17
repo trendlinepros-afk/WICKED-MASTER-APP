@@ -89,7 +89,13 @@ function num(v: unknown): number {
 
 const legId = (): string => `leg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 
-/** Average-cost roll-up of a position's legs. */
+/**
+ * Average-cost roll-up of a position's legs — replayed CHRONOLOGICALLY with a
+ * running average, so each sell realizes P/L against the average cost AT THE
+ * TIME of the sale. (A whole-period average would let a later buy retroactively
+ * rewrite already-realized P/L: buy 100@10, sell 100@12 = +$200; adding a
+ * buy 100@20 afterwards must not turn that into −$300.)
+ */
 export function summarize(entry: TradeNowEntry): TradeSummary {
   let buyQty = 0
   let totalBought = 0
@@ -97,20 +103,32 @@ export function summarize(entry: TradeNowEntry): TradeSummary {
   let totalSold = 0
   let firstAt = entry.createdAt
   let lastAt = entry.createdAt
-  for (const leg of entry.legs) {
+  let qty = 0 // running open shares
+  let cost = 0 // running cost basis of the open shares
+  let realized = 0
+  let lastAvg = 0
+  const legs = [...entry.legs].sort((a, b) => a.at - b.at)
+  for (const leg of legs) {
     if (leg.at < firstAt) firstAt = leg.at
     if (leg.at > lastAt) lastAt = leg.at
     if (leg.side === 'buy') {
       buyQty += leg.quantity
       totalBought += leg.quantity * leg.price
+      cost += leg.quantity * leg.price
+      qty += leg.quantity
+      if (qty > 0) lastAvg = cost / qty
     } else {
       sellQty += leg.quantity
       totalSold += leg.quantity * leg.price
+      const avg = qty > 0 ? cost / qty : lastAvg
+      const q = Math.min(leg.quantity, Math.max(qty, 0))
+      realized += leg.quantity * leg.price - q * avg
+      cost -= q * avg
+      qty -= leg.quantity
     }
   }
-  const avgBuy = buyQty > 0 ? totalBought / buyQty : 0
   const openShares = buyQty - sellQty
-  const realized = sellQty > 0 ? totalSold - sellQty * avgBuy : 0
+  const avgBuy = qty > 0 ? cost / qty : lastAvg
   return {
     buyQty,
     sellQty,
@@ -119,7 +137,7 @@ export function summarize(entry: TradeNowEntry): TradeSummary {
     totalBought,
     totalSold,
     realized,
-    openCost: Math.max(0, openShares) * avgBuy,
+    openCost: Math.max(0, cost),
     status: openShares > 1e-6 ? 'open' : 'closed',
     firstAt,
     lastAt

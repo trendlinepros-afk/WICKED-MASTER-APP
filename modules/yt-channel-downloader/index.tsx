@@ -116,9 +116,17 @@ export default function ChannelDownloader(): React.JSX.Element {
 
   useEffect(() => {
     void (async () => {
-      const st = (await invoke('status')) as { downloadDir?: string; ffmpegReady?: boolean }
+      const st = (await invoke('status')) as { downloadDir?: string; ffmpegReady?: boolean; busy?: boolean }
       if (st.downloadDir) setDownloadDir(st.downloadDir)
       setFfmpegReady(st.ffmpegReady !== false)
+      // a job may already be running in main (crash resume or launch auto-
+      // rescan started while this view was closed) — seed the busy state so
+      // the UI doesn't offer to start a second job over it
+      if (st.busy) {
+        setPhase((cur) => (cur === 'idle' ? 'running' : cur))
+        setJobLabel((cur) => cur || 'Channel job (running in the background)')
+        setMessage((cur) => cur || 'A channel job is already running — progress appears here as it reports.')
+      }
       const channels = await loadHistory()
       // auto-rescan fetched new videos while you were away → ask about stitching
       setAutoQueue(channels.filter((c) => c.autoDownloadedPending > 0))

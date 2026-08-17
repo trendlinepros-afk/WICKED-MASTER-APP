@@ -6,6 +6,7 @@ import { getSettings } from './settings'
 const { autoUpdater } = electronUpdater
 
 let timer: NodeJS.Timeout | null = null
+let kick: NodeJS.Timeout | null = null
 
 function send(win: BrowserWindow, ev: UpdateEvent): void {
   if (!win.isDestroyed()) win.webContents.send(SHELL_IPC.updateEvent, ev)
@@ -55,9 +56,12 @@ export function checkNow(): void {
 
 export function scheduleChecks(): void {
   if (timer) clearInterval(timer)
+  if (kick) clearTimeout(kick)
+  timer = null
+  kick = null
   const { autoCheck, intervalHours } = getSettings().update
   if (!autoCheck) return
   // check shortly after launch, then periodically
-  setTimeout(checkNow, 10_000)
+  kick = setTimeout(checkNow, 10_000)
   timer = setInterval(checkNow, Math.max(1, intervalHours) * 3_600_000)
 }

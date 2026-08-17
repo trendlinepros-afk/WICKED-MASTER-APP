@@ -199,6 +199,16 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true }
   })
 
+  // never leave a robocopy job running headless after the app quits
+  ctx.app.on('before-quit', () => {
+    killed = true
+    try {
+      child?.kill()
+    } catch {
+      /* already gone */
+    }
+  })
+
   /* ------------------------------------------------------------------ *
    *  Elevated run. WICKED itself never elevates (module contract): the
    *  job is launched through PowerShell Start-Process -Verb RunAs in its

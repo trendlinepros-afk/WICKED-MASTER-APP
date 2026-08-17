@@ -27,6 +27,7 @@ import { EXPORT_PRESETS, type AppSettings, type EDL, type GraphicEvent, type Sta
 import type { ModuleDataPath } from '@shared/types'
 import { setApiKeyGetter } from './ipc/keys'
 import { setWindowGetter, sendToRenderer } from './ipc/push'
+import { checkpointWal } from './ipc/db'
 import * as projects from './ipc/project'
 import { ensureLayout, masterDir } from './ipc/storage'
 import { moduleDataDir } from './ipc/paths'
@@ -151,6 +152,10 @@ export default function register(ctx: ModuleIpcContext): void {
   // Kill queued/running child processes (ffmpeg, HyperFrames) on quit.
   app.on('before-quit', () => renderQueue.cancelAll())
 
+  // WAL databases must checkpoint right before Backup/Cloud Sync captures
+  // files, or the snapshot's projects.db misses everything still in the -wal.
+  ctx.onBackupFlush(checkpointWal)
+
   // -- Data paths (Settings → Modules) -------------------------------------
   ipcMain.handle('automatic-editing:data-paths', (): ModuleDataPath[] => {
     const master = masterDir() // configured projects folder, or the default under userData
@@ -159,7 +164,11 @@ export default function register(ctx: ModuleIpcContext): void {
       {
         label: 'Projects folder',
         path: master,
-        note: 'Holds Projects/ and Assets/ subfolders'
+        note:
+          'Holds Projects/ and Assets/ subfolders.' +
+          (master.startsWith(app.getPath('userData'))
+            ? ''
+            : ' NOT included in Backup & Cloud Sync (outside the app data folder) — back it up separately.')
       },
       {
         label: 'Project database',

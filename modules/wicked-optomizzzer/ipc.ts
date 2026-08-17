@@ -856,6 +856,18 @@ $dedup = $apps | Group-Object { "$($_.name)|$($_.version)" } | ForEach-Object { 
 
   /* -------------------------------- CANCEL ------------------------------ */
 
+  // quit must not orphan running read probes / winget scans
+  ctx.app.on('before-quit', () => {
+    for (const c of readChildren) {
+      try {
+        c.kill()
+      } catch {
+        /* already gone */
+      }
+    }
+    readChildren.clear()
+  })
+
   ctx.ipcMain.handle(`${ID}:cancel`, () => {
     let cancelled = false
     for (const c of readChildren) {

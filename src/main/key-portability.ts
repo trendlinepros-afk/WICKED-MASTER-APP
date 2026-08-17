@@ -83,13 +83,3 @@ export function decryptWithPassword(blob: string, password: string): string | nu
     return null // wrong password, corrupt, or not our format
   }
 }
-
-/** Cheap sanity check that a string looks like one of our portable blobs. */
-export function looksLikePortableBlob(s: string): boolean {
-  try {
-    const o = JSON.parse(s) as Record<string, unknown>
-    return !!o && !!o.salt && !!o.iv && !!o.tag && !!o.ct
-  } catch {
-    return false
-  }
-}

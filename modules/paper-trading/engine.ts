@@ -23,13 +23,6 @@ export function positionEquity(p: Position, mark: number): number {
   return p.side === 'short' ? -mark * p.qty * m : mark * p.qty * m
 }
 
-/** Full account equity = cash + open position values (shorts are liabilities). */
-export function accountEquity(acct: PaperAccount, mark: (sym: string) => number): number {
-  let eq = acct.cash
-  for (const p of acct.positions) eq += positionEquity(p, mark(p.symbol) || p.entryPrice)
-  return eq
-}
-
 export interface OpenOrder {
   kind: 'stock' | 'option'
   symbol: string
@@ -167,18 +160,26 @@ export interface Bar {
 
 /**
  * Given minute bars AFTER entry, find the first bar that crossed the stop or
- * target and return the exit (filled at the level). Stop is checked before
- * target within a bar (conservative). Stock positions only.
+ * target and return the exit. Fills happen at the level — unless the bar
+ * OPENED beyond it (an overnight/halt gap), in which case the fill is the
+ * bar's open, which is where a real stop-market or resting limit would fill.
+ * Stop is checked before target within a bar (conservative). Also returns the
+ * updated trailing-stop anchor (`peak`) so callers can persist it — without
+ * that, each reconcile window would re-anchor the trail back at the entry
+ * price and forget highs reached in earlier windows. Stock positions only.
  */
-export function detectExit(p: Position, bars: Bar[]): { price: number; at: number; reason: CloseReason } | null {
+export function detectExit(
+  p: Position,
+  bars: Bar[]
+): { exit: { price: number; at: number; reason: CloseReason } | null; peak: number } {
   const trailVal = p.trailingStop != null && p.trailingStop > 0 ? p.trailingStop : null
   // Trailing distance at a given anchor: a fixed $ amount, or a % of the anchor.
   const trailDist = (anchor: number): number | null =>
     trailVal == null ? null : p.trailingStopUnit === 'pct' ? anchor * (trailVal / 100) : trailVal
-  if (p.stop == null && p.takeProfit == null && trailVal == null) return null
   // `peak` tracks the most-favorable extreme so far (running high for a long,
   // running low for a short) — the anchor the trailing stop follows.
-  let peak = p.entryPrice
+  let peak = p.peak ?? p.entryPrice
+  if (p.stop == null && p.takeProfit == null && trailVal == null) return { exit: null, peak }
   for (const b of bars) {
     if (b.t <= p.entryAt) continue
     if (p.side === 'long') {
@@ -190,8 +191,9 @@ export function detectExit(p: Position, bars: Bar[]): { price: number; at: numbe
         floor = trailLevel
         reason = 'trailing-stop'
       }
-      if (floor != null && b.l <= floor) return { price: floor, at: b.t, reason }
-      if (p.takeProfit != null && b.h >= p.takeProfit) return { price: p.takeProfit, at: b.t, reason: 'take-profit' }
+      if (floor != null && b.l <= floor) return { exit: { price: Math.min(floor, b.o), at: b.t, reason }, peak }
+      if (p.takeProfit != null && b.h >= p.takeProfit)
+        return { exit: { price: Math.max(p.takeProfit, b.o), at: b.t, reason: 'take-profit' }, peak }
       peak = Math.max(peak, b.h)
     } else {
       const d = trailDist(peak)
@@ -202,12 +204,13 @@ export function detectExit(p: Position, bars: Bar[]): { price: number; at: numbe
         ceil = trailLevel
         reason = 'trailing-stop'
       }
-      if (ceil != null && b.h >= ceil) return { price: ceil, at: b.t, reason }
-      if (p.takeProfit != null && b.l <= p.takeProfit) return { price: p.takeProfit, at: b.t, reason: 'take-profit' }
+      if (ceil != null && b.h >= ceil) return { exit: { price: Math.max(ceil, b.o), at: b.t, reason }, peak }
+      if (p.takeProfit != null && b.l <= p.takeProfit)
+        return { exit: { price: Math.min(p.takeProfit, b.o), at: b.t, reason: 'take-profit' }, peak }
       peak = Math.min(peak, b.l)
     }
   }
-  return null
+  return { exit: null, peak }
 }
 
 /** Realized P&L from closed trades whose exit is at/after `sinceMs`. */

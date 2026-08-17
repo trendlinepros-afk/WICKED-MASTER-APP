@@ -149,7 +149,10 @@ export function registerRecoveryIpc(getWin: () => BrowserWindow | null): void {
         return { ok: false, error: 'That folder has no WICKED settings to restore.' }
 
       const win = getWin()
-      const backupDir = join(currentPath, `_pre-restore-backup-${stamp()}`)
+      // The safety copy lives OUTSIDE the data folder being overwritten —
+      // keeping it inside userData would tie its fate to the very folder a
+      // botched restore (or a later reset/reinstall) could take down.
+      const backupDir = join(app.getPath('documents'), 'WICKED-Backups', `pre-restore-${stamp()}`)
 
       // Confirm destructively-adjacent action with the user (native dialog).
       const confirmOpts = {

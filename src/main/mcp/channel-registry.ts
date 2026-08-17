@@ -29,9 +29,17 @@ export function installGlobalRecorder(): void {
   globalInstalled = true
   const orig = ipcMain.handle.bind(ipcMain)
   ipcMain.handle = ((channel: string, listener: InvokeHandler) => {
+    // record only AFTER Electron accepts it — a duplicate-channel throw must
+    // not leave the map pointing at a handler Electron never registered
+    const out = orig(channel, listener as Parameters<typeof orig>[1])
     handlers.set(channel, listener)
-    return orig(channel, listener as Parameters<typeof orig>[1])
+    return out
   }) as typeof ipcMain.handle
+  const origRemove = ipcMain.removeHandler.bind(ipcMain)
+  ipcMain.removeHandler = ((channel: string) => {
+    handlers.delete(channel)
+    return origRemove(channel)
+  }) as typeof ipcMain.removeHandler
 }
 
 /** A drop-in replacement for `ipcMain` that also records `.handle` registrations. */
@@ -40,8 +48,8 @@ export function recordingIpcMain(): typeof ipcMain {
     get(target, prop, receiver) {
       if (prop === 'handle') {
         return (channel: string, listener: InvokeHandler): void => {
-          handlers.set(channel, listener)
           target.handle(channel, listener as Parameters<typeof target.handle>[1])
+          handlers.set(channel, listener)
         }
       }
       const value = Reflect.get(target, prop, receiver)
@@ -54,20 +62,16 @@ export function hasChannel(channel: string): boolean {
   return handlers.has(channel)
 }
 
-export function registeredChannels(): string[] {
-  return [...handlers.keys()]
-}
-
 /**
  * Invoke a registered channel handler in-process. The synthetic event carries
- * the main window's webContents as `sender`, so handlers that stream progress
- * back via `event.sender.send(...)` still reach the UI, exactly as when the
- * user triggers the action.
+ * the main window's webContents as `sender` (null when the window is closed or
+ * destroyed — handlers already null-guard their sends).
  */
 export async function invokeChannel(channel: string, ...args: unknown[]): Promise<unknown> {
   const handler = handlers.get(channel)
   if (!handler) throw new Error(`No handler registered for channel "${channel}"`)
-  const sender = getWin()?.webContents ?? null
+  const w = getWin()
+  const sender = w && !w.isDestroyed() ? w.webContents : null
   const event = { sender, frameId: 0, processId: 0 } as unknown as IpcMainInvokeEvent
   return await handler(event, ...args)
 }

@@ -4,7 +4,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import * as db from './db';
 import { DESKTOP_ONLY_CHANNELS, RPC_CHANNELS } from '../shared/rpc';
 import type { PortalStatus } from '../types';
@@ -63,7 +63,35 @@ let server: http.Server | null = null;
 let httpsServer: https.Server | null = null;
 let currentPort = 0;
 let currentHttpsPort = 0;
+let desiredPort = 0;
 let lastError = '';
+// Bumped on every stop(); the async https start-up re-checks it so a server
+// stopped (or restarted on a new port) mid-cert-load never leaks a listener.
+let generation = 0;
+
+/** Constant-time token comparison (hashed first so length differences never leak). */
+function tokenMatches(candidate: unknown, token: string): boolean {
+  if (typeof candidate !== 'string' || !candidate || !token) return false;
+  return timingSafeEqual(
+    createHash('sha256').update(candidate).digest(),
+    createHash('sha256').update(token).digest()
+  );
+}
+
+function cookieToken(req: http.IncomingMessage): string {
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k === 'wickedPortalToken') {
+      const v = rest.join('=');
+      try {
+        return decodeURIComponent(v);
+      } catch {
+        return v;
+      }
+    }
+  }
+  return '';
+}
 
 export function init(): void {
   // electron-vite emits the renderer next to the main bundle: out/renderer.
@@ -89,9 +117,14 @@ export function sync(): void {
     settings.webPortalPort < 65536
       ? settings.webPortalPort
       : DEFAULT_PORT;
-  if (server && currentPort === port) return;
+  // compare against the port we ASKED for (currentPort is only set once the
+  // async listen succeeds — two quick sync() calls would tear down a healthy
+  // server mid-start if we compared against it)
+  if (server && desiredPort === port) return;
 
   stop();
+  const gen = generation;
+  desiredPort = port;
   lastError = '';
   const onRequest = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     handleRequest(req, res).catch((err) => {
@@ -115,15 +148,17 @@ export function sync(): void {
   // HTTPS twin on port+1: phone browsers refuse microphone access on plain
   // http origins, so voice in the portal needs a secure (if self-signed)
   // context. Failure here must never take down the http portal.
-  void startHttps(port < 65535 ? port + 1 : port - 1, onRequest);
+  void startHttps(port < 65535 ? port + 1 : port - 1, onRequest, gen);
 }
 
 async function startHttps(
   port: number,
-  onRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void
+  onRequest: (req: http.IncomingMessage, res: http.ServerResponse) => void,
+  gen: number
 ): Promise<void> {
   try {
     const { key, cert } = await loadOrCreateCert();
+    if (gen !== generation) return; // stopped or restarted while the cert loaded
     const srv = https.createServer({ key, cert }, onRequest);
     srv.on('error', (err) => {
       console.warn('[ai-chat portal] https:', (err as Error).message);
@@ -187,9 +222,11 @@ async function loadOrCreateCert(): Promise<{ key: string; cert: string; ips: str
 }
 
 export function stop(): void {
+  generation++;
   server?.close();
   server = null;
   currentPort = 0;
+  desiredPort = 0;
   httpsServer?.close();
   httpsServer = null;
   currentHttpsPort = 0;
@@ -225,13 +262,8 @@ function lanAddresses(): string[] {
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-
-  if (pathname === '/__portal/bridge.js') {
-    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
-    res.end(bridgeJs());
-    return;
-  }
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const pathname = url.pathname;
 
   if (pathname === '/__portal/rpc') {
     if (req.method !== 'POST') {
@@ -248,6 +280,29 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     res.end();
     return;
   }
+
+  // The UI and bridge are gated too — only holders of the portal link get
+  // anything. The first visit carries ?token=…; an HttpOnly cookie then keeps
+  // asset requests and reloads working after the bridge strips the token from
+  // the visible URL.
+  const token = db.getPortalToken();
+  const fromQuery = url.searchParams.get('token');
+  if (!tokenMatches(fromQuery, token) && !tokenMatches(cookieToken(req), token)) {
+    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('WICKED AI Chat portal: open the portal link from the desktop app — it carries the access token.');
+    return;
+  }
+  if (fromQuery)
+    res.setHeader(
+      'set-cookie',
+      `wickedPortalToken=${encodeURIComponent(fromQuery)}; Path=/; HttpOnly; SameSite=Strict`
+    );
+
+  if (pathname === '/__portal/bridge.js') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+    res.end(bridgeJs());
+    return;
+  }
   serveStatic(pathname, res);
 }
 
@@ -258,7 +313,7 @@ async function handleRpc(req: http.IncomingMessage, res: http.ServerResponse): P
   };
 
   const token = db.getPortalToken();
-  if (!token || req.headers['x-portal-token'] !== token) {
+  if (!tokenMatches(req.headers['x-portal-token'], token)) {
     json(401, { ok: false, error: 'Invalid or missing portal token' });
     return;
   }

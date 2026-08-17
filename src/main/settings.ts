@@ -12,7 +12,26 @@ export function getSettings(): ShellSettings {
 }
 
 export function setSettings(patch: Partial<ShellSettings>): ShellSettings {
-  const next = { ...getSettings(), ...patch }
+  const cur = getSettings()
+  // The two nested settings groups are written from more than one place (main
+  // scheduler + renderer), so a shallow spread of a stale renderer copy would
+  // silently revert sibling fields (e.g. backup.destination / lastBackupUtc).
+  // Merge those one level deep; everything else stays replace-by-key because
+  // the migrations rely on key DELETION surviving a write.
+  const next: ShellSettings = {
+    ...cur,
+    ...patch,
+    ...(patch.update ? { update: { ...cur.update, ...patch.update } } : {}),
+    ...(patch.backup
+      ? {
+          backup: {
+            ...cur.backup,
+            ...patch.backup,
+            schedule: { ...cur.backup.schedule, ...(patch.backup.schedule ?? {}) }
+          }
+        }
+      : {})
+  }
   store.set('settings', next)
   return next
 }

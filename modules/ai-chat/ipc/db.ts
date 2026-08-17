@@ -715,6 +715,19 @@ export function backupTo(file: string): Promise<unknown> {
   return db.backup(file);
 }
 
+/**
+ * Fold the WAL into the main .db file. Registered as a backup-flush hook: the
+ * suite's Backup/Cloud Sync copies files raw, and without a checkpoint the
+ * captured wicked.db would be missing everything still sitting in wicked.db-wal.
+ */
+export function checkpointWal(): void {
+  try {
+    db?.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    /* db not open yet — nothing to flush */
+  }
+}
+
 export function getVaultPath(): string {
   return getSettings().vaultPath;
 }

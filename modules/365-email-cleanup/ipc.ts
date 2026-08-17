@@ -1113,4 +1113,15 @@ export default function register(ctx: ModuleIpcContext): void {
     }
     return { ok: true, cancelled }
   })
+
+  // quit must not orphan a PowerShell/Outlook operation (Outlook itself is
+  // untouched — only our automation process is stopped)
+  ctx.app.on('before-quit', () => {
+    try {
+      child?.kill()
+    } catch {
+      /* already gone */
+    }
+    aiAbort?.abort()
+  })
 }

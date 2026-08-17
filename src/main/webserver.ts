@@ -3,8 +3,9 @@ import type { Server } from 'node:http'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { networkInterfaces } from 'os'
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
-import { ipcMain, type BrowserWindow } from 'electron'
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'crypto'
+import { promisify } from 'util'
+import { ipcMain } from 'electron'
 import Store from 'electron-store'
 import { SHELL_IPC, type WebServerStatus } from '@shared/types'
 import { invokeChannel } from './mcp/channel-registry'
@@ -41,23 +42,38 @@ const store = new Store<WebServerConfig>({
 let server: Server | null = null
 let lastError = ''
 
-/** Valid session tokens — in memory only, so an app restart forces re-login. */
-const sessions = new Set<string>()
+/** Valid session tokens → issued-at ms. In memory only (restart = re-login);
+ *  tokens also expire after 24h so an abandoned browser can't stay in forever. */
+const sessions = new Map<string, number>()
+const SESSION_TTL_MS = 24 * 3_600_000
 /** Connected SSE response streams that mirror desktop events to the browser. */
 const eventClients = new Set<Response>()
+/** Per-IP failed-login backoff: ip → { fails, lockedUntil }. */
+const loginFails = new Map<string, { fails: number; until: number }>()
+let loginInFlight = false
 
 /* --------------------------------- password ------------------------------- */
 
+const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }
+const scryptAsync = promisify(scrypt) as (
+  password: Buffer,
+  salt: Buffer,
+  keylen: number,
+  options: typeof SCRYPT_OPTS
+) => Promise<Buffer>
+
 function hashPassword(password: string, salt: Buffer): Buffer {
-  return scryptSync(Buffer.from(password, 'utf8'), salt, 32, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+  return scryptSync(Buffer.from(password, 'utf8'), salt, 32, SCRYPT_OPTS)
 }
 
-export function setWebServerPassword(password: string): { ok: boolean; error?: string } {
+function setWebServerPassword(password: string): { ok: boolean; error?: string } {
   const p = (password ?? '').trim()
   if (p.length < 4) return { ok: false, error: 'Use a password of at least 4 characters.' }
   const salt = randomBytes(16)
   store.set('passSalt', salt.toString('base64'))
   store.set('passHash', hashPassword(p, salt).toString('base64'))
+  // changing the password must lock out anyone signed in under the old one
+  sessions.clear()
   return { ok: true }
 }
 
@@ -65,13 +81,15 @@ function hasPassword(): boolean {
   return !!store.get('passHash') && !!store.get('passSalt')
 }
 
-function verifyPassword(password: string): boolean {
+/** Async so the ~100ms scrypt runs on libuv's pool, not the main thread —
+ *  an unauthenticated LAN loop must not be able to freeze the desktop app. */
+async function verifyPasswordAsync(password: string): Promise<boolean> {
   const saltB64 = store.get('passSalt')
   const hashB64 = store.get('passHash')
   if (!saltB64 || !hashB64) return false
   try {
     const expected = Buffer.from(hashB64, 'base64')
-    const actual = hashPassword(String(password ?? ''), Buffer.from(saltB64, 'base64'))
+    const actual = await scryptAsync(Buffer.from(String(password ?? ''), 'utf8'), Buffer.from(saltB64, 'base64'), 32, SCRYPT_OPTS)
     return expected.length === actual.length && timingSafeEqual(expected, actual)
   } catch {
     return false
@@ -221,28 +239,59 @@ function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {}
   for (const part of (header ?? '').split(';')) {
     const i = part.indexOf('=')
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim())
+    if (i > 0) {
+      const v = part.slice(i + 1).trim()
+      try {
+        out[part.slice(0, i).trim()] = decodeURIComponent(v)
+      } catch {
+        out[part.slice(0, i).trim()] = v // malformed %-escape → raw (still just fails auth)
+      }
+    }
   }
   return out
 }
 
 function isAuthed(req: Request): boolean {
   const token = parseCookies(req.headers.cookie)[SESSION_COOKIE]
-  return !!token && sessions.has(token)
+  if (!token) return false
+  const issued = sessions.get(token)
+  if (issued == null) return false
+  if (Date.now() - issued > SESSION_TTL_MS) {
+    sessions.delete(token)
+    return false
+  }
+  return true
 }
 
 function buildApp(): Express {
   const web = express()
   web.use(express.json({ limit: '25mb' }))
 
-  // ---- login (unauthenticated) ----
+  // ---- login (unauthenticated → single-flight + per-IP backoff) ----
   web.get('/login', (_req, res) => res.type('html').send(LOGIN_HTML))
-  web.post('/api/login', (req, res) => {
+  web.post('/api/login', async (req, res) => {
     const password = (req.body && typeof req.body.password === 'string' ? req.body.password : '') as string
     if (!hasPassword()) return res.status(400).json({ ok: false, error: 'No password is set on the server.' })
-    if (!verifyPassword(password)) return res.status(401).json({ ok: false, error: 'Wrong password.' })
+    const ip = req.socket.remoteAddress ?? 'unknown'
+    const rec = loginFails.get(ip)
+    if (rec && rec.until > Date.now())
+      return res.status(429).json({ ok: false, error: 'Too many attempts — wait 30 seconds.' })
+    if (loginInFlight) return res.status(429).json({ ok: false, error: 'Busy — try again.' })
+    loginInFlight = true
+    let good = false
+    try {
+      good = await verifyPasswordAsync(password)
+    } finally {
+      loginInFlight = false
+    }
+    if (!good) {
+      const fails = (rec?.fails ?? 0) + 1
+      loginFails.set(ip, { fails, until: fails >= 5 ? Date.now() + 30_000 : 0 })
+      return res.status(401).json({ ok: false, error: 'Wrong password.' })
+    }
+    loginFails.delete(ip)
     const token = randomBytes(24).toString('hex')
-    sessions.add(token)
+    sessions.set(token, Date.now())
     // Session cookie (no Max-Age) → cleared when the browser closes, so each new
     // visit re-prompts. httpOnly + SameSite=Lax; not Secure (plain-HTTP LAN).
     res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/`)
@@ -356,7 +405,16 @@ function startServer(): Promise<WebServerStatus> {
       server.on('error', (err) => {
         lastError = err instanceof Error ? err.message : String(err)
         console.error('[webserver] listen error', err)
+        // an error AFTER a successful listen must not strand an open socket
+        // behind a null ref (unstoppable, reported as not-running)
+        const s = server
         server = null
+        try {
+          s?.closeAllConnections()
+          s?.close()
+        } catch {
+          /* already down */
+        }
         resolve(getWebServerStatus())
       })
     } catch (err) {
@@ -379,11 +437,25 @@ function stopServer(): Promise<WebServerStatus> {
     }
     eventClients.clear()
     if (!server) return resolve(getWebServerStatus())
-    server.close(() => {
-      server = null
+    // Detach first and FORCE-close: server.close() alone waits for in-flight
+    // requests (an open SSE stream or a long invoke would keep the "off" toggle
+    // pending forever and the status stuck on running).
+    const s = server
+    server = null
+    let done = false
+    const finish = (): void => {
+      if (done) return
+      done = true
       console.log('[webserver] stopped')
       resolve(getWebServerStatus())
-    })
+    }
+    try {
+      s.close(finish)
+      s.closeAllConnections()
+    } catch {
+      finish()
+    }
+    setTimeout(finish, 2000) // belt-and-braces: the IPC reply must always come
   })
 }
 
@@ -393,7 +465,7 @@ async function setEnabled(value: boolean): Promise<WebServerStatus> {
 }
 
 /** Register the web-server IPC + auto-start if it was left enabled last run. */
-export function registerWebServerIpc(_getMainWindow: () => BrowserWindow | null): void {
+export function registerWebServerIpc(): void {
   ipcMain.handle(SHELL_IPC.webServerStatus, () => getWebServerStatus())
   ipcMain.handle(SHELL_IPC.webServerSetEnabled, (_e, value: unknown) => setEnabled(value === true))
   ipcMain.handle(SHELL_IPC.webServerSetPassword, (_e, password: unknown) => {
@@ -420,11 +492,6 @@ export function registerWebServerIpc(_getMainWindow: () => BrowserWindow | null)
   })
 
   if (store.get('enabled') === true && hasPassword()) void startServer()
-}
-
-/** True while the LAN server is running (index.ts stops it on quit). */
-export function webServerRunning(): boolean {
-  return server !== null
 }
 
 export function stopWebServer(): Promise<WebServerStatus> {

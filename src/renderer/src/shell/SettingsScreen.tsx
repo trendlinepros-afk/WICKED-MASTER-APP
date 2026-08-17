@@ -458,8 +458,12 @@ function BackupSection(): React.JSX.Element {
     setMessage(null)
     setError(null)
     const res = (await window.wicked.invoke(SHELL_IPC.backupNow)) as BackupResult
-    if (res.ok) setMessage(`Backed up ${res.fileCount ?? 0} files (${fmtBytes(res.size ?? 0)}).`)
-    else setError(res.error ?? 'Backup failed.')
+    if (res.ok) {
+      const skipped = res.skipped?.length
+        ? ` ${res.skipped.length} file(s) were too large or unreadable and were skipped: ${res.skipped.slice(0, 3).join(', ')}${res.skipped.length > 3 ? ', …' : ''}`
+        : ''
+      setMessage(`Backed up ${res.fileCount ?? 0} files (${fmtBytes(res.size ?? 0)}).${skipped}`)
+    } else setError(res.error ?? 'Backup failed.')
     await refresh()
     setBusy(false)
   }
@@ -646,6 +650,11 @@ function BackupSection(): React.JSX.Element {
             Keeps the newest {backup.keep} backups in the folder; older ones are removed.
             {backup.lastBackupUtc ? ` Last backup: ${fmtWhen(backup.lastBackupUtc)}.` : ' No backup taken yet.'}
           </p>
+          {backup.lastBackupError && (
+            <p className="mt-1 rounded-lg bg-danger/10 p-2 text-xs text-danger">
+              The last backup failed: {backup.lastBackupError}
+            </p>
+          )}
         </div>
 
         {/* recent backups */}

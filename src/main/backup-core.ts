@@ -37,6 +37,7 @@ export const INCLUDE_TOP = new Set([
   'wicked-settings.json',
   'wicked-modules.json',
   'wicked-keys.json',
+  'module-codelens.json', // codelens' private store — the one module store outside wicked-modules.json
   'modules',
   'IndexedDB',
   'Local Storage'
@@ -76,6 +77,8 @@ export interface BackupManifest {
   createdUtc: string
   appVersion: string
   fileCount: number
+  /** rel paths that were dropped from this backup (oversized) — shown to the user */
+  skipped?: string[]
 }
 
 function relKey(rel: string): string {
@@ -84,12 +87,15 @@ function relKey(rel: string): string {
 
 /**
  * Walk `root` and return the files to back up. Include/exclude are applied by
- * name so this is fully testable with a fake root dir.
+ * name so this is fully testable with a fake root dir. Oversized files are
+ * dropped but RECORDED into `skippedOut` — a backup that silently omits data
+ * while reporting success is worse than no backup.
  */
 export function collectEntries(
   root: string,
   includeTop: Set<string> = INCLUDE_TOP,
-  excludeRel: Set<string> = EXCLUDE_RELPATHS
+  excludeRel: Set<string> = EXCLUDE_RELPATHS,
+  skippedOut?: string[]
 ): BackupEntry[] {
   const out: BackupEntry[] = []
   const walk = (abs: string, rel: string): void => {
@@ -113,6 +119,7 @@ export function collectEntries(
     } else if (st.isFile()) {
       if (st.size > MAX_BACKUP_FILE_BYTES) {
         console.warn(`[wicked] backup: skipping oversized file (${Math.round(st.size / 1048576)} MB): ${relKey(rel)}`)
+        skippedOut?.push(`${relKey(rel)} (${Math.round(st.size / 1048576)} MB)`)
         return
       }
       out.push({ abs, rel: relKey(rel) })
@@ -133,7 +140,8 @@ export function writeBackupZip(
   entries: BackupEntry[],
   outFile: string,
   appVersion: string,
-  extraFiles: { rel: string; data: string }[] = []
+  extraFiles: { rel: string; data: string }[] = [],
+  skipped: string[] = []
 ): number {
   const zip = new AdmZip()
   let count = 0
@@ -143,6 +151,7 @@ export function writeBackupZip(
       count++
     } catch {
       // a single unreadable/locked file must not fail the whole backup
+      skipped.push(`${e.rel} (unreadable)`)
     }
   }
   for (const ex of extraFiles) {
@@ -154,7 +163,8 @@ export function writeBackupZip(
     version: 1,
     createdUtc: new Date().toISOString(),
     appVersion,
-    fileCount: count
+    fileCount: count,
+    ...(skipped.length > 0 ? { skipped: skipped.slice(0, 50) } : {})
   }
   zip.addFile(MANIFEST_NAME, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
   const tmp = outFile + '.tmp'
@@ -171,7 +181,8 @@ export function writeBackupZip(
 export function buildBackupZipBuffer(
   entries: BackupEntry[],
   appVersion: string,
-  extraFiles: { rel: string; data: string }[] = []
+  extraFiles: { rel: string; data: string }[] = [],
+  skipped: string[] = []
 ): Buffer {
   const zip = new AdmZip()
   let count = 0
@@ -181,6 +192,7 @@ export function buildBackupZipBuffer(
       count++
     } catch {
       // a single unreadable/locked file must not fail the whole snapshot
+      skipped.push(`${e.rel} (unreadable)`)
     }
   }
   for (const ex of extraFiles) {
@@ -192,7 +204,8 @@ export function buildBackupZipBuffer(
     version: 1,
     createdUtc: new Date().toISOString(),
     appVersion,
-    fileCount: count
+    fileCount: count,
+    ...(skipped.length > 0 ? { skipped: skipped.slice(0, 50) } : {})
   }
   zip.addFile(MANIFEST_NAME, Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'))
   return zip.toBuffer()
@@ -254,26 +267,51 @@ export function applyPendingRestore(userData: string): void {
     const marker = join(userData, PENDING_MARKER)
     if (!existsSync(marker)) return
     const staged = join(userData, STAGED_ZIP)
-    try {
-      if (existsSync(staged) && readManifest(staged)) {
-        const n = extractZipTo(staged, userData)
-        // If a portable key set was unlocked at restore time, it was re-encrypted
-        // for THIS machine and staged; move it in AFTER extraction so it wins over
-        // the (machine-A, un-decryptable) wicked-keys.json inside the backup.
-        const restoredKeys = join(userData, RESTORED_KEYS_STAGE)
-        if (existsSync(restoredKeys)) {
-          renameSync(restoredKeys, join(userData, 'wicked-keys.json'))
-          console.log('[wicked] applied portable API keys from backup')
-        }
-        console.log(`[wicked] applied pending restore: ${n} file(s) from backup`)
-      } else {
-        console.error('[wicked] pending restore marker found but staged backup was missing/invalid')
-      }
-    } finally {
-      // Always clear staging so a bad backup can't wedge every launch.
+    const clearStaging = (): void => {
       rmSync(staged, { force: true })
       rmSync(marker, { force: true })
       rmSync(join(userData, RESTORED_KEYS_STAGE), { force: true })
+    }
+    if (!existsSync(staged) || !readManifest(staged)) {
+      console.error('[wicked] pending restore marker found but staged backup was missing/invalid')
+      clearStaging()
+      return
+    }
+    try {
+      const n = extractZipTo(staged, userData)
+      // If a portable key set was unlocked at restore time, it was re-encrypted
+      // for THIS machine and staged; move it in AFTER extraction so it wins over
+      // the (machine-A, un-decryptable) wicked-keys.json inside the backup.
+      const restoredKeys = join(userData, RESTORED_KEYS_STAGE)
+      if (existsSync(restoredKeys)) {
+        renameSync(restoredKeys, join(userData, 'wicked-keys.json'))
+        console.log('[wicked] applied portable API keys from backup')
+      }
+      console.log(`[wicked] applied pending restore: ${n} file(s) from backup`)
+      clearStaging()
+    } catch (err) {
+      // A FAILED extract (disk full, AV lock, power loss) leaves userData mixed
+      // old/new — keep the staged zip so the next boot RETRIES instead of
+      // booting half-restored with the only copy deleted. Give up after 3 tries
+      // so a genuinely bad zip can't wedge every launch.
+      let attempts = 0
+      try {
+        attempts = Number((JSON.parse(readFileSync(marker, 'utf8')) as { attempts?: number }).attempts) || 0
+      } catch {
+        /* marker unreadable → treat as first attempt */
+      }
+      if (attempts + 1 >= 3) {
+        console.error('[wicked] restore failed 3 times — clearing staging:', err)
+        clearStaging()
+      } else {
+        try {
+          const prev = JSON.parse(readFileSync(marker, 'utf8')) as Record<string, unknown>
+          writeFileSync(marker, JSON.stringify({ ...prev, attempts: attempts + 1 }, null, 2), 'utf8')
+        } catch {
+          writeFileSync(marker, JSON.stringify({ attempts: attempts + 1 }, null, 2), 'utf8')
+        }
+        console.error(`[wicked] restore extract failed (attempt ${attempts + 1}/3) — will retry next launch:`, err)
+      }
     }
   } catch (err) {
     console.error('[wicked] applyPendingRestore failed (non-fatal):', err)

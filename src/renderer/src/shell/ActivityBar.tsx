@@ -47,18 +47,26 @@ export default function ActivityBar(): React.JSX.Element {
     window.wicked.invoke(SHELL_IPC.appVersion).then((v) => setAppVersion(v as string))
   }, [])
 
-  // Drag the right edge to resize the expanded sidebar (persisted).
+  // Drag the right edge to resize the expanded sidebar (persisted). The
+  // cleanup ref covers an unmount mid-drag: without it the document listeners
+  // and the body cursor/user-select overrides would outlive the component.
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => resizeCleanupRef.current?.(), [])
   const startResize = (e: React.MouseEvent): void => {
     e.preventDefault()
     const left = navRef.current?.getBoundingClientRect().left ?? 0
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
     const onMove = (ev: MouseEvent): void => setDragWidth(Math.max(180, Math.min(440, ev.clientX - left)))
-    const onUp = (): void => {
+    const cleanup = (): void => {
+      resizeCleanupRef.current = null
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
+    }
+    const onUp = (): void => {
+      cleanup()
       setDragWidth((w) => {
         if (w != null) update({ navWidth: w })
         return null
@@ -66,6 +74,7 @@ export default function ActivityBar(): React.JSX.Element {
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+    resizeCleanupRef.current = cleanup
   }
   // folders the user has manually expanded (the active one auto-expands)
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})

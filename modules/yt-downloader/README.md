@@ -78,13 +78,19 @@ song, so pulling video is almost never what you want):
   so high-frame-rate sources keep their smoothness.
 - **Quality picker modes.** The Quality card has a Video / Music toggle: Video
   shows the resolution tiers, Music shows only the two audio presets.
-- **Crash resume.** Started jobs are journaled to `pending-jobs.json` and
-  cleared on completion/cancel. If the app or the whole PC dies mid-job, the
-  next launch restarts the survivors (max 3 attempts): yt-dlp skips finished
-  files and continues `.part` files, and the job's manifest is kept across the
-  crash so the combine still covers both runs' files. Job cards show up via
-  `job-start`/`job-end` events even though the UI never invoked the job. Each
-  card shows TWO bars: overall project progress and the current item's own %.
+- **Crash resume.** Started jobs are journaled to `pending-jobs.json` (written
+  atomically, temp + rename) and cleared on completion/cancel. If the app or
+  the whole PC dies mid-job, the next launch restarts the survivors (max 3
+  attempts): yt-dlp skips finished files and continues `.part` files, and the
+  job's manifest is kept across the crash so the combine still covers both
+  runs' files. Job cards show up via `job-start`/`job-end` events even though
+  the UI never invoked the job. Each card shows TWO bars: overall project
+  progress and the current item's own %. Quitting the app with jobs running
+  tree-kills yt-dlp/ffmpeg (no orphans) and the journal resumes them next
+  launch. A user **cancel** is different: it leaves the journal, so its
+  `.part`/`.ytdl` leftovers are swept (only once no other job shares the
+  folder). Progress events are wired at module scope (robocopy pattern), so
+  jobs keep updating the store while you're on another module's route.
 
 ## Quality
 

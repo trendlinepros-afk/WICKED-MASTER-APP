@@ -147,6 +147,12 @@ export default function LiveTradeCopilot(): React.JSX.Element {
   modelRef.current = model
   const soundRef = useRef(soundOn)
   soundRef.current = soundOn
+  // stopSession can run from a STALE closure (the 60-min cap inside the timer's
+  // tick, unmount cleanup) — mirror what its summary needs into refs
+  const symbolRef = useRef(symbol)
+  symbolRef.current = symbol
+  const barsWarnRef = useRef(barsWarn)
+  barsWarnRef.current = barsWarn
 
   const pushFeed = (item: FeedItem): void => setFeed((f) => [item, ...f].slice(0, 200))
   const sys = (text: string): void => pushFeed({ t: Date.now(), kind: 'system', text })
@@ -168,6 +174,24 @@ export default function LiveTradeCopilot(): React.JSX.Element {
       if (timerRef.current) clearInterval(timerRef.current)
       if (clockRef.current) clearInterval(clockRef.current)
       streamRef.current?.getTracks().forEach((t) => t.stop())
+      // a session still running must be closed in MAIN too — that's what saves
+      // the transcript, scores open signals and frees the session memory
+      const id = sessionIdRef.current
+      if (id) {
+        sessionIdRef.current = ''
+        void invoke('stop-session', {
+          sessionId: id,
+          summary: {
+            symbol: symbolRef.current,
+            startedAt: startedAtRef.current,
+            endedAt: Date.now(),
+            verdictCount: callsRef.current,
+            flips: flipsRef.current,
+            lastAction: lastActionRef.current,
+            note: barsWarnRef.current ? 'vision-only' : undefined
+          } satisfies SessionSummary
+        })
+      }
     }
   }, [])
 
@@ -277,8 +301,10 @@ export default function LiveTradeCopilot(): React.JSX.Element {
         // hypothetical trade markers: entry price on signals, % on closes.
         // The position toggle AUTO-FOLLOWS the copilot's own signals so the
         // very next check is gated to Hold/exit vocabulary (never Wait while
-        // its own trade is on). Manual clicks still override; timeout and
-        // session-end closes are scoring artifacts and do NOT flip the toggle.
+        // its own trade is on). Manual clicks still override. Signal AND
+        // timeout closes flatten the toggle — after a timeout the tracker is
+        // already flat, so no close event would ever arrive to release a
+        // long/short toggle. Session-end closes happen while stopping anyway.
         for (const ev of res.signalEvents ?? []) {
           const s = ev.signal
           if (ev.type === 'open') {
@@ -302,6 +328,10 @@ export default function LiveTradeCopilot(): React.JSX.Element {
               setPosition({ state: 'flat' })
               setEntryText('')
               sys('Position auto-set: flat.')
+            } else if (s.reason === 'timeout') {
+              setPosition({ state: 'flat' })
+              setEntryText('')
+              sys('10-minute timeout — position auto-set flat. Click Long/Short if you are still in the trade.')
             }
           }
         }
@@ -405,13 +435,13 @@ export default function LiveTradeCopilot(): React.JSX.Element {
     setPaused(false)
     if (id) {
       const summary: SessionSummary = {
-        symbol,
+        symbol: symbolRef.current,
         startedAt: startedAtRef.current,
         endedAt: Date.now(),
         verdictCount: callsRef.current,
         flips: flipsRef.current,
         lastAction: lastActionRef.current,
-        note: barsWarn ? 'vision-only' : undefined
+        note: barsWarnRef.current ? 'vision-only' : undefined
       }
       await invoke('stop-session', { sessionId: id, summary })
       sys('Session stopped — transcript saved to The Brain.')

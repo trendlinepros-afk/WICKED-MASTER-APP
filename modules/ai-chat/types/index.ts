@@ -278,8 +278,6 @@ export const VAULT_CATEGORIES = [
   'Uncategorized',
 ] as const;
 
-export type VaultCategory = (typeof VAULT_CATEGORIES)[number];
-
 // ---------- Chat streaming over IPC ----------
 // Provider calls run in the MAIN process (API keys never reach the renderer).
 // The renderer starts a stream with a requestId, receives cumulative text via

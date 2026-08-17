@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile, readdir, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { session } from 'electron'
 import type { ModuleDataPath } from '@shared/types'
@@ -110,44 +110,60 @@ export default function register(ctx: ModuleIpcContext): void {
 
   async function saveBookmarks(bookmarks: Bookmark[]): Promise<void> {
     mkdirSync(moduleDir, { recursive: true })
-    await writeFile(bookmarksFile, JSON.stringify({ bookmarks }, null, 2), 'utf8')
+    // temp + rename so a crash mid-write can't corrupt the bookmarks file
+    const tmp = `${bookmarksFile}.tmp`
+    await writeFile(tmp, JSON.stringify({ bookmarks }, null, 2), 'utf8')
+    await rename(tmp, bookmarksFile)
+  }
+
+  // Add/remove are read-modify-write cycles — chain them so two quick calls
+  // (e.g. an MCP tool and a click) can't interleave and drop a bookmark.
+  let bookmarksChain: Promise<unknown> = Promise.resolve()
+  function withBookmarks<T>(fn: () => Promise<T>): Promise<T> {
+    const run = bookmarksChain.then(fn, fn)
+    bookmarksChain = run.catch(() => undefined)
+    return run
   }
 
   ctx.ipcMain.handle(`${ID}:bookmarks-get`, async () => {
     return { ok: true, bookmarks: await readBookmarks() }
   })
 
-  ctx.ipcMain.handle(`${ID}:bookmark-add`, async (_e, raw: unknown) => {
-    const r = asRecord(raw)
-    if (!isHttpUrl(r.url)) return { ok: false, error: 'A full http(s):// URL is required.' }
-    const url = r.url.trim()
-    const bookmarks = await readBookmarks()
-    if (!bookmarks.some((b) => b.url === url)) {
-      bookmarks.push({
-        url,
-        title: typeof r.title === 'string' && r.title.trim() ? r.title.trim() : url,
-        addedAt: new Date().toISOString()
-      })
+  ctx.ipcMain.handle(`${ID}:bookmark-add`, (_e, raw: unknown) =>
+    withBookmarks(async () => {
+      const r = asRecord(raw)
+      if (!isHttpUrl(r.url)) return { ok: false, error: 'A full http(s):// URL is required.' }
+      const url = r.url.trim()
+      const bookmarks = await readBookmarks()
+      if (!bookmarks.some((b) => b.url === url)) {
+        bookmarks.push({
+          url,
+          title: typeof r.title === 'string' && r.title.trim() ? r.title.trim() : url,
+          addedAt: new Date().toISOString()
+        })
+        try {
+          await saveBookmarks(bookmarks)
+        } catch (err) {
+          return { ok: false, error: 'Could not save bookmarks: ' + errMsg(err) }
+        }
+      }
+      return { ok: true, bookmarks }
+    })
+  )
+
+  ctx.ipcMain.handle(`${ID}:bookmark-remove`, (_e, raw: unknown) =>
+    withBookmarks(async () => {
+      const r = asRecord(raw)
+      if (typeof r.url !== 'string') return { ok: false, error: 'url is required.' }
+      const bookmarks = (await readBookmarks()).filter((b) => b.url !== r.url)
       try {
         await saveBookmarks(bookmarks)
       } catch (err) {
         return { ok: false, error: 'Could not save bookmarks: ' + errMsg(err) }
       }
-    }
-    return { ok: true, bookmarks }
-  })
-
-  ctx.ipcMain.handle(`${ID}:bookmark-remove`, async (_e, raw: unknown) => {
-    const r = asRecord(raw)
-    if (typeof r.url !== 'string') return { ok: false, error: 'url is required.' }
-    const bookmarks = (await readBookmarks()).filter((b) => b.url !== r.url)
-    try {
-      await saveBookmarks(bookmarks)
-    } catch (err) {
-      return { ok: false, error: 'Could not save bookmarks: ' + errMsg(err) }
-    }
-    return { ok: true, bookmarks }
-  })
+      return { ok: true, bookmarks }
+    })
+  )
 
   /* ----------------------------- incognito-only --------------------------- */
 
@@ -420,6 +436,15 @@ export default function register(ctx: ModuleIpcContext): void {
       mkdirSync(screenshotsDir, { recursive: true })
       const file = join(screenshotsDir, `tab-${timestamp()}.png`)
       await writeFile(file, Buffer.from(out.data, 'base64'))
+      // keep the folder bounded: the timestamped names sort chronologically,
+      // so drop everything past the newest 200 (best-effort)
+      try {
+        const shots = (await readdir(screenshotsDir)).filter((n) => /^tab-.*\.png$/.test(n)).sort()
+        for (const old of shots.slice(0, Math.max(0, shots.length - 200)))
+          await rm(join(screenshotsDir, old), { force: true })
+      } catch {
+        /* pruning is best-effort */
+      }
       return { ok: true, path: file, targetId: t.id, url: t.url, title: t.title }
     } catch (err) {
       return { ok: false, error: errMsg(err) }

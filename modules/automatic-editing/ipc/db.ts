@@ -51,6 +51,19 @@ function ensureDb(): Sqlite | null {
   return db
 }
 
+/**
+ * Fold the WAL into projects.db. Registered as a backup-flush hook: Backup/
+ * Cloud Sync copies files raw, so without a checkpoint the captured .db would
+ * miss everything still sitting in projects.db-wal.
+ */
+export function checkpointWal(): void {
+  try {
+    db?.pragma('wal_checkpoint(TRUNCATE)')
+  } catch {
+    /* db unavailable — nothing to flush */
+  }
+}
+
 function indexPath(): string {
   return path.join(moduleDataDir(), 'projects-index.json')
 }

@@ -1,4 +1,5 @@
-import { writeFileSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { Notification } from 'electron'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import { callAi, type AiKeys, type AiMessage } from '../stock-planner/ipc/ai'
@@ -1486,7 +1487,12 @@ export default function register(ctx: ModuleIpcContext): void {
           }
         }
       }
-      if (changed) writeWatch(all)
+      if (changed) {
+        // merge ONLY the lastFired changes into a fresh read — the awaits above
+        // interleave with watch-add/remove/update, whose writes must survive
+        const seen = new Map(all.map((i) => [i.ticker, i]))
+        writeWatch(readWatch().map((i) => (seen.has(i.ticker) ? { ...i, lastFired: seen.get(i.ticker)!.lastFired } : i)))
+      }
       if (fired.length > 0) {
         try {
           if (Notification.isSupported()) {
@@ -1513,4 +1519,26 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   }
   setInterval(() => void checkAlerts(), MONITOR_INTERVAL_MS)
+
+  ctx.ipcMain.handle(`${ID}:data-paths`, () => {
+    let partition: string | null = null
+    try {
+      const p = join(ctx.app.getPath('userData'), 'Partitions', 'find-trades-tv')
+      partition = existsSync(p) ? p : null
+    } catch {
+      /* not available */
+    }
+    return [
+      {
+        label: 'Watchlist & alerts',
+        path: null,
+        note: 'Stored under the "find-trades.*" keys in wicked-modules.json. Included in Backup & Cloud Sync.'
+      },
+      {
+        label: 'TradingView sign-in',
+        path: partition,
+        note: 'The embedded chart’s browser session. Device-local — NOT included in Backup & Cloud Sync; sign in to TradingView again on a new PC.'
+      }
+    ]
+  })
 }

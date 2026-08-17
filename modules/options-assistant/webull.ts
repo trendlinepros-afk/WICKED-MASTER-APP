@@ -342,8 +342,8 @@ export async function getNbbo(keys: WebullKeys, symbol: string): Promise<Nbbo> {
   for (const row of rowsOf(res.data)) {
     const bids = Array.isArray(row.bids) ? (row.bids as unknown[]).map(rec) : []
     const asks = Array.isArray(row.asks) ? (row.asks as unknown[]).map(rec) : []
-    out.bid = bids.length ? fnum(bids[0], 'price', 'p', 'bid') : (fnum(row, 'bid', 'bid_price', 'bidPrice') ?? out.bid)
-    out.ask = asks.length ? fnum(asks[0], 'price', 'p', 'ask') : (fnum(row, 'ask', 'ask_price', 'askPrice') ?? out.ask)
+    out.bid = bids.length ? (fnum(bids[0], 'price', 'p', 'bid') ?? out.bid) : (fnum(row, 'bid', 'bid_price', 'bidPrice') ?? out.bid)
+    out.ask = asks.length ? (fnum(asks[0], 'price', 'p', 'ask') ?? out.ask) : (fnum(row, 'ask', 'ask_price', 'askPrice') ?? out.ask)
     out.bidSize = bids.length ? fnum(bids[0], 'size', 'volume') : fnum(row, 'bid_size', 'bidSize')
     out.askSize = asks.length ? fnum(asks[0], 'size', 'volume') : fnum(row, 'ask_size', 'askSize')
     if (out.bid != null || out.ask != null) break

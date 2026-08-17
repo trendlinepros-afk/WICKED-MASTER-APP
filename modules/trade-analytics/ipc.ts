@@ -470,6 +470,16 @@ async function callAi(
 export default function register(ctx: ModuleIpcContext): void {
   let aiAbort: AbortController | null = null
 
+  // WAL databases must checkpoint right before Backup/Cloud Sync captures
+  // files, or the snapshot's trades.db misses everything still in the -wal.
+  ctx.onBackupFlush(() => {
+    try {
+      db?.pragma('wal_checkpoint(TRUNCATE)')
+    } catch {
+      /* db not open yet — nothing to flush */
+    }
+  })
+
   // Raw executions. Optional account ref (id or name) scopes the result; the
   // renderer calls this with no arg and still gets every row (back-compatible).
   ctx.ipcMain.handle(`${ID}:executions`, (_e, rawAccount: unknown) => {

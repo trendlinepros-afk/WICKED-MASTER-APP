@@ -200,6 +200,16 @@ function importCsvFile(
 export default function register(ctx: ModuleIpcContext): void {
   const ACTIVE_KEY = `${ID}.active`
 
+  // WAL databases must checkpoint right before Backup/Cloud Sync captures
+  // files, or the snapshot's finance.db misses everything still in the -wal.
+  ctx.onBackupFlush(() => {
+    try {
+      db?.pragma('wal_checkpoint(TRUNCATE)')
+    } catch {
+      /* db not open yet — nothing to flush */
+    }
+  })
+
   ctx.ipcMain.handle(`${ID}:bootstrap`, () => {
     try {
       const database = getDb(ctx.app)

@@ -65,6 +65,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  // Null the shared reference on close: standalone module windows keep the app
+  // alive, and every getMainWindow()?.webContents.send would otherwise throw
+  // "Object has been destroyed" from async module callbacks.
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -131,11 +137,29 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // Defense in depth for every webContents (windows AND <webview>s): strip any
+  // preload/nodeIntegration a webview tag might request, and block in-place
+  // top-level navigation away from the app (which would hand a remote page the
+  // window.wicked bridge). setWindowOpenHandler only covers NEW windows.
+  app.on('web-contents-created', (_e, contents) => {
+    contents.on('will-attach-webview', (_ev, webPreferences) => {
+      delete (webPreferences as { preload?: string }).preload
+      webPreferences.nodeIntegration = false
+      webPreferences.nodeIntegrationInSubFrames = false
+    })
+    contents.on('will-navigate', (ev, url) => {
+      const devOrigin = process.env['ELECTRON_RENDERER_URL'] ?? ''
+      const allowed = url.startsWith('file://') || (devOrigin && url.startsWith(devOrigin))
+      // only guard top-level app windows — webview guests navigate freely
+      if (!allowed && contents.getType() === 'window') ev.preventDefault()
+    })
+  })
+
   // shell IPC
   ipcMain.handle(SHELL_IPC.settingsGet, () => getSettings())
   ipcMain.handle(SHELL_IPC.settingsSet, (_e, patch: Partial<ShellSettings>) => {
     const next = setSettings(patch)
-    scheduleChecks() // update prefs may have changed
+    if (patch.update) scheduleChecks() // update prefs changed
     if (patch.backup) scheduleBackups() // backup schedule may have changed
     return next
   })
@@ -143,7 +167,13 @@ app.whenReady().then(() => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url)
   })
   ipcMain.handle(SHELL_IPC.appVersion, () => app.getVersion())
-  ipcMain.handle(SHELL_IPC.openModuleWindow, (_e, id: string) => openModuleWindow(String(id)))
+  ipcMain.handle(SHELL_IPC.openModuleWindow, (_e, id: string) => {
+    // renderer/LAN-bridge input: sane id shape + a cap so a loop can't spawn
+    // unbounded blank windows
+    const clean = String(id)
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(clean) || moduleWindows.size >= 20) return
+    openModuleWindow(clean)
+  })
 
   // A module's file/data locations for the Settings dropdown. A module opts in by
   // registering `<module-id>:data-paths`; otherwise there's nothing to show.
@@ -163,7 +193,7 @@ app.whenReady().then(() => {
   registerSyncIpc(() => mainWindow)
   // LAN web server (Settings → Web Server; OFF by default, auto-starts here only
   // if the user left it enabled last run and a password is set)
-  registerWebServerIpc(() => mainWindow)
+  registerWebServerIpc()
 
   // MCP: the channel registry needs the main window for synthetic-event senders
   setMainWindowGetter(() => mainWindow)
@@ -194,6 +224,22 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch((err) => {
+  // a throw during startup must not leave a silent, windowless process
+  console.error('[wicked] startup failed:', err)
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { dialog } = require('electron') as typeof import('electron')
+    dialog.showErrorBox('WICKED failed to start', String(err))
+  } catch {
+    /* headless */
+  }
+  app.exit(1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  // log instead of crashing main on a stray module promise
+  console.error('[wicked] unhandled rejection:', reason)
 })
 
 app.on('window-all-closed', () => {
@@ -203,14 +249,15 @@ app.on('window-all-closed', () => {
 let closingPushDone = false
 app.on('before-quit', (e) => {
   // "Sync app on close": push one last snapshot, then really quit. app.exit(0)
-  // bypasses before-quit, so this runs at most once. 8s network cap so a hung
-  // connection can't wedge the quit.
+  // bypasses before-quit, so this runs at most once. 20s network cap so a hung
+  // connection can't wedge the quit; a failed/timed-out push is persisted by
+  // sync.ts (lastPushError) and warned about in the Cloud Sync panel.
   if (!closingPushDone && shouldPushOnClose()) {
     e.preventDefault()
     closingPushDone = true
     Promise.race([
       pushNow('auto').catch(() => undefined),
-      new Promise((resolve) => setTimeout(resolve, 8000))
+      new Promise((resolve) => setTimeout(resolve, 20_000))
     ]).finally(() => {
       stopMcpServer()
       stopWebServer()

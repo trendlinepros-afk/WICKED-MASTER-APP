@@ -39,7 +39,19 @@ export function getServers(): McpServerConfig[] {
 }
 
 export function saveServers(servers: McpServerConfig[]): void {
+  const old = new Map(getServers().map((s) => [s.id, s]));
   db.setSettingRaw(SETTINGS_KEY, JSON.stringify(servers));
+  // The connection cache is keyed by id, so an edited command/args (or a
+  // disable/remove) would otherwise keep talking to the process spawned from
+  // the OLD config until the app restarts.
+  const next = new Map(servers.map((s) => [s.id, s]));
+  for (const id of [...connections.keys()]) {
+    const n = next.get(id);
+    const o = old.get(id);
+    const stale =
+      !n || !n.enabled || !o || n.command !== o.command || JSON.stringify(n.args) !== JSON.stringify(o.args);
+    if (stale) void disconnect(id);
+  }
 }
 
 async function ensureConnected(server: McpServerConfig): Promise<Client> {

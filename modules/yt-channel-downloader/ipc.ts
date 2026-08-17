@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { basename, dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -13,6 +13,7 @@ import {
   resolveFfmpeg,
   resolveFfprobe,
   spawnYtDlp,
+  treeKill,
   ytDlpCmd
 } from '../yt-downloader/ipc/ytdlp'
 import { canvasFor, collectOutputs, combineClips, isVideoFile, sanitizeName } from '../yt-downloader/ipc/combine'
@@ -170,7 +171,10 @@ export default function register(ctx: ModuleIpcContext): void {
 
   const saveHistory = (channels: ChannelRecord[]): void => {
     mkdirSync(moduleDir(), { recursive: true })
-    writeFileSync(historyFile(), JSON.stringify({ channels }, null, 2), 'utf8')
+    // temp + rename: a crash mid-write must never corrupt the channel history
+    const tmp = `${historyFile()}.tmp`
+    writeFileSync(tmp, JSON.stringify({ channels }, null, 2), 'utf8')
+    renameSync(tmp, historyFile())
   }
 
   const upsertRecord = (patch: Partial<ChannelRecord> & { id: string }): ChannelRecord => {
@@ -210,7 +214,9 @@ export default function register(ctx: ModuleIpcContext): void {
   }
   const writePendingJob = (job: PendingChannelJob): void => {
     mkdirSync(moduleDir(), { recursive: true })
-    writeFileSync(pendingFile(), JSON.stringify({ job }, null, 2), 'utf8')
+    const tmp = `${pendingFile()}.tmp`
+    writeFileSync(tmp, JSON.stringify({ job }, null, 2), 'utf8')
+    renameSync(tmp, pendingFile())
   }
   const patchPendingJob = (patch: Partial<PendingChannelJob>): void => {
     const cur = readPendingJob()
@@ -509,7 +515,8 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       )
 
-      if (result.cancelled) return finish({ ok: false, cancelled: true })
+      // treeKill (taskkill) doesn't set child.killed, so check our flag too
+      if (result.cancelled || cancelRequested) return finish({ ok: false, cancelled: true })
 
       // Locate the channel folder: this session's files, the known folder
       // (rescan/auto/resume flow), or nothing (fresh run that downloaded nothing).
@@ -777,10 +784,16 @@ export default function register(ctx: ModuleIpcContext): void {
   ctx.ipcMain.handle(`${ID}:cancel`, () => {
     cancelRequested = true
     if (child) {
-      child.kill()
+      treeKill(child)
       return { ok: true, cancelled: true }
     }
     return { ok: true, cancelled: false }
+  })
+
+  // Quitting mid-job must not orphan yt-dlp/ffmpeg. The pending-job journal
+  // survives (cancelRequested stays false), so the next launch resumes it.
+  ctx.app.on('before-quit', () => {
+    if (child) treeKill(child)
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

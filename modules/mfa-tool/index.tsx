@@ -280,10 +280,24 @@ function AccountRow({ account, nowMs }: { account: Account; nowMs: number }): Re
 
   const copy = async (): Promise<void> => {
     if (code === null) return
-    await navigator.clipboard.writeText(code)
+    try {
+      await navigator.clipboard.writeText(code)
+    } catch {
+      return
+    }
     setCopied(true)
     if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
     copyTimer.current = window.setTimeout(() => setCopied(false), 1200)
+    // A one-time code must not linger on the clipboard: clear it after 30s,
+    // but only if the clipboard still holds THIS code (never clobber
+    // something else the user copied since).
+    const copiedCode = code
+    window.setTimeout(() => {
+      navigator.clipboard
+        .readText()
+        .then((cur) => (cur === copiedCode ? navigator.clipboard.writeText('') : undefined))
+        .catch(() => undefined)
+    }, 30_000)
   }
 
   const remove = (): void => {

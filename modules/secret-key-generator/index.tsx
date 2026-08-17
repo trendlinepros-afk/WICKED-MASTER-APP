@@ -66,8 +66,12 @@ export default function SecretKeyGenerator(): React.JSX.Element {
 
   const copyToClipboard = async (key: string): Promise<void> => {
     if (!key) return
-    await navigator.clipboard.writeText(key)
-    flashStatus('Copied to clipboard ✓')
+    try {
+      await navigator.clipboard.writeText(key)
+      flashStatus('Copied to clipboard ✓')
+    } catch {
+      flashStatus('Could not copy — select the key and copy it manually')
+    }
   }
 
   const generate = (fn: (length: number) => string): void => {

@@ -71,6 +71,12 @@ project boards, PDF/Markdown export and a LAN web portal.
   `/__portal/rpc` (token-gated). Since keys never transit IPC anymore, the
   portal cannot expose key values (the standalone portal used to serve
   decrypted keys inside `settings:get` — that hole is gone).
+- The **UI itself is token-gated too**: the first visit's `?token=…` sets an
+  HttpOnly cookie that covers asset requests and reloads; without either, all
+  static requests get a 401. Token comparisons are constant-time. Channels
+  that could spawn processes or move the data root (MCP server config/test,
+  Comfy/FluxGym launchers, data consolidation) are refused at the portal — the
+  chat's own tool-calling is unaffected (it runs inside the main process).
 - Portal limitations in the suite: no push events (chat replies appear when
   complete rather than token-by-token), desktop-only actions (native dialogs,
   PDF export, opening folders) are replaced with browser equivalents or

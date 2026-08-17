@@ -72,17 +72,17 @@ const VOLUME_RANGES: Range[] = [
   { label: '0 – 1', min: 0, max: 2 },
   { label: '2 – 3', min: 2, max: 4 },
   { label: '4 – 5', min: 4, max: 6 },
-  { label: '5 – 10', min: 6, max: 11 },
-  { label: '10 – 20', min: 11, max: 21 },
-  { label: '20 – 50', min: 21, max: 51 },
-  { label: '50 – 100', min: 51, max: 101 },
-  { label: '100 – 500', min: 101, max: 501 },
-  { label: '500 – 1000', min: 501, max: 1001 },
-  { label: '1000 – 2000', min: 1001, max: 2001 },
-  { label: '2000 – 3000', min: 2001, max: 3001 },
-  { label: '3000 – 5000', min: 3001, max: 5001 },
-  { label: '5000 – 10000', min: 5001, max: 10001 },
-  { label: '10000 +', min: 10001, max: Infinity }
+  { label: '6 – 10', min: 6, max: 11 },
+  { label: '11 – 20', min: 11, max: 21 },
+  { label: '21 – 50', min: 21, max: 51 },
+  { label: '51 – 100', min: 51, max: 101 },
+  { label: '101 – 500', min: 101, max: 501 },
+  { label: '501 – 1000', min: 501, max: 1001 },
+  { label: '1001 – 2000', min: 1001, max: 2001 },
+  { label: '2001 – 3000', min: 2001, max: 3001 },
+  { label: '3001 – 5000', min: 3001, max: 5001 },
+  { label: '5001 – 10000', min: 5001, max: 10001 },
+  { label: '10001 +', min: 10001, max: Infinity }
 ]
 
 const DURATION_RANGES: Range[] = [
@@ -276,8 +276,10 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
 
   let onlyProfit = 0
   let onlyLoss = 0
-  let bestTrade = 0
-  let worstTrade = 0
+  // seeded from the data, NOT 0 — an all-loss set's best trade is its least-bad
+  // loss (negative), and an all-win set's worst trade is its smallest win
+  let bestTrade = -Infinity
+  let worstTrade = Infinity
   let winPctSum = 0
   let winPctCount = 0
   let lossPctSum = 0
@@ -427,8 +429,8 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     totalPnl,
     onlyProfit,
     onlyLoss,
-    bestTrade,
-    worstTrade,
+    bestTrade: nClosed ? bestTrade : 0,
+    worstTrade: nClosed ? worstTrade : 0,
     bestDay,
     worstDay,
     lastDay,
@@ -436,9 +438,10 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     lastMonth: windowSum(30 * DAY),
     lastYear: windowSum(365 * DAY),
     avgPerTrade: { pnl: nClosed ? totalPnl / nClosed : 0, pct: nClosed ? allPctSum / nClosed : 0 },
-    avgPerDay: { pnl: tradingDays ? totalPnl / tradingDays : 0, pct: avgPct(totalPnl, totalCost) },
-    avgPerMonth: { pnl: tradingMonths ? totalPnl / tradingMonths : 0, pct: avgPct(totalPnl, totalCost) },
-    avgPerYear: { pnl: tradingYears ? totalPnl / tradingYears : 0, pct: avgPct(totalPnl, totalCost) },
+    // per-period % = overall return-on-cost spread across the periods traded
+    avgPerDay: { pnl: tradingDays ? totalPnl / tradingDays : 0, pct: tradingDays ? avgPct(totalPnl, totalCost) / tradingDays : 0 },
+    avgPerMonth: { pnl: tradingMonths ? totalPnl / tradingMonths : 0, pct: tradingMonths ? avgPct(totalPnl, totalCost) / tradingMonths : 0 },
+    avgPerYear: { pnl: tradingYears ? totalPnl / tradingYears : 0, pct: tradingYears ? avgPct(totalPnl, totalCost) / tradingYears : 0 },
     winAvgPerTrade: winning ? winTotals / winning : 0,
     winAvgPerDay: winDays ? winTotals / winDays : 0,
     winAvgPerMonth: tradingMonths ? winTotals / tradingMonths : 0,

@@ -59,6 +59,8 @@ export interface BackupSettings {
   keep: number
   /** ISO time of the last successful backup (for the scheduler) */
   lastBackupUtc: string
+  /** last backup failure message ('' = the last attempt succeeded) */
+  lastBackupError?: string
 }
 
 export interface ShellSettings {
@@ -155,6 +157,8 @@ export interface BackupResult {
   needPassword?: boolean
   /** backup: whether encrypted API keys were included in the zip */
   keysIncluded?: boolean
+  /** files that were dropped from the backup (oversized/unreadable) — honesty beats a fake "complete" */
+  skipped?: string[]
 }
 
 /**

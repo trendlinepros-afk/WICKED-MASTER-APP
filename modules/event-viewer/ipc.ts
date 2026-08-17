@@ -406,6 +406,16 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, cancelled }
   })
 
+  // quit must not orphan a running PowerShell collection
+  ctx.app.on('before-quit', () => {
+    try {
+      collectChild?.kill()
+    } catch {
+      /* already gone */
+    }
+    aiAbort?.abort()
+  })
+
   /* ---- export report ---- */
 
   ctx.ipcMain.handle(`${ID}:export-report`, async (_event, rawMarkdown: unknown) => {

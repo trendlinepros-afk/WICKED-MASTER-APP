@@ -111,15 +111,6 @@ export function hexToTriplet(hex: string): string | null {
   return `${(v >> 16) & 255} ${(v >> 8) & 255} ${v & 255}`
 }
 
-/** '11 16 34' → '#0b1022'. */
-export function tripletToHex(triplet: string): string | null {
-  const m = triplet.trim().match(/^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/)
-  if (!m) return null
-  const [r, g, b] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  if ([r, g, b].some((x) => x > 255)) return null
-  return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')
-}
-
 export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   const n = normalizeHex(hex)
   if (!n) return null

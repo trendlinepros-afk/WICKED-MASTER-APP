@@ -205,14 +205,6 @@ export function fmtDateTime(iso: string | null): string {
 export type Tab = 'cleanup' | 'drafts' | 'rules' | 'history'
 export type ConnState = 'idle' | 'connecting' | 'connected' | 'error'
 
-export interface DraftRow {
-  entryId: string
-  subject: string
-  senderName: string
-  senderEmail: string
-  receivedTime: string | null
-}
-
 export interface HistoryItem {
   senderLabel: string
   subject: string

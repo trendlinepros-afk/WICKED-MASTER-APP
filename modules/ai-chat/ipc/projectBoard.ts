@@ -30,6 +30,9 @@ function indexPath(root: string): string {
 }
 
 function boardDir(root: string, projectId: string): string {
+  // The id becomes a path segment and deleteProject rm -rf's the result — a
+  // traversal id ("..", "../..") must never resolve outside the boards root.
+  if (!/^[\w-]+$/.test(projectId)) throw new Error(`Invalid project id: ${projectId}`);
   return path.join(root, 'boards', projectId);
 }
 

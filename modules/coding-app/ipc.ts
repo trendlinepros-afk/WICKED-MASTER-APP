@@ -61,6 +61,12 @@ export default function register(ctx: ModuleIpcContext): void {
         note: 'The open (or most recently opened) project folder'
       },
       {
+        label: 'Chat conversations',
+        path: cfg.obsidianVaultPath ? join(cfg.obsidianVaultPath, 'chat-conversations') : null,
+        note:
+          'Saved chats inside your Obsidian vault. NOT included in Backup & Cloud Sync (outside the app data folder) — back it up separately.'
+      },
+      {
         label: 'Config file',
         path: existsSync(configPath) ? configPath : null
       },

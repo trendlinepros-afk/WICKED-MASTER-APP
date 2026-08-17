@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getApiKey } from './api-keys'
+import { onBackupFlush } from './backup-flush'
 import { recordingIpcMain } from './mcp/channel-registry'
 import { moduleStoreGet, moduleStoreSet } from './settings'
 
@@ -14,7 +15,16 @@ import { moduleStoreGet, moduleStoreSet } from './settings'
 async function printHtmlToPdf(html: string): Promise<Buffer> {
   const dir = mkdtempSync(join(app.getPath('temp'), 'wicked-pdf-'))
   const file = join(dir, 'print.html')
-  writeFileSync(file, html, 'utf8')
+  try {
+    writeFileSync(file, html, 'utf8')
+  } catch (err) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+    throw err
+  }
   const win = new BrowserWindow({
     show: false,
     width: 900,
@@ -22,7 +32,12 @@ async function printHtmlToPdf(html: string): Promise<Buffer> {
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false }
   })
   try {
-    await win.loadFile(file)
+    // loadFile resolves on did-finish-load, which a hung subresource can stall
+    // forever — race a timeout so the hidden window/renderer can't leak.
+    await Promise.race([
+      win.loadFile(file),
+      new Promise((_r, reject) => setTimeout(() => reject(new Error('PDF render timed out')), 20_000))
+    ])
     // give layout/fonts a beat to settle before printing
     await new Promise((r) => setTimeout(r, 300))
     return await win.webContents.printToPDF({
@@ -69,6 +84,12 @@ export interface ModuleIpcContext {
    * export-to-PDF features where jsPDF hand-layout would butcher rich content.
    */
   printHtmlToPdf: (html: string) => Promise<Buffer>
+  /**
+   * Register a synchronous flush run right before Backup/Cloud Sync read files
+   * (e.g. `db.pragma('wal_checkpoint(TRUNCATE)')` for a WAL SQLite database) so
+   * on-disk state is consistent when captured.
+   */
+  onBackupFlush: (fn: () => void) => void
 }
 
 type RegisterFn = (ctx: ModuleIpcContext) => void
@@ -90,7 +111,8 @@ export function registerModuleIpc(getMainWindow: () => BrowserWindow | null): st
     storeGet: moduleStoreGet,
     storeSet: moduleStoreSet,
     getApiKey,
-    printHtmlToPdf
+    printHtmlToPdf,
+    onBackupFlush
   }
   const registered: string[] = []
   for (const [path, mod] of Object.entries(ipcModules)) {

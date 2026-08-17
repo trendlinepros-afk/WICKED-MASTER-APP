@@ -165,9 +165,12 @@ export const STREAM_TOKEN_EVENT = 'ai-chat:stream-token';
 
 /**
  * Channels that only make sense in the desktop app (native dialogs, opening
- * host folders/files, PDF export). The LAN portal's browser bridge replaces
- * some of them with browser-native equivalents; the portal server refuses the
- * rest as a backstop.
+ * host folders/files, PDF export) — plus everything that can spawn a process,
+ * relocate the data root, or read arbitrary host folders. A LAN client holding
+ * the portal token must never be able to configure-and-launch programs on the
+ * PC (MCP server configs are literally command+args) — those stay
+ * desktop-only. Chat tool-calling is unaffected: the chatStream loop invokes
+ * MCP tools inside the main process, not over this RPC surface.
  */
 export const DESKTOP_ONLY_CHANNELS: string[] = [
   RPC_CHANNELS.openFileDialog,
@@ -178,8 +181,19 @@ export const DESKTOP_ONLY_CHANNELS: string[] = [
   RPC_CHANNELS.exportPDF,
   RPC_CHANNELS.openExternal,
   RPC_CHANNELS.comfyChooseFolder,
+  RPC_CHANNELS.comfyLaunch,
   RPC_CHANNELS.fluxGymChooseFolder,
   RPC_CHANNELS.fluxGymPickImages,
   RPC_CHANNELS.fluxGymOpenUi,
   RPC_CHANNELS.fluxGymOpenDataset,
+  RPC_CHANNELS.fluxGymLaunch,
+  RPC_CHANNELS.fluxGymPrepareDataset,
+  RPC_CHANNELS.fluxGymInstallLora,
+  RPC_CHANNELS.mcpSaveServers,
+  RPC_CHANNELS.mcpTestServer,
+  RPC_CHANNELS.mcpCallTool,
+  RPC_CHANNELS.brainFolderDigest,
+  RPC_CHANNELS.brainFolderSearch,
+  RPC_CHANNELS.dataConsolidate,
+  RPC_CHANNELS.pbSetDataFolder,
 ];

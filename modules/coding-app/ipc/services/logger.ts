@@ -1,13 +1,16 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, appendFileSync, readFileSync, renameSync, rmSync, statSync } from 'fs'
 
 /**
  * Minimal file logger for the coding-app module. Writes to
  * `<userData>/modules/coding-app/logs/app.log` (module-owned subfolder per the
- * WICKED module contract). Surfaced to the user via Settings -> Advanced ->
- * Export logs.
+ * WICKED module contract). Rotates at ~5 MB (one .old generation kept) so the
+ * log can never grow without bound — it rides along in every backup/sync.
+ * Surfaced to the user via Settings -> Advanced -> Export logs.
  */
+const MAX_LOG_BYTES = 5 * 1024 * 1024
+
 class Logger {
   private logFile: string | null = null
 
@@ -19,13 +22,26 @@ class Logger {
     return this.logFile
   }
 
+  private rotateIfHuge(file: string): void {
+    try {
+      if (statSync(file).size < MAX_LOG_BYTES) return
+      const old = `${file}.old`
+      rmSync(old, { force: true })
+      renameSync(file, old)
+    } catch {
+      // missing file or a locked rename — just keep appending
+    }
+  }
+
   private write(level: string, args: unknown[]): void {
     const ts = new Date().toISOString()
     const line = `[${ts}] [${level}] ${args
       .map((a) => (typeof a === 'string' ? a : safeStringify(a)))
       .join(' ')}\n`
     try {
-      appendFileSync(this.ensure(), line)
+      const file = this.ensure()
+      this.rotateIfHuge(file)
+      appendFileSync(file, line)
     } catch {
       // ignore logging failures
     }

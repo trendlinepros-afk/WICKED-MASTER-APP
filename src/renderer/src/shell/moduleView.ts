@@ -340,16 +340,6 @@ export function navEntries(s: GroupSettings, opts: { sidebar?: boolean } = {}): 
   return entries
 }
 
-/** Move `draggedId` to sit immediately before `targetId` in the id list. */
-export function reorderIds(ids: string[], draggedId: string, targetId: string): string[] {
-  if (draggedId === targetId || !ids.includes(draggedId)) return ids
-  const without = ids.filter((x) => x !== draggedId)
-  const ti = without.indexOf(targetId)
-  if (ti === -1) return ids
-  without.splice(ti, 0, draggedId)
-  return without
-}
-
 /* --------------------------- drag & drop tokens ---------------------------- *
  * A drag carries either a bare module id or `group:<groupId>` for a whole
  * folder. Dragging a folder moves ALL its members as one block, so the folder

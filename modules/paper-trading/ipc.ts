@@ -4,7 +4,7 @@ import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { getSnapshot, getAggregates } from '../stock-planner/ipc/market/massive'
 import { closePosition, detectExit, openPosition, type OpenOrder } from './engine'
-import type { PaperAccount, PaperData } from './types'
+import type { CloseReason, PaperAccount, PaperData } from './types'
 
 /**
  * Paper Trading — main process. Holds the accounts, executes fills at live
@@ -153,9 +153,6 @@ export default function register(ctx: ModuleIpcContext): void {
 
   ctx.ipcMain.handle(`${ID}:order`, async (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw ? raw : {}) as Record<string, unknown>
-    const data = readData()
-    const acct = findActive(data, r.accountId)
-    if (!acct) return { ok: false, error: 'No account selected.' }
     const kind = r.kind === 'option' ? 'option' : 'stock'
     const symbol = str(r.symbol).trim().toUpperCase()
     if (!symbol) return { ok: false, error: 'Enter a ticker.' }
@@ -168,6 +165,10 @@ export default function register(ctx: ModuleIpcContext): void {
       price = live
     } else if (!(price > 0)) return { ok: false, error: 'Enter the option premium.' }
 
+    // read AFTER the price await — a concurrent handler may have written meanwhile
+    const data = readData()
+    const acct = findActive(data, r.accountId)
+    if (!acct) return { ok: false, error: 'No account selected.' }
     const order: OpenOrder = {
       kind,
       symbol,
@@ -193,35 +194,44 @@ export default function register(ctx: ModuleIpcContext): void {
     const data = readData()
     const acct = findActive(data, r.accountId)
     if (!acct) return { ok: false, error: 'No account.' }
-    acct.positions = acct.positions.map((p) =>
-      p.id === String(r.positionId)
-        ? {
-            ...p,
-            stop: r.stop === null ? null : num(r.stop) > 0 ? num(r.stop) : p.stop,
-            takeProfit: r.takeProfit === null ? null : num(r.takeProfit) > 0 ? num(r.takeProfit) : p.takeProfit,
-            trailingStop:
-              r.trailingStop === null ? null : num(r.trailingStop) > 0 ? num(r.trailingStop) : p.trailingStop ?? null,
-            trailingStopUnit:
-              r.trailingStopUnit === 'pct' ? 'pct' : r.trailingStopUnit === 'usd' ? 'usd' : p.trailingStopUnit ?? 'usd'
-          }
-        : p
-    )
+    acct.positions = acct.positions.map((p) => {
+      if (p.id !== String(r.positionId)) return p
+      const hadTrail = p.trailingStop != null && p.trailingStop > 0
+      const trail = r.trailingStop === null ? null : num(r.trailingStop) > 0 ? num(r.trailingStop) : p.trailingStop ?? null
+      return {
+        ...p,
+        stop: r.stop === null ? null : num(r.stop) > 0 ? num(r.stop) : p.stop,
+        takeProfit: r.takeProfit === null ? null : num(r.takeProfit) > 0 ? num(r.takeProfit) : p.takeProfit,
+        trailingStop: trail,
+        trailingStopUnit:
+          r.trailingStopUnit === 'pct' ? 'pct' : r.trailingStopUnit === 'usd' ? 'usd' : p.trailingStopUnit ?? 'usd',
+        // a trail that's newly enabled (or removed) must not inherit an anchor
+        // accumulated while no trail was armed — it would fire instantly
+        peak: hadTrail && trail != null && trail > 0 ? p.peak ?? null : null
+      }
+    })
     return { ok: true, data: writeData(data) }
   })
 
   ctx.ipcMain.handle(`${ID}:close`, async (_e, raw: unknown) => {
     const r = (typeof raw === 'object' && raw ? raw : {}) as Record<string, unknown>
+    // first read only tells us WHAT we're closing (kind/symbol for pricing)…
+    const pre = findActive(readData(), r.accountId)
+    const prePos = pre?.positions.find((p) => p.id === String(r.positionId))
+    if (!pre) return { ok: false, error: 'No account.' }
+    if (!prePos) return { ok: false, error: 'Position not found.' }
+    let price = num(r.price)
+    if (prePos.kind === 'stock') {
+      const live = await livePrice(prePos.symbol)
+      if (live == null) return { ok: false, error: `No live price for ${prePos.symbol}.` }
+      price = live
+    } else if (!(price > 0)) return { ok: false, error: 'Enter the closing premium.' }
+    // …then re-read after the await so a concurrent write isn't clobbered
     const data = readData()
     const acct = findActive(data, r.accountId)
     if (!acct) return { ok: false, error: 'No account.' }
     const pos = acct.positions.find((p) => p.id === String(r.positionId))
     if (!pos) return { ok: false, error: 'Position not found.' }
-    let price = num(r.price)
-    if (pos.kind === 'stock') {
-      const live = await livePrice(pos.symbol)
-      if (live == null) return { ok: false, error: `No live price for ${pos.symbol}.` }
-      price = live
-    } else if (!(price > 0)) return { ok: false, error: 'Enter the closing premium.' }
     const res = closePosition(acct, pos.id, price, Date.now(), 'manual', randomUUID(), num(r.qty) > 0 ? Math.floor(num(r.qty)) : undefined)
     if (!res.ok || !res.account) return { ok: false, error: res.error ?? 'Close failed.' }
     data.accounts = data.accounts.map((a) => (a.id === acct.id ? res.account! : a))
@@ -237,32 +247,52 @@ export default function register(ctx: ModuleIpcContext): void {
     const k = key()
     const now = Date.now()
     if (!k) return { ok: true, data } // no data key → can't check history
-    let account = acct
     const toCheck = acct.positions.filter(
       (p) => p.kind === 'stock' && (p.stop != null || p.takeProfit != null || (p.trailingStop != null && p.trailingStop > 0))
     )
-    let closedCount = 0
+    // Phase 1 — fetch history and DECIDE, no writes. The awaits here can
+    // interleave with :order/:close handlers, so state read up-front is stale
+    // by the time we're done.
+    let fetchFailed = false
+    const exits: { positionId: string; price: number; at: number; reason: CloseReason }[] = []
+    const peaks = new Map<string, number>()
     for (const p of toCheck) {
-      const from = Math.max(p.entryAt, account.lastReconciledAt || 0)
+      const from = Math.max(p.entryAt, acct.lastReconciledAt || 0)
       if (now - from < 60_000) continue
       let bars
       try {
         bars = await getAggregates(k, p.symbol, 1, 'minute', from, now)
       } catch {
+        fetchFailed = true
         continue
       }
-      const hit = detectExit(p, bars)
-      if (hit) {
-        const res = closePosition(account, p.id, hit.price, hit.at, hit.reason, randomUUID())
-        if (res.ok && res.account) {
-          account = res.account
-          closedCount++
-        }
+      const r = detectExit(p, bars)
+      if (r.exit) exits.push({ positionId: p.id, ...r.exit })
+      else if (p.trailingStop != null && p.trailingStop > 0 && r.peak !== (p.peak ?? p.entryPrice)) peaks.set(p.id, r.peak)
+    }
+    // Phase 2 — re-read fresh state and apply the decisions to it.
+    const fresh = readData()
+    let account = fresh.accounts.find((a) => a.id === acct.id)
+    if (!account) return { ok: true, data: fresh }
+    let closedCount = 0
+    for (const ex of exits) {
+      // a position closed manually during our fetch is already settled — skip
+      if (!account.positions.some((p) => p.id === ex.positionId)) continue
+      const res = closePosition(account, ex.positionId, ex.price, ex.at, ex.reason, randomUUID())
+      if (res.ok && res.account) {
+        account = res.account
+        closedCount++
       }
     }
-    account = { ...account, lastReconciledAt: now }
-    data.accounts = data.accounts.map((a) => (a.id === account.id ? account : a))
-    return { ok: true, data: writeData(data), closedCount }
+    account = {
+      ...account,
+      positions: account.positions.map((p) => (peaks.has(p.id) ? { ...p, peak: peaks.get(p.id)! } : p)),
+      // a failed history fetch means that window was NOT checked — leave
+      // lastReconciledAt alone so the next reconcile re-covers it
+      ...(fetchFailed ? {} : { lastReconciledAt: now })
+    }
+    fresh.accounts = fresh.accounts.map((a) => (a.id === account!.id ? account! : a))
+    return { ok: true, data: writeData(fresh), closedCount }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

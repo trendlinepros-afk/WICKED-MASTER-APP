@@ -5,7 +5,7 @@ import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
 import ModuleIcon from './ModuleIcon'
-import { GROUP_DRAG_PREFIX, allGroups, effectiveGroupId, groupById, groupPath } from './moduleView'
+import { GROUP_DRAG_PREFIX, allGroups, effectiveGroupId, groupById, groupParentId, groupPath } from './moduleView'
 import { moduleById } from './registry'
 
 /**
@@ -86,23 +86,27 @@ export default function ModuleMenu(): React.JSX.Element | null {
           <Pencil size={15} className="text-muted" />
           Rename &amp; edit folder
         </button>
-        <button
-          className={item}
-          title={
-            folderHidden
-              ? 'Show this folder in the left menu again'
-              : 'Hide from the left menu — the folder and its tools stay on the home screen'
-          }
-          onClick={() => {
-            update({
-              navHiddenGroups: folderHidden ? hiddenList.filter((x) => x !== gid) : [...hiddenList, gid]
-            })
-            closeMenu()
-          }}
-        >
-          {folderHidden ? <Eye size={15} className="text-muted" /> : <EyeOff size={15} className="text-muted" />}
-          {folderHidden ? 'Un-Hide from left menu' : 'Hide from left menu'}
-        </button>
+        {/* only TOP-LEVEL folders appear in the left menu — for a nested
+            folder the toggle would silently do nothing, so it's not shown */}
+        {groupParentId(gid, settings) === '' && (
+          <button
+            className={item}
+            title={
+              folderHidden
+                ? 'Show this folder in the left menu again'
+                : 'Hide from the left menu — the folder and its tools stay on the home screen'
+            }
+            onClick={() => {
+              update({
+                navHiddenGroups: folderHidden ? hiddenList.filter((x) => x !== gid) : [...hiddenList, gid]
+              })
+              closeMenu()
+            }}
+          >
+            {folderHidden ? <Eye size={15} className="text-muted" /> : <EyeOff size={15} className="text-muted" />}
+            {folderHidden ? 'Un-Hide from left menu' : 'Hide from left menu'}
+          </button>
+        )}
       </div>
     )
   }

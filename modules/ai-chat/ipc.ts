@@ -42,6 +42,9 @@ export default function register(ctx: ModuleIpcContext): void {
   const { ipcMain, app, shell, dialog, getMainWindow } = ctx;
 
   db.initDb();
+  // WAL databases must checkpoint right before Backup/Cloud Sync captures
+  // files, or the snapshot's .db misses everything still in the -wal file.
+  ctx.onBackupFlush(() => db.checkpointWal());
   providers.initKeyResolver(ctx.getApiKey);
 
   // One-time backfill of existing chats + personas into The Brain (the app's
@@ -239,11 +242,14 @@ export default function register(ctx: ModuleIpcContext): void {
     const s = db.getSettings();
     const dbFile = db.dbFilePath();
     const boardFolder = projectBoard.getDataFolder();
+    // Paths the user relocated outside the app data folder are NOT captured
+    // by the suite's Backup & Cloud Sync — say so where they're listed.
+    const notSynced = ' NOT included in Backup & Cloud Sync (outside the app data folder) — back it up separately.';
     return [
       {
         label: 'Brain vault',
         path: s.vaultPath || null,
-        note: 'Obsidian-compatible memory vault (WickedBrain)',
+        note: 'Obsidian-compatible memory vault (WickedBrain).' + (s.vaultPath ? notSynced : ''),
       },
       {
         label: 'Database',
@@ -253,12 +259,14 @@ export default function register(ctx: ModuleIpcContext): void {
       {
         label: 'Project Boards',
         path: boardFolder || null,
-        note: 'Configured folder, or the default under the module data folder',
+        note:
+          'Configured folder, or the default under the module data folder.' +
+          (s.projectBoardPath ? notSynced : ''),
       },
       {
         label: 'Data root',
         path: s.dataRootPath || null,
-        note: 'Consolidated root (e.g. a network share) with rolling DB backups',
+        note: 'Consolidated root (e.g. a network share) with rolling DB backups.' + (s.dataRootPath ? notSynced : ''),
       },
       {
         label: 'ComfyUI folder',

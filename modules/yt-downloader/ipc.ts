@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
@@ -15,6 +15,7 @@ import {
   resolveFfmpeg,
   resolveFfprobe,
   spawnYtDlp,
+  treeKill,
   ytDlpCmd,
   ytDlpPath,
   type DownloadRequest
@@ -94,7 +95,10 @@ export default function register(ctx: ModuleIpcContext): void {
   }
   const savePending = (list: PendingJob[]): void => {
     mkdirSync(moduleDir(), { recursive: true })
-    writeFileSync(pendingFile(), JSON.stringify({ jobs: list }, null, 2), 'utf8')
+    // temp + rename: a crash mid-write must never corrupt the resume journal
+    const tmp = `${pendingFile()}.tmp`
+    writeFileSync(tmp, JSON.stringify({ jobs: list }, null, 2), 'utf8')
+    renameSync(tmp, pendingFile())
   }
   const addPending = (p: PendingJob): void => {
     savePending([...readPending().filter((x) => x.jobId !== p.jobId), p])
@@ -435,7 +439,8 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       )
 
-      if (result.cancelled) return finish({ ok: false, cancelled: true })
+      // treeKill (taskkill) doesn't set child.killed, so check our flag too
+      if (result.cancelled || job.cancelRequested) return finish({ ok: false, cancelled: true })
 
       // ---- combine phase (best-effort; never fails the download itself) ----
       // collectOutputs prefers the manifest, which survives a crash resume (the
@@ -495,6 +500,26 @@ export default function register(ctx: ModuleIpcContext): void {
           /* ignore */
         }
       }
+      // A CANCELLED job left the journal, so nothing will ever resume its
+      // half-downloaded files — sweep this job's .part/.ytdl leftovers. Only
+      // when no other job is running (they share the folder and their own
+      // partials must survive).
+      if (job.cancelRequested && jobs.size === 0) {
+        try {
+          const dir = downloadDir()
+          for (const name of readdirSync(dir)) {
+            if (!/\.(part|ytdl|part-Frag\d+)$/i.test(name)) continue
+            const f = join(dir, name)
+            try {
+              if (statSync(f).mtimeMs >= p.startedAt - 60_000) rmSync(f, { force: true })
+            } catch {
+              /* still locked by a dying process — the next cancel sweeps it */
+            }
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
     }
   }
 
@@ -545,11 +570,18 @@ export default function register(ctx: ModuleIpcContext): void {
     for (const j of targets) {
       j.cancelRequested = true
       if (j.child) {
-        j.child.kill()
+        treeKill(j.child)
         killed++
       }
     }
     return { ok: true, cancelled: killed > 0 }
+  })
+
+  // Quitting with downloads running must not orphan yt-dlp/ffmpeg. The jobs
+  // stay in the resume journal (cancelRequested is NOT set), so the next
+  // launch picks them back up.
+  ctx.app.on('before-quit', () => {
+    for (const j of jobs.values()) if (j.child) treeKill(j.child)
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

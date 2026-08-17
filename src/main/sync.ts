@@ -1,4 +1,5 @@
-import { app, dialog, ipcMain, safeStorage, type BrowserWindow } from 'electron'
+import { app, dialog, ipcMain, safeStorage, session, type BrowserWindow } from 'electron'
+import { runBackupFlushes } from './backup-flush'
 import Store from 'electron-store'
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { hostname } from 'os'
@@ -41,6 +42,11 @@ interface DeviceState {
   lastPushUtc: string
   lastPullUtc: string
   lastSyncedVersion: number
+  /** last push failure ('' = ok) + when it happened — survives restarts so the
+   *  UI can warn that the offsite copy is stale (in-memory lastError dies with
+   *  the process, which is exactly when a failed close-push matters) */
+  lastPushError?: string
+  lastPushErrorUtc?: string
 }
 
 const DEFAULT_CONFIG: SyncConfig = {
@@ -71,6 +77,7 @@ let busy = false
 let lastRemote: SyncRemoteInfo | null = null
 let lastError = ''
 let timer: NodeJS.Timeout | null = null
+let kick: NodeJS.Timeout | null = null
 
 /* ------------------------------ pure helpers ----------------------------- */
 
@@ -179,24 +186,32 @@ export function buildStatus(): SyncStatus {
     lastSyncedVersion: s.lastSyncedVersion,
     remote: lastRemote,
     busy,
-    error: lastError
+    error: lastError || (s.lastPushError ? `Last push failed (${s.lastPushErrorUtc ?? ''}): ${s.lastPushError}` : '')
   }
 }
 
 /* --------------------------------- push ---------------------------------- */
 
 /**
- * A sync snapshot holds settings + module data, so it should be a few MB. Cap
- * it well below GitHub's ~100 MB content limit — and far below Node's max
- * string length, which an unbounded snapshot once hit ("Cannot create a string
- * longer than 0x1fffffe8 characters") when stray ffmpeg scratch files were
- * swept into the zip.
+ * A sync snapshot holds settings + module data, so it should be a few MB. The
+ * zip is base64'd into the encrypted-blob JSON (×4/3) and the GitHub blob API
+ * base64s the whole payload AGAIN (×4/3 ≈ ×1.78 total), against GitHub's
+ * ~100 MB blob ceiling — so the zip itself must stay ≤ ~52 MB. Also far below
+ * Node's max string length, which an unbounded snapshot once hit ("Cannot
+ * create a string longer than 0x1fffffe8 characters").
  */
-const MAX_SNAPSHOT_BYTES = 80 * 1024 * 1024
+const MAX_SNAPSHOT_BYTES = 52 * 1024 * 1024
 
 /** Build the encrypted snapshot bytes (zip → passphrase-encrypted blob text). */
 function buildEncryptedSnapshot(passphrase: string): string {
   const userData = app.getPath('userData')
+  // consistency first: checkpoint module databases + flush renderer LevelDB
+  runBackupFlushes()
+  try {
+    session.defaultSession.flushStorageData()
+  } catch {
+    /* no session yet — proceed */
+  }
   const entries = collectEntries(userData).filter((e) => e.rel !== PENDING_MARKER && e.rel !== STAGED_ZIP)
   // API keys are per-PC (safeStorage) so include a portable copy encrypted with
   // the SAME passphrase; on pull it's re-encrypted for the destination machine.
@@ -252,17 +267,27 @@ export async function pushNow(trigger: 'auto' | 'manual' = 'manual'): Promise<Sy
       trigger
     }
     const res = await pushSnapshot(token, c.repo, c.branch, blobText, buildManifestText(info))
-    if (!res.ok) return fail(res.error ?? 'Push failed.')
+    if (!res.ok) return failPush(res.error ?? 'Push failed.')
 
     lastRemote = info
-    setState({ lastPushUtc: info.updatedUtc, lastSyncedVersion: version })
+    setState({ lastPushUtc: info.updatedUtc, lastSyncedVersion: version, lastPushError: '', lastPushErrorUtc: '' })
     return { ok: true, remote: info, version }
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err))
+    return failPush(err instanceof Error ? err.message : String(err))
   } finally {
     busy = false
     broadcast()
   }
+}
+
+/** Push failures persist so the next launch can warn "offsite copy is stale". */
+function failPush(msg: string): SyncResult {
+  try {
+    setState({ lastPushError: msg, lastPushErrorUtc: new Date().toISOString() })
+  } catch {
+    /* bookkeeping must not mask the real error */
+  }
+  return fail(msg)
 }
 
 /* --------------------------- check + pull -------------------------------- */
@@ -462,6 +487,10 @@ export function scheduleSync(): void {
     clearInterval(timer)
     timer = null
   }
+  if (kick) {
+    clearTimeout(kick)
+    kick = null
+  }
   const c = getConfig()
   if (!c.autoPush) return
   const intervalMs = Math.max(5, c.intervalMinutes) * 60_000
@@ -474,7 +503,7 @@ export function scheduleSync(): void {
       else console.log(`[wicked] scheduled sync push: v${r.version}`)
     })
   }
-  setTimeout(tick, 90_000) // shortly after launch
+  kick = setTimeout(tick, 90_000) // shortly after launch
   timer = setInterval(tick, intervalMs)
 }
 

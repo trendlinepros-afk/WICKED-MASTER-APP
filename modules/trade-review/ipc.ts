@@ -105,11 +105,13 @@ export default function register(ctx: ModuleIpcContext): void {
       } catch {
         return { ok: false, error: 'The AI returned unreadable data — try clearer screenshots.' }
       }
-      const rawRows = Array.isArray((parsed as { rows?: unknown }).rows)
-        ? ((parsed as { rows: unknown[] }).rows)
-        : Array.isArray(parsed)
-          ? (parsed as unknown[])
-          : []
+      // JSON.parse can legally return null/primitives — .rows on null throws
+      const rawRows =
+        parsed && typeof parsed === 'object' && Array.isArray((parsed as { rows?: unknown }).rows)
+          ? ((parsed as { rows: unknown[] }).rows)
+          : Array.isArray(parsed)
+            ? (parsed as unknown[])
+            : []
       const executions: Execution[] = []
       for (const rr of rawRows) {
         const v = ExtractRow.safeParse(rr)
