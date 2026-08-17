@@ -1,0 +1,8 @@
+{
+  "id": "wicked-sound",
+  "name": "WICKED Sound",
+  "icon": "AudioLines",
+  "version": "1.0.0",
+  "description": "FxSound-style system EQ — profiles, device links, AI tuning (Gemini) and a live wave, powered by Equalizer APO",
+  "status": "beta"
+}
