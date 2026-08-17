@@ -91,6 +91,29 @@ export async function getRepoInfo(
   return { ok: true, defaultBranch: j.default_branch ?? 'main', private: j.private === true }
 }
 
+/**
+ * Probe WRITE access without changing anything visible: create a dangling git
+ * blob — never referenced by any tree/commit/ref, so GitHub garbage-collects
+ * it and the repo's contents/history are untouched. This is the same first
+ * write the real push performs, so it fails (or succeeds) exactly like a push:
+ * a token with only read access 403s here with "Resource not accessible by
+ * personal access token" even though reads look fine.
+ */
+export async function probeWrite(
+  token: string,
+  repo: string
+): Promise<{ ok: boolean; inconclusive?: boolean; error?: string }> {
+  const r = await gh(token, 'POST', `/repos/${repo}/git/blobs`, {
+    content: Buffer.from('wicked-sync write probe', 'utf8').toString('base64'),
+    encoding: 'base64'
+  })
+  if (r.ok) return { ok: true }
+  // 409 = empty repo — the Git Data API refuses to run there; the real push
+  // seeds an initial commit via the Contents API, so this is not a failure.
+  if (r.status === 409) return { ok: true, inconclusive: true }
+  return { ok: false, error: r.error }
+}
+
 export interface PullOut {
   ok: boolean
   notFound?: boolean

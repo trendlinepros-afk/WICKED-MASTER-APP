@@ -756,10 +756,34 @@ function SyncSection(): React.JSX.Element {
     setBusy('test')
     setErr(null)
     setMsg(null)
-    const res = (await window.wicked.invoke(SHELL_IPC.syncTestRepo)) as { ok?: boolean; defaultBranch?: string; private?: boolean; error?: string }
+    const res = (await window.wicked.invoke(SHELL_IPC.syncTestRepo)) as {
+      ok?: boolean
+      defaultBranch?: string
+      private?: boolean
+      error?: string
+      canWrite?: boolean
+      writeInconclusive?: boolean
+      writeError?: string
+      tokenHint?: string
+    }
     setBusy('')
-    if (res.ok) setMsg(`Connected. Default branch: ${res.defaultBranch}${res.private === false ? ' · ⚠ this repo is PUBLIC — use a private one' : ' · private ✓'}`)
-    else setErr(res.error ?? 'Connection failed.')
+    const tok = res.tokenHint ? ` · saved token ${res.tokenHint}` : ''
+    if (!res.ok) {
+      setErr(`${res.error ?? 'Connection failed.'}${tok}`)
+    } else if (res.canWrite === false) {
+      // The decisive case: reads work, writes don't → the token stored on THIS
+      // device lacks write access (wrong token, or a stale/regenerated value).
+      setErr(
+        `Read works but WRITE is denied${tok}. The token saved on this device cannot push to this repo — ` +
+          `on GitHub, regenerate your sync token (Contents: Read and write), paste the NEW value above and hit Save, then test again. ` +
+          `(${res.writeError ?? ''})`
+      )
+    } else {
+      setMsg(
+        `Connected — read ✓ write ${res.writeInconclusive ? '(repo empty — checked on first push)' : '✓'}${tok} · ` +
+          `default branch ${res.defaultBranch}${res.private === false ? ' · ⚠ this repo is PUBLIC — use a private one' : ' · private ✓'}`
+      )
+    }
   }
 
   const push = async (): Promise<void> => {

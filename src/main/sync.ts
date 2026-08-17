@@ -18,7 +18,7 @@ import { getAllDecryptedKeys } from './api-keys'
 import { collectEntries, buildBackupZipBuffer, PENDING_MARKER, PORTABLE_KEYS_NAME, STAGED_ZIP } from './backup-core'
 import { stageRestore } from './backup'
 import { decryptBytesWithPassword, encryptBytesWithPassword, encryptWithPassword } from './key-portability'
-import { getRepoInfo, listSnapshots as ghListSnapshots, pullManifest, pullRemote, pullSnapshotAt, pushSnapshot } from './sync-github'
+import { getRepoInfo, listSnapshots as ghListSnapshots, probeWrite, pullManifest, pullRemote, pullSnapshotAt, pushSnapshot } from './sync-github'
 
 /**
  * Cloud Sync (Settings → Cloud Sync): keep every device's config in a PRIVATE
@@ -147,7 +147,12 @@ function getState(): DeviceState {
   return {
     lastPushUtc: s?.lastPushUtc ?? '',
     lastPullUtc: s?.lastPullUtc ?? '',
-    lastSyncedVersion: s?.lastSyncedVersion ?? 0
+    lastSyncedVersion: s?.lastSyncedVersion ?? 0,
+    // must round-trip: dropping these here would (a) erase a persisted push
+    // failure on the next setState and (b) hide it from buildStatus after a
+    // restart — exactly the moment the "offsite copy is stale" warning matters
+    lastPushError: s?.lastPushError ?? '',
+    lastPushErrorUtc: s?.lastPushErrorUtc ?? ''
   }
 }
 
@@ -603,7 +608,23 @@ export function registerSyncIpc(getWin: () => BrowserWindow | null): void {
     const c = getConfig()
     const token = getToken()
     if (!c.repo || !token) return { ok: false, error: 'Add a repo and token first.' }
-    return getRepoInfo(token, c.repo)
+    // Last 4 chars + length so the user can verify WHICH token this device
+    // actually holds (compare against the value they pasted) — reads working
+    // while pushes 403 almost always means "wrong/stale token saved here".
+    const tokenHint = `…${token.slice(-4)} · ${token.length} chars`
+    const info = await getRepoInfo(token, c.repo)
+    if (!info.ok) return { ok: false, error: info.error, canRead: false, tokenHint }
+    const w = await probeWrite(token, c.repo)
+    return {
+      ok: true,
+      defaultBranch: info.defaultBranch,
+      private: info.private,
+      canRead: true,
+      canWrite: w.ok,
+      writeInconclusive: w.inconclusive === true,
+      writeError: w.error,
+      tokenHint
+    }
   })
 
   ipcMain.handle(SHELL_IPC.syncPushNow, () => pushNow('manual'))
