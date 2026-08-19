@@ -7,7 +7,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp
 } from 'lightweight-charts'
-import { LayoutDashboard, Newspaper, Plus, RefreshCw, Settings, Tv, X } from 'lucide-react'
+import { LayoutDashboard, Newspaper, RefreshCw, Settings, TrendingDown, TrendingUp, Tv, X } from 'lucide-react'
 import { ModuleTitle } from '@/shell/moduleContext'
 import { CHART_TFS, DEFAULT_TV_URL, defaultState, type ChartTf, type DashQuote, type DashState, type SessionInfo } from './types'
 
@@ -70,6 +70,112 @@ const fmtNewsTime = (iso: string): string => {
   if (mins < 60) return `${mins}m ago`
   if (mins < 24 * 60) return `${Math.floor(mins / 60)}h ago`
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/* ----------------------------- ticker search ------------------------------ */
+
+interface TickerHit {
+  ticker: string
+  name: string
+}
+
+/**
+ * A ticker input with REAL search: typing a symbol or company name shows
+ * matching options (via the reference-tickers search) in a dropdown; pick by
+ * click or Enter (Enter takes the top hit, or exactly what you typed if the
+ * search has nothing).
+ */
+function TickerSearchInput({
+  value,
+  placeholder,
+  className,
+  autoClear = false,
+  onPick
+}: {
+  /** current symbol shown when idle (chart boxes); omit for add-style inputs */
+  value?: string
+  placeholder?: string
+  className?: string
+  /** clear the box after picking (watchlist add) instead of showing the pick */
+  autoClear?: boolean
+  onPick: (symbol: string) => void
+}): React.JSX.Element {
+  const [text, setText] = useState(value ?? '')
+  const [hits, setHits] = useState<TickerHit[]>([])
+  const [open, setOpen] = useState(false)
+  const seq = useRef(0)
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    setText(value ?? '')
+  }, [value])
+  useEffect(() => () => {
+    if (debounce.current) clearTimeout(debounce.current)
+  }, [])
+
+  const search = (q: string): void => {
+    if (debounce.current) clearTimeout(debounce.current)
+    if (!q.trim()) {
+      setHits([])
+      setOpen(false)
+      return
+    }
+    debounce.current = setTimeout(() => {
+      const id = ++seq.current
+      void invoke('search', { q }).then((res) => {
+        const r = res as { hits?: TickerHit[] }
+        if (id !== seq.current) return // a newer query is in flight
+        setHits(r.hits ?? [])
+        setOpen((r.hits ?? []).length > 0)
+      })
+    }, 250)
+  }
+
+  const pick = (sym: string): void => {
+    const s = sym.trim().toUpperCase()
+    if (!s) return
+    setOpen(false)
+    setHits([])
+    setText(autoClear ? '' : s)
+    onPick(s)
+  }
+
+  return (
+    <div className={`relative ${className ?? ''}`}>
+      <input
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          search(e.target.value)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') pick(hits[0]?.ticker ?? text)
+          if (e.key === 'Escape') setOpen(false)
+        }}
+        onBlur={() => {
+          setOpen(false)
+          if (!autoClear) setText(value ?? '')
+        }}
+        placeholder={placeholder}
+        spellCheck={false}
+        className="w-full rounded-md border border-edge bg-raised px-2 py-1 text-base outline-none focus:border-accent"
+      />
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-72 w-72 overflow-y-auto rounded-lg border border-edge bg-surface shadow-2xl">
+          {hits.map((h) => (
+            <button
+              key={h.ticker}
+              onMouseDown={(e) => e.preventDefault() /* keep input focus so blur doesn't eat the click */}
+              onClick={() => pick(h.ticker)}
+              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-raised"
+            >
+              <span className="shrink-0 text-base font-bold">{h.ticker}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-muted">{h.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /* --------------------------------- chart ---------------------------------- */
@@ -166,26 +272,10 @@ function ChartSlotCard({
   quote?: DashQuote
   onChange: (symbol: string, tf: ChartTf) => void
 }): React.JSX.Element {
-  const [text, setText] = useState(symbol)
-  useEffect(() => setText(symbol), [symbol])
-  const commit = (): void => {
-    const s = text.trim().toUpperCase()
-    if (s && s !== symbol) onChange(s, tf)
-    else setText(symbol)
-  }
   return (
     <section className="flex min-h-0 flex-col rounded-xl border border-edge bg-surface p-2">
       <div className="flex items-center gap-1.5 pb-1.5">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value.toUpperCase())}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          }}
-          spellCheck={false}
-          className="w-20 rounded-md border border-edge bg-raised px-2 py-1 text-base font-bold outline-none focus:border-accent"
-        />
+        <TickerSearchInput value={symbol} onPick={(s) => onChange(s, tf)} className="w-28 font-bold" />
         {quote?.price != null && (
           <span className="min-w-0 truncate text-sm tabular-nums text-muted">
             {fmtPrice(quote.price)} <span className={pctTone(quote.changePct)}>{fmtPct(quote.changePct)}</span>
@@ -219,6 +309,12 @@ interface NewsItem {
   tickers?: string[]
 }
 
+interface Mover {
+  symbol: string
+  price: number
+  changePct: number
+}
+
 export default function DayTradeDash(): React.JSX.Element {
   const [dash, setDash] = useState<DashState>(defaultState())
   const [loaded, setLoaded] = useState(false)
@@ -229,9 +325,11 @@ export default function DayTradeDash(): React.JSX.Element {
   const [session, setSession] = useState<SessionInfo | null>(null)
   const [error, setError] = useState('')
   const [showSettings, setShowSettings] = useState(false)
-  const [watchInput, setWatchInput] = useState('')
   const [tapeInput, setTapeInput] = useState('')
   const [tvUrlInput, setTvUrlInput] = useState('')
+  const [movers, setMovers] = useState<{ gainers: Mover[]; losers: Mover[] }>({ gainers: [], losers: [] })
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [refreshBusy, setRefreshBusy] = useState(false)
 
   const dashRef = useRef(dash)
   dashRef.current = dash
@@ -277,6 +375,21 @@ export default function DayTradeDash(): React.JSX.Element {
     if (res.ok && res.info) setSession(res.info)
   }
 
+  const loadMovers = async (): Promise<void> => {
+    const res = (await invoke('movers')) as { ok?: boolean; gainers?: Mover[]; losers?: Mover[] }
+    if (res.ok) setMovers({ gainers: res.gainers ?? [], losers: res.losers ?? [] })
+  }
+
+  /** Full-dashboard refresh: remounts the charts and refetches everything. */
+  const refreshAll = async (): Promise<void> => {
+    if (refreshBusy) return
+    setRefreshBusy(true)
+    setRefreshKey((k) => k + 1)
+    applyState(await invoke('state-get'))
+    await Promise.all([pollQuotes(), loadNews(true), loadSession(), loadMovers()])
+    setRefreshBusy(false)
+  }
+
   useEffect(() => {
     void (async () => {
       applyState(await invoke('state-get'))
@@ -284,9 +397,11 @@ export default function DayTradeDash(): React.JSX.Element {
       void pollQuotes()
       void loadNews()
       void loadSession()
+      void loadMovers()
     })()
     const q = setInterval(() => void pollQuotes(), 20_000)
     const s = setInterval(() => void loadSession(), 30_000)
+    const mv = setInterval(() => void loadMovers(), 60_000)
     // news refreshes ON THE HOUR (plus a few seconds so the feed has the hour's items)
     let hourly: ReturnType<typeof setInterval> | null = null
     const toHour = setTimeout(
@@ -299,6 +414,7 @@ export default function DayTradeDash(): React.JSX.Element {
     return () => {
       clearInterval(q)
       clearInterval(s)
+      clearInterval(mv)
       clearTimeout(toHour)
       if (hourly) clearInterval(hourly)
     }
@@ -311,11 +427,16 @@ export default function DayTradeDash(): React.JSX.Element {
     setTimeout(() => void pollQuotes(), 500)
   }
 
-  const addWatch = async (): Promise<void> => {
-    const sym = watchInput.trim().toUpperCase()
-    if (!sym) return
-    setWatchInput('')
-    applyState(await invoke('watch-add', { symbol: sym }))
+  const addWatch = async (sym: string): Promise<void> => {
+    const s = sym.trim().toUpperCase()
+    if (!s) return
+    applyState(await invoke('watch-add', { symbol: s }))
+    void patch({ selected: s })
+    setTimeout(() => void pollQuotes(), 500)
+  }
+
+  /** Chart any symbol (watch row or top-mover) in the middle panel. */
+  const chartSymbol = (sym: string): void => {
     void patch({ selected: sym })
     setTimeout(() => void pollQuotes(), 500)
   }
@@ -352,6 +473,14 @@ export default function DayTradeDash(): React.JSX.Element {
         )}
         <span className="flex-1" />
         <button
+          onClick={() => void refreshAll()}
+          disabled={refreshBusy}
+          title="Reload the whole dashboard — charts, quotes, news, movers"
+          className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-sm font-medium text-muted hover:border-accent/60 hover:text-ink disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={refreshBusy ? 'animate-spin' : ''} /> Refresh
+        </button>
+        <button
           onClick={() => {
             setTvUrlInput(dash.tvUrl)
             setShowSettings(true)
@@ -371,7 +500,7 @@ export default function DayTradeDash(): React.JSX.Element {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5">
+      <div key={refreshKey} className="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5">
         {/* top: the three always-on charts */}
         <div className="grid h-[38%] min-h-[220px] grid-cols-1 gap-2.5 lg:grid-cols-3">
           {loaded &&
@@ -384,20 +513,8 @@ export default function DayTradeDash(): React.JSX.Element {
         <div className="flex min-h-0 flex-1 gap-2.5">
           {/* watchlist */}
           <section className="flex w-72 shrink-0 flex-col rounded-xl border border-edge bg-surface p-2">
-            <div className="flex items-center gap-1.5 pb-1.5">
-              <input
-                value={watchInput}
-                onChange={(e) => setWatchInput(e.target.value.toUpperCase())}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void addWatch()
-                }}
-                placeholder="Add ticker"
-                spellCheck={false}
-                className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1 text-sm outline-none focus:border-accent"
-              />
-              <button onClick={() => void addWatch()} className="rounded-md border border-edge p-1 text-muted hover:border-accent/60 hover:text-ink">
-                <Plus size={13} />
-              </button>
+            <div className="pb-1.5">
+              <TickerSearchInput autoClear placeholder="Add ticker or company…" onPick={(s) => void addWatch(s)} />
             </div>
             {dash.watch.length > 0 && (
               <div className="flex items-center gap-1.5 px-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
@@ -421,7 +538,7 @@ export default function DayTradeDash(): React.JSX.Element {
                 return (
                   <div
                     key={sym}
-                    onClick={() => void patch({ selected: sym })}
+                    onClick={() => chartSymbol(sym)}
                     title={
                       w.addedAt
                         ? `Added ${new Date(w.addedAt).toLocaleDateString()}${w.addedPrice != null ? ` @ $${w.addedPrice.toFixed(2)}` : ''}`
@@ -453,34 +570,72 @@ export default function DayTradeDash(): React.JSX.Element {
             </div>
           </section>
 
-          {/* selected ticker chart */}
-          <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-2">
-            <div className="flex items-center gap-2 pb-1.5">
-              <span className="text-base font-bold">{dash.selected || '—'}</span>
-              {selectedQuote?.price != null && (
-                <span className="text-sm tabular-nums text-muted">
-                  {fmtPrice(selectedQuote.price)} <span className={pctTone(selectedQuote.changePct)}>{fmtPct(selectedQuote.changePct)}</span>
-                </span>
-              )}
-              <span className="flex-1" />
-              <div className="flex overflow-hidden rounded-md border border-edge">
-                {CHART_TFS.map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => void patch({ selectedTf: t })}
-                    className={`px-1.5 py-0.5 text-[13px] font-medium ${t === dash.selectedTf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
-                  >
-                    {t}
-                  </button>
-                ))}
+          {/* selected ticker chart + day's movers, 50/50 */}
+          <div className="flex min-w-0 flex-1 gap-2.5">
+            <section className="flex min-w-0 flex-1 basis-0 flex-col rounded-xl border border-edge bg-surface p-2">
+              <div className="flex items-center gap-2 pb-1.5">
+                <span className="text-base font-bold">{dash.selected || '—'}</span>
+                {selectedQuote?.price != null && (
+                  <span className="text-sm tabular-nums text-muted">
+                    {fmtPrice(selectedQuote.price)} <span className={pctTone(selectedQuote.changePct)}>{fmtPct(selectedQuote.changePct)}</span>
+                  </span>
+                )}
+                <span className="flex-1" />
+                <div className="flex overflow-hidden rounded-md border border-edge">
+                  {CHART_TFS.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => void patch({ selectedTf: t })}
+                      className={`px-1.5 py-0.5 text-[13px] font-medium ${t === dash.selectedTf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
               </div>
+              {dash.selected ? (
+                <CandleChart symbol={dash.selected} tf={dash.selectedTf} />
+              ) : (
+                <div className="flex flex-1 items-center justify-center text-sm text-muted">Click a watchlist ticker.</div>
+              )}
+            </section>
+
+            <div className="flex min-w-0 flex-1 basis-0 flex-col gap-2.5">
+              {(
+                [
+                  { title: 'Day’s Top Gainers', list: movers.gainers, Icon: TrendingUp, tone: 'text-ok' },
+                  { title: 'Day’s Top Losers', list: movers.losers, Icon: TrendingDown, tone: 'text-danger' }
+                ] as const
+              ).map(({ title, list, Icon, tone }) => (
+                <section key={title} className="flex min-h-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-2">
+                  <div className="flex items-center gap-1.5 pb-1">
+                    <Icon size={14} className={tone} />
+                    <span className="text-sm font-semibold">{title}</span>
+                    <span className="min-w-0 flex-1 truncate text-right text-xs text-muted">click to chart</span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {list.length === 0 && <p className="px-1 pt-1 text-sm text-muted">Waiting on market data…</p>}
+                    {list.map((m, i) => (
+                      <div
+                        key={m.symbol}
+                        onClick={() => chartSymbol(m.symbol)}
+                        className={`flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-raised ${
+                          dash.selected === m.symbol ? 'bg-accent/10 text-accent' : ''
+                        }`}
+                      >
+                        <span className="w-5 text-right text-xs tabular-nums text-muted">{i + 1}</span>
+                        <span className="min-w-0 flex-1 truncate font-semibold">{m.symbol}</span>
+                        <span className="tabular-nums text-muted">{fmtPrice(m.price)}</span>
+                        <span className={`w-20 text-right font-semibold tabular-nums ${pctTone(m.changePct)}`}>
+                          {fmtPct(m.changePct)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
-            {dash.selected ? (
-              <CandleChart symbol={dash.selected} tf={dash.selectedTf} />
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-sm text-muted">Click a watchlist ticker.</div>
-            )}
-          </section>
+          </div>
 
           {/* news */}
           <section className="flex w-72 shrink-0 flex-col rounded-xl border border-edge bg-surface p-2 xl:w-80">
@@ -554,7 +709,7 @@ export default function DayTradeDash(): React.JSX.Element {
                 if (!q || q.price == null) return null
                 const upTone = (q.changePct ?? 0) >= 0
                 return (
-                  <span key={`${sym}-${i}`} className="flex items-center gap-2.5 pr-14 text-lg tabular-nums">
+                  <span key={`${sym}-${i}`} className="flex items-center gap-3 pr-16 text-2xl tabular-nums">
                     <span className="font-black tracking-tight">{sym}</span>
                     <span className="font-medium text-muted">{fmtPrice(q.price)}</span>
                     <span className={`font-semibold ${upTone ? 'text-ok' : 'text-danger'}`}>

@@ -1,7 +1,7 @@
 import { join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
-import { getAggregates, getMarketNews, getSnapshot } from '../stock-planner/ipc/market/massive'
+import { getAggregates, getFullSnapshot, getMarketNews, getSnapshot, searchTickers } from '../stock-planner/ipc/market/massive'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import { etParts, marketSession } from '../stock-planner/ipc/market/sessions'
 import {
@@ -89,11 +89,12 @@ function sanitize(raw: unknown): DashState {
   const watch = 'watch' in r ? cleanWatch(r.watch) : d.watch
   let tvUrl = typeof r.tvUrl === 'string' && /^https:\/\//i.test(r.tvUrl.trim()) ? r.tvUrl.trim().slice(0, 500) : d.tvUrl
   if (tvUrl === LEGACY_TV_URL) tvUrl = DEFAULT_TV_URL // pre-always-on default (muted autoplay) → play-on-demand
+  // selected may be ANY symbol (a watchlist row or a clicked top-mover)
   const selected = cleanSym(r.selected) || watch[0]?.symbol || ''
   return {
     charts,
     watch,
-    selected: watch.some((w) => w.symbol === selected) ? selected : watch[0]?.symbol || '',
+    selected,
     selectedTf: cleanTf(r.selectedTf, d.selectedTf),
     tape: 'tape' in r ? cleanSyms(r.tape, MAX_TAPE) : d.tape,
     tvUrl,
@@ -196,6 +197,42 @@ export default function register(ctx: ModuleIpcContext): void {
     const quotes: Record<string, DashQuote> = {}
     for (const e of entries) if (e) quotes[e[0]] = e[1]
     return { ok: true, quotes }
+  })
+
+  /** Day's top gainers/losers from the whole-market snapshot (20s-cached in
+   *  the shared client, with an EOD fallback off-hours). Penny/illiquid noise
+   *  is filtered so the cards show tradeable movers. */
+  ctx.ipcMain.handle(`${ID}:movers`, async () => {
+    const k = key()
+    if (!k) return { ok: false, error: NO_KEY, gainers: [], losers: [] }
+    try {
+      const rows = await getFullSnapshot(k)
+      const rated: { symbol: string; price: number; changePct: number }[] = []
+      for (const r of rows) {
+        if (!/^[A-Z]{1,5}$/.test(r.ticker)) continue // skip warrants/units/odd classes
+        const q = resolveQuote(r, r.prevDay ?? null)
+        if (q.price == null || q.price < 1 || q.changePct == null) continue
+        if ((q.volume ?? 0) < 100_000) continue
+        rated.push({ symbol: r.ticker, price: q.price, changePct: q.changePct })
+      }
+      rated.sort((a, b) => b.changePct - a.changePct)
+      return { ok: true, gainers: rated.slice(0, 12), losers: rated.slice(-12).reverse() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), gainers: [], losers: [] }
+    }
+  })
+
+  /** Ticker/company-name autocomplete for the chart and watchlist inputs. */
+  ctx.ipcMain.handle(`${ID}:search`, async (_e, raw: unknown) => {
+    const q = String(asRecord(raw).q ?? '').trim().slice(0, 40)
+    if (!q) return { ok: true, hits: [] }
+    const k = key()
+    if (!k) return { ok: false, error: NO_KEY, hits: [] }
+    try {
+      return { ok: true, hits: (await searchTickers(k, q)).slice(0, 8) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), hits: [] }
+    }
   })
 
   ctx.ipcMain.handle(`${ID}:news`, async (_e, raw: unknown) => {

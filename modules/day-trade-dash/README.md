@@ -18,6 +18,14 @@ The all-day trading cockpit: everything a day trader glances at, on one screen.
   moment the ticker was added (hover a row for the date + anchor price); if no
   price was available right then (or the entry predates this feature), the
   first price seen afterwards becomes the anchor — it is never overwritten.
+- **Middle center — selected chart + day's movers (50/50).** The watchlist
+  chart shares the center with two stacked cards: **Day's Top Gainers** and
+  **Day's Top Losers** (whole-market snapshot, penny/illiquid noise filtered:
+  price ≥ $1, volume ≥ 100k, plain 1-5 letter symbols; refreshed every 60s).
+  Clicking any row charts it. All ticker boxes (the three top charts + the
+  watchlist add box) are REAL search fields — type a symbol or company name
+  and pick from the dropdown (reference-tickers search, 250 ms debounce).
+  A header Refresh button remounts the charts and refetches everything.
 - **Middle right — market news.** Market-wide headlines (Massive/Polygon
   reference news, no ticker filter) that refresh **on the hour, every hour**
   (plus a manual refresh button). Each row shows source, age and related
