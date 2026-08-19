@@ -61,6 +61,24 @@ function destinationDir(): string {
   return d && d.trim() ? d.trim() : defaultDestination()
 }
 
+/**
+ * The folder backups actually use ON THIS DEVICE. The configured destination
+ * lives in wicked-settings.json, which travels inside Cloud Sync snapshots —
+ * so a laptop can inherit the main PC's "X:\…" folder on a drive that doesn't
+ * exist here. When the configured folder can't be created, fall back to the
+ * local default instead of failing — WITHOUT rewriting the setting (persisting
+ * the fallback would sync back and clobber the main PC's choice).
+ */
+function effectiveDestination(): { dir: string; fellBack: boolean } {
+  const configured = destinationDir()
+  try {
+    mkdirSync(configured, { recursive: true })
+    return { dir: configured, fellBack: false }
+  } catch {
+    return { dir: defaultDestination(), fellBack: true }
+  }
+}
+
 function stamp(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
@@ -100,12 +118,22 @@ function recordOutcome(error: string): void {
   }
 }
 
-/** Create a backup zip in `destDir` (default = configured destination). */
+/** Create a backup zip in `destDir` (default = configured destination, with a
+ *  local-default fallback when that folder doesn't exist on this device). */
 export function createBackup(destDir?: string): BackupResult {
   const userData = app.getPath('userData')
-  const dir = destDir && destDir.trim() ? destDir.trim() : destinationDir()
+  let dir: string
+  let fellBack = false
   try {
-    mkdirSync(dir, { recursive: true })
+    if (destDir && destDir.trim()) {
+      dir = destDir.trim()
+      mkdirSync(dir, { recursive: true })
+    } else {
+      const eff = effectiveDestination()
+      dir = eff.dir
+      fellBack = eff.fellBack
+      mkdirSync(dir, { recursive: true })
+    }
   } catch (err) {
     recordOutcome(`Could not create the backup folder: ${errMsg(err)}`)
     return { ok: false, error: `Could not create the backup folder: ${errMsg(err)}` }
@@ -147,7 +175,17 @@ export function createBackup(destDir?: string): BackupResult {
       backup: { ...getSettings().backup, lastBackupUtc: new Date().toISOString(), lastBackupError: '' }
     })
     pruneOld(dir)
-    return { ok: true, file, size, fileCount: count, keysIncluded, skipped: skipped.slice(0, 50) }
+    return {
+      ok: true,
+      file,
+      size,
+      fileCount: count,
+      keysIncluded,
+      skipped: skipped.slice(0, 50),
+      ...(fellBack
+        ? { note: `The configured backup folder isn't available on this device — saved to ${dir} instead (the setting was left unchanged).` }
+        : {})
+    }
   } catch (err) {
     try {
       rmSync(file, { force: true })
@@ -268,11 +306,18 @@ export function scheduleBackups(): void {
 /* --------------------------------- ipc ----------------------------------- */
 
 export function registerBackupIpc(getWin: () => BrowserWindow | null): void {
-  ipcMain.handle(SHELL_IPC.backupConfig, () => ({
-    destination: destinationDir(),
-    isDefaultDestination: !getSettings().backup.destination,
-    backups: listBackups()
-  }))
+  ipcMain.handle(SHELL_IPC.backupConfig, () => {
+    const eff = effectiveDestination()
+    return {
+      destination: destinationDir(),
+      isDefaultDestination: !getSettings().backup.destination,
+      // the configured folder doesn't exist on THIS device (e.g. a synced
+      // setting pointing at the main PC's X: drive) — backups fall back
+      destinationUnavailable: eff.fellBack,
+      effectiveDestination: eff.dir,
+      backups: listBackups(eff.dir)
+    }
+  })
 
   ipcMain.handle(SHELL_IPC.backupNow, () => createBackup())
 

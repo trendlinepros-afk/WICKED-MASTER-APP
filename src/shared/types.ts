@@ -159,6 +159,8 @@ export interface BackupResult {
   keysIncluded?: boolean
   /** files that were dropped from the backup (oversized/unreadable) — honesty beats a fake "complete" */
   skipped?: string[]
+  /** non-fatal heads-up, e.g. the configured folder was unavailable on this device and a fallback was used */
+  note?: string
 }
 
 /**

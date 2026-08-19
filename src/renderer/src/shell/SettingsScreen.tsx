@@ -411,6 +411,8 @@ function BackupSection(): React.JSX.Element {
   const backup = settings.backup
   const [destination, setDestination] = useState<string>('')
   const [isDefault, setIsDefault] = useState(true)
+  const [destUnavailable, setDestUnavailable] = useState(false)
+  const [effectiveDest, setEffectiveDest] = useState('')
   const [backups, setBackups] = useState<BackupInfo[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -423,10 +425,14 @@ function BackupSection(): React.JSX.Element {
     const res = (await window.wicked.invoke(SHELL_IPC.backupConfig)) as {
       destination: string
       isDefaultDestination: boolean
+      destinationUnavailable?: boolean
+      effectiveDestination?: string
       backups: BackupInfo[]
     }
     setDestination(res.destination)
     setIsDefault(res.isDefaultDestination)
+    setDestUnavailable(res.destinationUnavailable === true)
+    setEffectiveDest(res.effectiveDestination ?? res.destination)
     setBackups(res.backups ?? [])
     const pw = (await window.wicked.invoke(SHELL_IPC.backupPasswordStatus)) as { hasPassword?: boolean }
     setHasPassword(!!pw.hasPassword)
@@ -462,7 +468,7 @@ function BackupSection(): React.JSX.Element {
       const skipped = res.skipped?.length
         ? ` ${res.skipped.length} file(s) were too large or unreadable and were skipped: ${res.skipped.slice(0, 3).join(', ')}${res.skipped.length > 3 ? ', …' : ''}`
         : ''
-      setMessage(`Backed up ${res.fileCount ?? 0} files (${fmtBytes(res.size ?? 0)}).${skipped}`)
+      setMessage(`Backed up ${res.fileCount ?? 0} files (${fmtBytes(res.size ?? 0)}).${res.note ? ` ${res.note}` : ''}${skipped}`)
     } else setError(res.error ?? 'Backup failed.')
     await refresh()
     setBusy(false)
@@ -534,6 +540,13 @@ function BackupSection(): React.JSX.Element {
             </button>
           </div>
           {isDefault && <p className="mt-1 text-xs text-muted">Default location. Choose a folder (e.g. a network drive) to keep backups off this PC.</p>}
+          {destUnavailable && (
+            <p className="mt-1 rounded-lg bg-warn/10 p-2 text-xs text-warn">
+              That folder isn’t available on this device (settings travel with Cloud Sync, so this is likely your
+              other PC’s folder). Backups here go to <span className="font-medium">{effectiveDest}</span> instead —
+              the setting is left alone, so your other PC keeps its folder. Pick a folder to set one for this device.
+            </p>
+          )}
         </div>
 
         {/* actions */}
