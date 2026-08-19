@@ -33,6 +33,15 @@ function cssRGB(v: string, fb: string): string {
   }
 }
 
+/**
+ * lightweight-charts renders UTCTimestamp labels in UTC — never the viewer's
+ * timezone — so real epoch times showed intraday bars 4-5 hours off for a
+ * US-eastern trader. Shift each bar by the LOCAL offset at that bar's moment
+ * (per-bar → DST-safe); the chart then renders local wall-clock time.
+ */
+const toChartTime = (ms: number): UTCTimestamp =>
+  Math.floor((ms - new Date(ms).getTimezoneOffset() * 60_000) / 1000) as UTCTimestamp
+
 const TFS: Timeframe[] = ['1D', '5D', '1M', '3M', '1Y']
 interface Bar {
   t: number
@@ -91,8 +100,8 @@ function Chart({ symbol, timeframe }: { symbol: string; timeframe: Timeframe }):
       }
       const up = cssRGB('--wk-ok', '#22c55e')
       const dn = cssRGB('--wk-danger', '#ef4444')
-      candleRef.current?.setData(bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c })))
-      volRef.current?.setData(bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, value: b.v, color: b.c >= b.o ? up : dn })))
+      candleRef.current?.setData(bars.map((b) => ({ time: toChartTime(b.t), open: b.o, high: b.h, low: b.l, close: b.c })))
+      volRef.current?.setData(bars.map((b) => ({ time: toChartTime(b.t), value: b.v, color: b.c >= b.o ? up : dn })))
       chartRef.current?.timeScale().fitContent()
     })()
     return () => {

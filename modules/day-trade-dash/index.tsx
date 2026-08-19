@@ -49,6 +49,16 @@ function cssRGB(v: string, fb: string): string {
   }
 }
 
+/**
+ * lightweight-charts renders UTCTimestamp axis/crosshair labels in UTC — it
+ * never converts to the viewer's timezone, so real epoch times showed 12:00
+ * when it was 8:00 in New York. Shift each bar by the LOCAL offset at that
+ * bar's moment (per-bar, so DST flips inside the loaded range stay correct);
+ * the chart then renders local wall-clock time.
+ */
+const toChartTime = (ms: number): UTCTimestamp =>
+  Math.floor((ms - new Date(ms).getTimezoneOffset() * 60_000) / 1000) as UTCTimestamp
+
 const fmtPrice = (n: number): string => (n >= 1000 ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : n.toFixed(2))
 const fmtPct = (n: number | null): string => (n == null ? '' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`)
 const pctTone = (n: number | null | undefined): string => (n == null ? 'text-muted' : n >= 0 ? 'text-ok' : 'text-danger')
@@ -115,8 +125,8 @@ function CandleChart({ symbol, tf }: { symbol: string; tf: ChartTf }): React.JSX
       setMsg('')
       const up = cssRGB('--wk-ok', '#22c55e')
       const dn = cssRGB('--wk-danger', '#ef4444')
-      candleRef.current?.setData(bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, open: b.o, high: b.h, low: b.l, close: b.c })))
-      volRef.current?.setData(bars.map((b) => ({ time: Math.floor(b.t / 1000) as UTCTimestamp, value: b.v, color: b.c >= b.o ? up : dn })))
+      candleRef.current?.setData(bars.map((b) => ({ time: toChartTime(b.t), open: b.o, high: b.h, low: b.l, close: b.c })))
+      volRef.current?.setData(bars.map((b) => ({ time: toChartTime(b.t), value: b.v, color: b.c >= b.o ? up : dn })))
       if (first) {
         first = false
         chartRef.current?.timeScale().fitContent()
