@@ -8,11 +8,14 @@ import {
   BANDS,
   KNOWN_DEVICES,
   builtinProfiles,
+  clampFxLevel,
   clampGain,
   clampPreamp,
   defaultSettings,
+  emptyFx,
   type AiTuneResult,
   type DeviceLink,
+  type EqFx,
   type EqProfile,
   type SoundSettings,
   type SoundStatus
@@ -66,6 +69,8 @@ function engineInstalled(): boolean {
   return existsSync(apoConfigDir())
 }
 
+const round1 = (n: number): number => Math.round(n * 10) / 10
+
 /** The managed include file with the active mix (or passthrough). */
 function buildMixFile(s: SoundSettings): string {
   const lines = [
@@ -81,6 +86,47 @@ function buildMixFile(s: SoundSettings): string {
   lines.push(s.target ? `Device: ${s.target}` : 'Device: all')
   lines.push(`Preamp: ${clampPreamp(profile.preampDb)} dB`)
   lines.push(`GraphicEQ: ${BANDS.map((f, i) => `${f} ${clampGain(profile.gains[i] ?? 0)}`).join('; ')}`)
+
+  /* ---- FxSound-style effect levers (each 0-10) → Equalizer APO DSP ----
+   * Bass Boost      low shelf @110 Hz, up to +9 dB
+   * Clarity         high shelf @6.5 kHz, up to +7 dB
+   * Dynamic Boost   loudness contour: low shelf @70 + high shelf @9.5k + presence peak
+   * Ambience        early reflection: delayed (14 ms), high-passed copy of the
+   *                 OPPOSITE channel mixed back in quietly (virtual channels)
+   * Surround Sound  mid/side stereo width via negative crossfeed
+   * An extra negative Preamp line pays for the worst-case boost so nothing clips. */
+  const fx = { ...emptyFx(), ...(profile.fx ?? {}) }
+  const bassDb = round1(fx.bass * 0.9)
+  const clarityDb = round1(fx.clarity * 0.7)
+  const dynLow = round1(fx.dynamic * 0.5)
+  const dynHigh = round1(fx.dynamic * 0.4)
+  const dynPres = round1(fx.dynamic * 0.2)
+  const reflect = Math.round(fx.ambience * 3) / 100 // 0 .. 0.30
+  const k = fx.surround * 0.06 // 0 .. 0.6
+  const widenA = Math.round(((2 + k) / 2) * 1000) / 1000
+  const widenB = Math.round((k / 2) * 1000) / 1000
+  const widenDb = widenB > 0 ? 20 * Math.log10(widenA) : 0
+  const headroom = round1(Math.max(bassDb, clarityDb, dynLow + dynPres) + widenDb + (reflect > 0 ? 1.5 : 0))
+  if (bassDb > 0 || clarityDb > 0 || dynLow > 0 || reflect > 0 || widenB > 0) {
+    lines.push('# Effects (Bass Boost / Clarity / Dynamic Boost / Ambience / Surround)')
+    if (headroom > 0) lines.push(`Preamp: -${headroom} dB`)
+    if (bassDb > 0) lines.push(`Filter: ON LSC Fc 110 Hz Gain ${bassDb} dB`)
+    if (clarityDb > 0) lines.push(`Filter: ON HSC Fc 6500 Hz Gain ${clarityDb} dB`)
+    if (dynLow > 0) {
+      lines.push(`Filter: ON LSC Fc 70 Hz Gain ${dynLow} dB`)
+      lines.push(`Filter: ON HSC Fc 9500 Hz Gain ${dynHigh} dB`)
+      lines.push(`Filter: ON PK Fc 2500 Hz Gain ${dynPres} dB Q 1`)
+    }
+    if (reflect > 0) {
+      lines.push('Copy: AMBL=L AMBR=R')
+      lines.push('Channel: AMBL AMBR')
+      lines.push('Delay: 14 ms')
+      lines.push('Filter: ON HP Fc 300 Hz')
+      lines.push('Channel: all')
+      lines.push(`Copy: L=L+${reflect}*AMBR R=R+${reflect}*AMBL`)
+    }
+    if (widenB > 0) lines.push(`Copy: L=${widenA}*L-${widenB}*R R=${widenA}*R-${widenB}*L`)
+  }
   return lines.join('\r\n') + '\r\n'
 }
 
@@ -259,11 +305,20 @@ export default function register(ctx: ModuleIpcContext): void {
       return { ok: false, error: 'Built-in mixes cannot be edited directly — they are cloned into a custom copy first.' }
     const gains = Array.isArray(r.gains) ? r.gains.slice(0, 10).map((g) => clampGain(Number(g) || 0)) : []
     while (gains.length < 10) gains.push(0)
+    const rawFx = asRecord(r.fx)
+    const fx: EqFx = {
+      bass: clampFxLevel(Number(rawFx.bass) || 0),
+      clarity: clampFxLevel(Number(rawFx.clarity) || 0),
+      ambience: clampFxLevel(Number(rawFx.ambience) || 0),
+      surround: clampFxLevel(Number(rawFx.surround) || 0),
+      dynamic: clampFxLevel(Number(rawFx.dynamic) || 0)
+    }
     const profile: EqProfile = {
       id,
       name: (typeof r.name === 'string' && r.name.trim() ? r.name.trim() : 'Custom mix').slice(0, 60),
       preampDb: clampPreamp(Number(r.preampDb) || 0),
       gains,
+      fx,
       note: typeof r.note === 'string' ? r.note.slice(0, 200) : undefined
     }
     const i = s.profiles.findIndex((p) => p.id === id)
@@ -331,18 +386,26 @@ export default function register(ctx: ModuleIpcContext): void {
         {
           role: 'system',
           text:
-            'You are a veteran audio engineer tuning a 10-band graphic EQ. Bands (Hz): ' +
+            'You are a veteran audio engineer tuning a 10-band graphic EQ plus five effect levers. Bands (Hz): ' +
             BANDS.join(', ') +
             '. Gains are dB in [-12, 12]; preampDb in [-20, 6] and should offset the largest boost to avoid clipping. ' +
-            'Prefer gentle, musical moves (most bands within ±4 dB). ' +
-            'Return ONLY JSON: {"preampDb": number, "gains": [10 numbers], "summary": "1-2 sentences on what you did and one tip"}.'
+            'Prefer gentle, musical moves (most bands within ±4 dB). The effect levers are each 0-10: ' +
+            'bass (low-shelf weight), clarity (treble shelf/air), ambience (subtle early reflections), ' +
+            'surround (stereo width — keep low on headphones with strong crossfeed needs), dynamic (loudness contour punch). ' +
+            'Return ONLY JSON: {"preampDb": number, "gains": [10 numbers], ' +
+            '"fx": {"bass": 0-10, "clarity": 0-10, "ambience": 0-10, "surround": 0-10, "dynamic": 0-10}, ' +
+            '"summary": "1-2 sentences on what you did and one tip"}.'
         },
         {
           role: 'user',
           text:
             `Output device: ${deviceLabel || 'unknown'}\n` +
             (known ? `Known hardware: ${known.name} (${known.kind}). Traits: ${known.notes}\n` : '') +
-            (base ? `Starting curve "${base.name}": preamp ${base.preampDb} dB, gains [${base.gains.join(', ')}]\n` : '') +
+            (base
+              ? `Starting curve "${base.name}": preamp ${base.preampDb} dB, gains [${base.gains.join(', ')}], fx ${JSON.stringify(
+                  { ...emptyFx(), ...(base.fx ?? {}) }
+                )}\n`
+              : '') +
             `Goal: ${goal || 'Tune this device to sound its best for general listening.'}`
         }
       ]
@@ -357,10 +420,18 @@ export default function register(ctx: ModuleIpcContext): void {
       const o = asRecord(parsed)
       const gains = Array.isArray(o.gains) ? o.gains.slice(0, 10).map((g) => clampGain(Number(g) || 0)) : []
       if (gains.length !== 10) return { ok: false, error: 'The AI did not return 10 band gains — try again.' }
+      const ofx = asRecord(o.fx)
       return {
         ok: true,
         preampDb: clampPreamp(Number(o.preampDb) || 0),
         gains,
+        fx: {
+          bass: clampFxLevel(Number(ofx.bass) || 0),
+          clarity: clampFxLevel(Number(ofx.clarity) || 0),
+          ambience: clampFxLevel(Number(ofx.ambience) || 0),
+          surround: clampFxLevel(Number(ofx.surround) || 0),
+          dynamic: clampFxLevel(Number(ofx.dynamic) || 0)
+        },
         summary: typeof o.summary === 'string' ? o.summary.slice(0, 400) : '',
         provider: res.provider
       }

@@ -15,10 +15,14 @@ import {
 import { ModuleTitle } from '@/shell/moduleContext'
 import {
   BANDS,
+  FX_META,
   KNOWN_DEVICES,
+  clampFxLevel,
   clampGain,
   clampPreamp,
+  emptyFx,
   type AiTuneResult,
+  type EqFx,
   type EqProfile,
   type SoundStatus
 } from './types'
@@ -47,6 +51,9 @@ interface OutputDevice {
 /** "Default - Speakers (2- EDIFIER M60)" → "EDIFIER M60" (the APO match token). */
 function matchToken(label: string): string {
   let s = label.replace(/^(Default|Communications) - /i, '').trim()
+  // drop a trailing USB vid:pid parenthetical like "(0b05:1a52)" — it's a
+  // hardware id, not part of the device NAME Equalizer APO matches against
+  s = s.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim()
   const paren = s.match(/\(([^()]+)\)\s*$/)
   if (paren) s = paren[1]
   s = s.replace(/^\d+-\s*/, '').trim()
@@ -67,12 +74,18 @@ export default function WickedSound(): React.JSX.Element {
 
   // sliders edit a local draft and commit debounced, so dragging doesn't spam
   // config writes (each write hot-reloads the engine)
-  const [draft, setDraft] = useState<{ id: string; preampDb: number; gains: number[] } | null>(null)
+  interface Draft {
+    id: string
+    preampDb: number
+    gains: number[]
+    fx: EqFx
+  }
+  const [draft, setDraft] = useState<Draft | null>(null)
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const statusRef = useRef<SoundStatus | null>(null)
   statusRef.current = status
   const autoBusyRef = useRef(false)
-  const draftRef = useRef<{ id: string; preampDb: number; gains: number[] } | null>(null)
+  const draftRef = useRef<Draft | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const waveStream = useRef<MediaStream | null>(null)
@@ -81,9 +94,10 @@ export default function WickedSound(): React.JSX.Element {
 
   const settings = status?.settings
   const active = settings?.profiles.find((p) => p.id === settings.activeProfileId) ?? null
-  const shown: { preampDb: number; gains: number[] } = draft ?? {
+  const shown: { preampDb: number; gains: number[]; fx: EqFx } = draft ?? {
     preampDb: active?.preampDb ?? 0,
-    gains: active?.gains ?? new Array(10).fill(0)
+    gains: active?.gains ?? new Array(10).fill(0),
+    fx: { ...emptyFx(), ...(active?.fx ?? {}) }
   }
 
   const applyStatus = (res: unknown): void => {
@@ -186,20 +200,22 @@ export default function WickedSound(): React.JSX.Element {
   /* ------------------------------ EQ editing ------------------------------ */
 
   /** Slider edits: builtins are cloned into a custom mix on the first change. */
-  const editCurve = (patch: Partial<{ preampDb: number; gains: number[] }>): void => {
+  const editCurve = (patch: Partial<{ preampDb: number; gains: number[]; fx: EqFx }>): void => {
     if (!settings || !active) return
-    const cur = draft ?? { id: active.id, preampDb: active.preampDb, gains: [...active.gains] }
-    const next = {
-      id: (draft as { id?: string } | null)?.id ?? active.id,
+    const cur =
+      draft ?? { id: active.id, preampDb: active.preampDb, gains: [...active.gains], fx: { ...emptyFx(), ...(active.fx ?? {}) } }
+    const next: Draft = {
+      id: cur.id,
       preampDb: patch.preampDb ?? cur.preampDb,
-      gains: patch.gains ?? cur.gains
+      gains: patch.gains ?? cur.gains,
+      fx: patch.fx ?? cur.fx
     }
     setDraft(next)
     if (commitTimer.current) clearTimeout(commitTimer.current)
     commitTimer.current = setTimeout(() => void commitDraft(next), 500)
   }
 
-  const commitDraft = async (d: { id: string; preampDb: number; gains: number[] }): Promise<void> => {
+  const commitDraft = async (d: Draft): Promise<void> => {
     const st = statusRef.current
     if (!st) return
     const base = st.settings.profiles.find((p) => p.id === d.id)
@@ -214,6 +230,7 @@ export default function WickedSound(): React.JSX.Element {
       name,
       preampDb: d.preampDb,
       gains: d.gains,
+      fx: d.fx,
       note: base?.note
     })) as { ok?: boolean; error?: string; status?: SoundStatus }
     if (!res.ok) {
@@ -276,7 +293,7 @@ export default function WickedSound(): React.JSX.Element {
         setError(tune.error ?? 'AI tuning failed.')
         return
       }
-      editCurve({ preampDb: tune.preampDb ?? active.preampDb, gains: tune.gains })
+      editCurve({ preampDb: tune.preampDb ?? active.preampDb, gains: tune.gains, fx: tune.fx })
       setAiSummary(`${tune.summary ?? 'Tuned.'} (via ${tune.provider ?? 'Gemini'})`)
     } finally {
       setAiBusy(false)
@@ -590,6 +607,31 @@ export default function WickedSound(): React.JSX.Element {
                 ))}
               </div>
               {active?.note && <p className="mt-2 text-[11px] text-muted">{active.note}</p>}
+            </section>
+
+            {/* effects levers (FxSound-style) */}
+            <section className={`rounded-xl border border-edge bg-surface p-4 ${power ? '' : 'opacity-60'}`}>
+              <h2 className="text-sm font-semibold">Effects {active ? `— ${active.name}` : ''}</h2>
+              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-3 xl:grid-cols-5">
+                {FX_META.map((m) => (
+                  <label key={m.key} className="block" title={m.hint}>
+                    <span className="flex items-center justify-between text-xs font-medium">
+                      {m.label}
+                      <span className="tabular-nums text-muted">{shown.fx[m.key].toFixed(1)}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      value={shown.fx[m.key]}
+                      onChange={(e) => editCurve({ fx: { ...shown.fx, [m.key]: clampFxLevel(Number(e.target.value)) } })}
+                      className="mt-1 w-full accent-[rgb(var(--wk-accent))]"
+                    />
+                    <span className="text-[10px] leading-tight text-muted">{m.hint}</span>
+                  </label>
+                ))}
+              </div>
             </section>
 
             {/* EQ */}

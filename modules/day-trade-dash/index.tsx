@@ -135,7 +135,7 @@ function CandleChart({ symbol, tf }: { symbol: string; tf: ChartTf }): React.JSX
     candleRef.current?.setData([])
     volRef.current?.setData([])
     void load()
-    const timer = setInterval(() => void load(), tf === 'D' ? 300_000 : 30_000)
+    const timer = setInterval(() => void load(), tf === 'D' || tf === '4h' ? 300_000 : 30_000)
     return () => {
       alive = false
       clearInterval(timer)
@@ -146,7 +146,7 @@ function CandleChart({ symbol, tf }: { symbol: string; tf: ChartTf }): React.JSX
     <div className="relative min-h-0 flex-1">
       <div ref={wrapRef} className="absolute inset-0" />
       {msg && (
-        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-lg bg-raised/90 px-3 py-1 text-xs text-muted">
+        <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-lg bg-raised/90 px-3 py-1 text-sm text-muted">
           {msg}
         </div>
       )}
@@ -184,10 +184,10 @@ function ChartSlotCard({
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
           spellCheck={false}
-          className="w-20 rounded-md border border-edge bg-raised px-2 py-1 text-sm font-bold outline-none focus:border-accent"
+          className="w-20 rounded-md border border-edge bg-raised px-2 py-1 text-base font-bold outline-none focus:border-accent"
         />
         {quote?.price != null && (
-          <span className="min-w-0 truncate text-xs tabular-nums text-muted">
+          <span className="min-w-0 truncate text-sm tabular-nums text-muted">
             {fmtPrice(quote.price)} <span className={pctTone(quote.changePct)}>{fmtPct(quote.changePct)}</span>
           </span>
         )}
@@ -197,7 +197,7 @@ function ChartSlotCard({
             <button
               key={t}
               onClick={() => onChange(symbol, t)}
-              className={`px-1.5 py-0.5 text-[11px] font-medium ${t === tf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
+              className={`px-1.5 py-0.5 text-[13px] font-medium ${t === tf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
             >
               {t}
             </button>
@@ -337,12 +337,12 @@ export default function DayTradeDash(): React.JSX.Element {
           <LayoutDashboard size={19} />
         </span>
         <div className="min-w-0">
-          <h1 className="text-base font-bold tracking-tight">
+          <h1 className="text-lg font-bold tracking-tight">
             <ModuleTitle fallback="Day Trade Dash" />
           </h1>
         </div>
         {session && (
-          <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${sessionMeta[session.session].cls}`}>
+          <span className={`rounded-full border px-2.5 py-1 text-sm font-semibold ${sessionMeta[session.session].cls}`}>
             {sessionMeta[session.session].label}
             {session.minutesToNext != null && (
               <span className="font-normal opacity-80"> · {session.nextLabel} in {fmtCountdown(session.minutesToNext)}</span>
@@ -352,25 +352,18 @@ export default function DayTradeDash(): React.JSX.Element {
         )}
         <span className="flex-1" />
         <button
-          onClick={() => void patch({ tvOn: !dash.tvOn })}
-          title="Bloomberg TV live (YouTube) — change the stream in Settings"
-          className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${dash.tvOn ? 'border-accent bg-accent/10 text-accent' : 'border-edge text-muted hover:border-accent/60'}`}
-        >
-          <Tv size={13} /> Live TV
-        </button>
-        <button
           onClick={() => {
             setTvUrlInput(dash.tvUrl)
             setShowSettings(true)
           }}
-          className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-xs font-medium text-muted hover:border-accent/60 hover:text-ink"
+          className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-sm font-medium text-muted hover:border-accent/60 hover:text-ink"
         >
           <Settings size={13} /> Settings
         </button>
       </header>
 
       {error && (
-        <div className="flex items-center gap-2 border-b border-danger/40 bg-danger/10 px-5 py-1.5 text-xs text-danger">
+        <div className="flex items-center gap-2 border-b border-danger/40 bg-danger/10 px-5 py-1.5 text-sm text-danger">
           <span className="min-w-0 flex-1 truncate">{error}</span>
           <button onClick={() => setError('')} className="rounded p-0.5 hover:bg-danger/15">
             <X size={12} />
@@ -400,24 +393,24 @@ export default function DayTradeDash(): React.JSX.Element {
                 }}
                 placeholder="Add ticker"
                 spellCheck={false}
-                className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1 text-xs outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1 text-sm outline-none focus:border-accent"
               />
               <button onClick={() => void addWatch()} className="rounded-md border border-edge p-1 text-muted hover:border-accent/60 hover:text-ink">
                 <Plus size={13} />
               </button>
             </div>
             {dash.watch.length > 0 && (
-              <div className="flex items-center gap-1.5 px-1.5 pb-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
+              <div className="flex items-center gap-1.5 px-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                 <span className="min-w-0 flex-1">Sym · last</span>
-                <span className="w-14 text-right">Day</span>
-                <span className="w-14 text-right" title="% change since you added it to the watchlist">
+                <span className="w-16 text-right">Day</span>
+                <span className="w-16 text-right" title="% change since you added it to the watchlist">
                   Added
                 </span>
                 <span className="w-4" />
               </div>
             )}
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
-              {dash.watch.length === 0 && <p className="px-1 pt-2 text-[11px] text-muted">Add tickers — click one to chart it.</p>}
+              {dash.watch.length === 0 && <p className="px-1 pt-2 text-[13px] text-muted">Add tickers — click one to chart it.</p>}
               {dash.watch.map((w) => {
                 const sym = w.symbol
                 const q = quotes[sym]
@@ -434,7 +427,7 @@ export default function DayTradeDash(): React.JSX.Element {
                         ? `Added ${new Date(w.addedAt).toLocaleDateString()}${w.addedPrice != null ? ` @ $${w.addedPrice.toFixed(2)}` : ''}`
                         : undefined
                     }
-                    className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-xs ${
+                    className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-sm ${
                       dash.selected === sym ? 'bg-accent/10 text-accent' : 'hover:bg-raised'
                     }`}
                   >
@@ -442,8 +435,8 @@ export default function DayTradeDash(): React.JSX.Element {
                       <span className="font-semibold">{sym}</span>
                       {q?.price != null && <span className="ml-1.5 tabular-nums text-muted">{fmtPrice(q.price)}</span>}
                     </span>
-                    <span className={`w-14 text-right tabular-nums ${pctTone(q?.changePct)}`}>{q ? fmtPct(q.changePct) : '—'}</span>
-                    <span className={`w-14 text-right tabular-nums ${pctTone(sinceAdd)}`}>{sinceAdd != null ? fmtPct(sinceAdd) : '—'}</span>
+                    <span className={`w-16 text-right tabular-nums ${pctTone(q?.changePct)}`}>{q ? fmtPct(q.changePct) : '—'}</span>
+                    <span className={`w-16 text-right tabular-nums ${pctTone(sinceAdd)}`}>{sinceAdd != null ? fmtPct(sinceAdd) : '—'}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -463,9 +456,9 @@ export default function DayTradeDash(): React.JSX.Element {
           {/* selected ticker chart */}
           <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-edge bg-surface p-2">
             <div className="flex items-center gap-2 pb-1.5">
-              <span className="text-sm font-bold">{dash.selected || '—'}</span>
+              <span className="text-base font-bold">{dash.selected || '—'}</span>
               {selectedQuote?.price != null && (
-                <span className="text-xs tabular-nums text-muted">
+                <span className="text-sm tabular-nums text-muted">
                   {fmtPrice(selectedQuote.price)} <span className={pctTone(selectedQuote.changePct)}>{fmtPct(selectedQuote.changePct)}</span>
                 </span>
               )}
@@ -475,7 +468,7 @@ export default function DayTradeDash(): React.JSX.Element {
                   <button
                     key={t}
                     onClick={() => void patch({ selectedTf: t })}
-                    className={`px-1.5 py-0.5 text-[11px] font-medium ${t === dash.selectedTf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
+                    className={`px-1.5 py-0.5 text-[13px] font-medium ${t === dash.selectedTf ? 'bg-accent text-accent-ink' : 'text-muted hover:bg-raised'}`}
                   >
                     {t}
                   </button>
@@ -485,7 +478,7 @@ export default function DayTradeDash(): React.JSX.Element {
             {dash.selected ? (
               <CandleChart symbol={dash.selected} tf={dash.selectedTf} />
             ) : (
-              <div className="flex flex-1 items-center justify-center text-xs text-muted">Click a watchlist ticker.</div>
+              <div className="flex flex-1 items-center justify-center text-sm text-muted">Click a watchlist ticker.</div>
             )}
           </section>
 
@@ -493,8 +486,8 @@ export default function DayTradeDash(): React.JSX.Element {
           <section className="flex w-72 shrink-0 flex-col rounded-xl border border-edge bg-surface p-2 xl:w-80">
             <div className="flex items-center gap-1.5 pb-1.5">
               <Newspaper size={13} className="text-accent" />
-              <span className="text-xs font-semibold">Market news</span>
-              <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
+              <span className="text-sm font-semibold">Market news</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-muted">
                 {newsAt ? `updated ${new Date(newsAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · hourly` : ''}
               </span>
               <button
@@ -506,7 +499,7 @@ export default function DayTradeDash(): React.JSX.Element {
               </button>
             </div>
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-              {news.length === 0 && <p className="px-1 pt-2 text-[11px] text-muted">No headlines yet.</p>}
+              {news.length === 0 && <p className="px-1 pt-2 text-[13px] text-muted">No headlines yet.</p>}
               {news.map((n, i) => (
                 <a
                   key={i}
@@ -515,8 +508,8 @@ export default function DayTradeDash(): React.JSX.Element {
                   rel="noreferrer"
                   className="block rounded-md border border-edge/60 bg-raised/40 px-2 py-1.5 hover:border-accent/50"
                 >
-                  <p className="text-[11px] font-medium leading-snug">{n.title}</p>
-                  <p className="mt-0.5 truncate text-[10px] text-muted">
+                  <p className="text-[13px] font-medium leading-snug">{n.title}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted">
                     {n.source}
                     {n.publishedAt ? ` · ${fmtNewsTime(n.publishedAt)}` : ''}
                     {n.tickers && n.tickers.length > 0 ? ` · ${n.tickers.join(' ')}` : ''}
@@ -526,47 +519,45 @@ export default function DayTradeDash(): React.JSX.Element {
             </div>
           </section>
 
-          {/* live TV */}
-          {dash.tvOn && (
-            <section className="flex w-[380px] shrink-0 flex-col rounded-xl border border-edge bg-surface p-2">
-              <div className="flex items-center gap-1.5 pb-1.5">
-                <Tv size={13} className="text-accent" />
-                <span className="text-xs font-semibold">Live TV</span>
-                <span className="flex-1" />
-                <button onClick={() => void patch({ tvOn: false })} className="rounded p-1 text-muted hover:text-ink">
-                  <X size={12} />
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-hidden rounded-lg bg-black/40">
-                {/* eslint-disable-next-line react/no-unknown-property */}
-                <webview key={dash.tvUrl} src={dash.tvUrl} className="h-full w-full" />
-              </div>
-              <p className="pt-1 text-[10px] text-muted">Starts muted (autoplay rules) — unmute in the player. Stream URL in Settings.</p>
-            </section>
-          )}
+          {/* live TV — always mounted, plays on demand */}
+          <section className="flex w-[360px] shrink-0 flex-col rounded-xl border border-edge bg-surface p-2 xl:w-[400px]">
+            <div className="flex items-center gap-1.5 pb-1.5">
+              <Tv size={13} className="text-accent" />
+              <span className="text-sm font-semibold">Live TV — Bloomberg</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg bg-black/40">
+              {loaded && (
+                /* httpreferrer is REQUIRED: YouTube's embed player refuses
+                   referer-less requests with "configuration error 153" */
+                /* eslint-disable-next-line react/no-unknown-property */
+                <webview key={dash.tvUrl} src={dash.tvUrl} httpreferrer="https://wicked-suite.app/" className="h-full w-full" />
+              )}
+            </div>
+            <p className="pt-1 text-xs text-muted">Hit play when you want it. Stream URL in Settings.</p>
+          </section>
         </div>
 
         {/* bottom: the tape */}
-        <div className="relative h-9 shrink-0 overflow-hidden rounded-xl border border-edge bg-surface">
+        <div className="relative h-16 shrink-0 overflow-hidden rounded-xl border border-edge bg-surface">
           <style>{`@keyframes wk-tape { from { transform: translateX(0); } to { transform: translateX(-50%); } }`}</style>
           {tapeSyms.length === 0 ? (
-            <div className="flex h-full items-center px-3 text-[11px] text-muted">
+            <div className="flex h-full items-center px-4 text-base text-muted">
               Tape warming up — quotes load every 20s. Add symbols in Settings.
             </div>
           ) : (
             <div
               className="absolute inset-y-0 flex w-max items-center hover:[animation-play-state:paused]"
-              style={{ animation: `wk-tape ${Math.max(24, tapeSyms.length * 6)}s linear infinite` }}
+              style={{ animation: `wk-tape ${Math.max(28, tapeSyms.length * 7)}s linear infinite` }}
             >
               {[...tapeSyms, ...tapeSyms].map((sym, i) => {
                 const q = quotes[sym]
                 if (!q || q.price == null) return null
                 const upTone = (q.changePct ?? 0) >= 0
                 return (
-                  <span key={`${sym}-${i}`} className="flex items-center gap-1.5 pr-10 text-xs tabular-nums">
-                    <span className="font-bold">{sym}</span>
-                    <span className="text-muted">{fmtPrice(q.price)}</span>
-                    <span className={upTone ? 'text-ok' : 'text-danger'}>
+                  <span key={`${sym}-${i}`} className="flex items-center gap-2.5 pr-14 text-lg tabular-nums">
+                    <span className="font-black tracking-tight">{sym}</span>
+                    <span className="font-medium text-muted">{fmtPrice(q.price)}</span>
+                    <span className={`font-semibold ${upTone ? 'text-ok' : 'text-danger'}`}>
                       {upTone ? '▲' : '▼'} {fmtPct(q.changePct)}
                     </span>
                   </span>
@@ -582,19 +573,19 @@ export default function DayTradeDash(): React.JSX.Element {
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 p-6" onClick={() => setShowSettings(false)}>
           <div className="w-full max-w-xl rounded-xl border border-edge bg-surface p-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Dashboard settings</h2>
+              <h2 className="text-base font-semibold">Dashboard settings</h2>
               <button onClick={() => setShowSettings(false)} className="rounded p-1 text-muted hover:text-ink">
                 <X size={14} />
               </button>
             </div>
 
-            <p className="mt-3 text-xs font-medium">Rotating tape symbols</p>
-            <p className="text-[10px] text-muted">
+            <p className="mt-3 text-sm font-medium">Rotating tape symbols</p>
+            <p className="text-xs text-muted">
               Stocks and ETFs. For futures/indices use the ETF proxies day traders watch: ES→SPY, NQ→QQQ, YM→DIA, RTY→IWM, CL→USO, GC→GLD, ZB→TLT, VIX→UVXY.
             </p>
             <div className="mt-1.5 flex flex-wrap gap-1">
               {dash.tape.map((sym) => (
-                <span key={sym} className="flex items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5 text-xs">
+                <span key={sym} className="flex items-center gap-1 rounded-full border border-edge bg-raised px-2 py-0.5 text-sm">
                   {sym}
                   <button
                     onClick={() => void patch({ tape: dash.tape.filter((t) => t !== sym) })}
@@ -616,26 +607,26 @@ export default function DayTradeDash(): React.JSX.Element {
                 }}
                 placeholder="Add + Enter"
                 spellCheck={false}
-                className="w-24 rounded-full border border-edge bg-raised px-2 py-0.5 text-xs outline-none focus:border-accent"
+                className="w-24 rounded-full border border-edge bg-raised px-2 py-0.5 text-sm outline-none focus:border-accent"
               />
             </div>
 
-            <p className="mt-4 text-xs font-medium">Live TV stream (YouTube embed URL)</p>
+            <p className="mt-4 text-sm font-medium">Live TV stream (YouTube embed URL)</p>
             <div className="mt-1 flex gap-1.5">
               <input
                 value={tvUrlInput}
                 onChange={(e) => setTvUrlInput(e.target.value)}
                 spellCheck={false}
-                className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1.5 text-xs outline-none focus:border-accent"
+                className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
               />
               <button
                 onClick={() => setTvUrlInput(DEFAULT_TV_URL)}
-                className="shrink-0 rounded-md border border-edge px-2 py-1.5 text-xs text-muted hover:border-accent/60 hover:text-ink"
+                className="shrink-0 rounded-md border border-edge px-2 py-1.5 text-sm text-muted hover:border-accent/60 hover:text-ink"
               >
                 Bloomberg
               </button>
             </div>
-            <p className="mt-1 text-[10px] text-muted">
+            <p className="mt-1 text-xs text-muted">
               Default is Bloomberg Television's 24/7 live stream. Any https://www.youtube.com/embed/… URL works (CNBC-style channels, a specific
               live video, …).
             </p>
@@ -646,7 +637,7 @@ export default function DayTradeDash(): React.JSX.Element {
                   void patch({ tvUrl: tvUrlInput.trim() || DEFAULT_TV_URL })
                   setShowSettings(false)
                 }}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-ink hover:opacity-90"
+                className="rounded-lg bg-accent px-4 py-2 text-base font-semibold text-accent-ink hover:opacity-90"
               >
                 Done
               </button>

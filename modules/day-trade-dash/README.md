@@ -5,10 +5,13 @@ The all-day trading cockpit: everything a day trader glances at, on one screen.
 ## Layout
 
 - **Top — three always-on charts.** Each has its own ticker box and candle
-  duration (1m / 5m / 15m / 1h / D), rendered with lightweight-charts and
-  refreshed every 30s (5 min for daily). The tickers/timeframes persist in the
-  module store (`day-trade-dash.state` in `wicked-modules.json`), so **Backup &
-  Cloud Sync restore the exact layout** on any machine.
+  duration (1m / 5m / 15m / 1h / 4h / D), rendered with lightweight-charts and
+  refreshed every 30s (5 min for 4h/daily). Bars are shifted by the local UTC
+  offset per bar before display (lightweight-charts renders labels in UTC —
+  without the shift, intraday times read hours off). The tickers/timeframes
+  persist in the module store (`day-trade-dash.state` in
+  `wicked-modules.json`), so **Backup & Cloud Sync restore the exact layout**
+  on any machine.
 - **Middle left — watchlist.** Add tickers; rows show live price, day % and
   **% since added** (20s refresh); clicking a row charts it in the panel to
   the right (own timeframe picker). The since-added anchor is the price at the
@@ -27,11 +30,13 @@ The all-day trading cockpit: everything a day trader glances at, on one screen.
 - **Header — session clock.** Pre-market / Market open / After hours / Closed
   with a countdown to the next bell, in ET (reuses stock-planner's session
   math).
-- **Live TV.** A toggleable panel embedding Bloomberg Television's 24/7
+- **Live TV.** An always-visible panel embedding Bloomberg Television's 24/7
   YouTube live stream in a `<webview>` (the `live_stream?channel=` embed always
-  resolves to the channel's current broadcast, so the link doesn't rot).
-  Starts muted (autoplay rules) — unmute inside the player. The URL is
-  configurable in Settings, so any YouTube `/embed/...` stream works.
+  resolves to the channel's current broadcast, so the link doesn't rot). No
+  autoplay — hit play when wanted, which also satisfies the autoplay policy so
+  sound works immediately. The webview sets `httpreferrer` because YouTube's
+  embed player refuses referer-less requests with "configuration error 153".
+  The URL is configurable in Settings, so any YouTube `/embed/...` stream works.
 
 ## Data & quirks
 

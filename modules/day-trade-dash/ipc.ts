@@ -4,7 +4,17 @@ import type { ModuleDataPath } from '@shared/types'
 import { getAggregates, getMarketNews, getSnapshot } from '../stock-planner/ipc/market/massive'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import { etParts, marketSession } from '../stock-planner/ipc/market/sessions'
-import { CHART_TFS, defaultState, type ChartTf, type DashQuote, type DashState, type SessionInfo, type WatchEntry } from './types'
+import {
+  CHART_TFS,
+  DEFAULT_TV_URL,
+  LEGACY_TV_URL,
+  defaultState,
+  type ChartTf,
+  type DashQuote,
+  type DashState,
+  type SessionInfo,
+  type WatchEntry
+} from './types'
 
 /* ------------------------------------------------------------------------ *
  *  DAY TRADE DASH — main process.
@@ -26,6 +36,7 @@ const TF: Record<ChartTf, { mult: number; timespan: 'minute' | 'hour' | 'day'; d
   '5m': { mult: 5, timespan: 'minute', days: 7 },
   '15m': { mult: 15, timespan: 'minute', days: 12 },
   '1h': { mult: 1, timespan: 'hour', days: 60 },
+  '4h': { mult: 4, timespan: 'hour', days: 150 },
   D: { mult: 1, timespan: 'day', days: 380 }
 }
 
@@ -76,7 +87,8 @@ function sanitize(raw: unknown): DashState {
   })
   while (charts.length < 3) charts.push({ ...d.charts[charts.length] })
   const watch = 'watch' in r ? cleanWatch(r.watch) : d.watch
-  const tvUrl = typeof r.tvUrl === 'string' && /^https:\/\//i.test(r.tvUrl.trim()) ? r.tvUrl.trim().slice(0, 500) : d.tvUrl
+  let tvUrl = typeof r.tvUrl === 'string' && /^https:\/\//i.test(r.tvUrl.trim()) ? r.tvUrl.trim().slice(0, 500) : d.tvUrl
+  if (tvUrl === LEGACY_TV_URL) tvUrl = DEFAULT_TV_URL // pre-always-on default (muted autoplay) → play-on-demand
   const selected = cleanSym(r.selected) || watch[0]?.symbol || ''
   return {
     charts,

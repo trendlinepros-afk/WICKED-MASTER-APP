@@ -31,6 +31,16 @@ the moment they change:
 - **Mixes**: built-ins (Flat / YouTube / Music / Movie + starter curves for the
   user's own hardware) come from code and can't be deleted; editing one clones
   it into a custom copy first. Slider edits debounce 500 ms before writing.
+- **Effects levers** (FxSound-style, per-mix, each 0-10) → Equalizer APO DSP:
+  **Bass Boost** = low shelf @110 Hz (≤ +9 dB); **Clarity** = high shelf
+  @6.5 kHz (≤ +7 dB); **Dynamic Boost** = loudness contour (low shelf 70 Hz +
+  high shelf 9.5 kHz + presence peak 2.5 kHz); **Ambience** = an early
+  reflection — the opposite channel copied into a virtual channel, delayed
+  14 ms, high-passed at 300 Hz and mixed back in quietly; **Surround Sound** =
+  mid/side stereo widening via negative crossfeed (`Copy: L=a*L-b*R …`).
+  A computed extra negative Preamp line pays for the worst-case boost so
+  nothing clips. Ambience/Surround assume a stereo output. The AI tuner sets
+  the levers too, not just the band gains.
 - **Link**: pick a specific output, then "Link this output to <mix>". The link
   stores an Equalizer APO device-match token derived from the device label
   (e.g. `EDIFIER M60`).

@@ -1,6 +1,6 @@
 /** Shared types for Day Trade Dash — used by main (ipc), the renderer and mcp. */
 
-export const CHART_TFS = ['1m', '5m', '15m', '1h', 'D'] as const
+export const CHART_TFS = ['1m', '5m', '15m', '1h', '4h', 'D'] as const
 export type ChartTf = (typeof CHART_TFS)[number]
 
 export interface ChartSlot {
@@ -31,16 +31,22 @@ export interface DashState {
   tape: string[]
   /** YouTube /embed URL for the live TV panel */
   tvUrl: string
+  /** legacy toggle from v0.2.45-47 — the TV card is now always shown */
   tvOn: boolean
 }
 
 /**
  * Bloomberg Television's 24/7 live stream on YouTube, via the evergreen
  * live_stream embed (always resolves to the channel's CURRENT live broadcast,
- * so the link never goes stale when they rotate streams). Muted autoplay —
- * browsers/webviews only allow autoplay muted; unmute inside the player.
+ * so the link never goes stale when they rotate streams). No autoplay — the
+ * card sits ready all day and the user hits play when they want it, which
+ * also means sound works immediately (a user gesture satisfies the autoplay
+ * policy).
  */
-export const DEFAULT_TV_URL =
+export const DEFAULT_TV_URL = 'https://www.youtube.com/embed/live_stream?channel=UCIALMKvObZNtJ6AmdCLP7Lg'
+
+/** the v0.2.45 default (muted autoplay) — migrated to the new default on read */
+export const LEGACY_TV_URL =
   'https://www.youtube.com/embed/live_stream?channel=UCIALMKvObZNtJ6AmdCLP7Lg&autoplay=1&mute=1'
 
 export function defaultState(): DashState {
