@@ -236,12 +236,19 @@ export default function DayTradeDash(): React.JSX.Element {
   /* one poll loop feeds the tape, the watchlist AND the chart headers */
   const pollQuotes = async (): Promise<void> => {
     const d = dashRef.current
-    const syms = [...new Set([...d.tape, ...d.watch, ...d.charts.map((c) => c.symbol), d.selected].filter(Boolean))]
+    const syms = [
+      ...new Set([...d.tape, ...d.watch.map((w) => w.symbol), ...d.charts.map((c) => c.symbol), d.selected].filter(Boolean))
+    ]
     if (syms.length === 0) return
     const res = (await invoke('quotes', { symbols: syms })) as { ok?: boolean; quotes?: Record<string, DashQuote>; error?: string }
     if (res.ok && res.quotes) {
       setQuotes(res.quotes)
       setError('')
+      // backfill missing "% since added" anchors with the first price seen
+      for (const w of dashRef.current.watch) {
+        const p = res.quotes[w.symbol]?.price
+        if (w.addedPrice == null && p != null) applyState(await invoke('watch-anchor', { symbol: w.symbol, price: p }))
+      }
     } else if (res.error) setError(res.error)
   }
 
@@ -373,7 +380,7 @@ export default function DayTradeDash(): React.JSX.Element {
         {/* middle: watchlist | selected chart | news | (tv) */}
         <div className="flex min-h-0 flex-1 gap-2.5">
           {/* watchlist */}
-          <section className="flex w-52 shrink-0 flex-col rounded-xl border border-edge bg-surface p-2">
+          <section className="flex w-72 shrink-0 flex-col rounded-xl border border-edge bg-surface p-2">
             <div className="flex items-center gap-1.5 pb-1.5">
               <input
                 value={watchInput}
@@ -389,27 +396,50 @@ export default function DayTradeDash(): React.JSX.Element {
                 <Plus size={13} />
               </button>
             </div>
+            {dash.watch.length > 0 && (
+              <div className="flex items-center gap-1.5 px-1.5 pb-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
+                <span className="min-w-0 flex-1">Sym · last</span>
+                <span className="w-14 text-right">Day</span>
+                <span className="w-14 text-right" title="% change since you added it to the watchlist">
+                  Added
+                </span>
+                <span className="w-4" />
+              </div>
+            )}
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
               {dash.watch.length === 0 && <p className="px-1 pt-2 text-[11px] text-muted">Add tickers — click one to chart it.</p>}
-              {dash.watch.map((sym) => {
+              {dash.watch.map((w) => {
+                const sym = w.symbol
                 const q = quotes[sym]
+                const sinceAdd =
+                  q?.price != null && w.addedPrice != null && w.addedPrice > 0
+                    ? ((q.price - w.addedPrice) / w.addedPrice) * 100
+                    : null
                 return (
                   <div
                     key={sym}
                     onClick={() => void patch({ selected: sym })}
+                    title={
+                      w.addedAt
+                        ? `Added ${new Date(w.addedAt).toLocaleDateString()}${w.addedPrice != null ? ` @ $${w.addedPrice.toFixed(2)}` : ''}`
+                        : undefined
+                    }
                     className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-xs ${
                       dash.selected === sym ? 'bg-accent/10 text-accent' : 'hover:bg-raised'
                     }`}
                   >
-                    <span className="min-w-0 flex-1 truncate font-semibold">{sym}</span>
-                    {q?.price != null && <span className="tabular-nums text-muted">{fmtPrice(q.price)}</span>}
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-semibold">{sym}</span>
+                      {q?.price != null && <span className="ml-1.5 tabular-nums text-muted">{fmtPrice(q.price)}</span>}
+                    </span>
                     <span className={`w-14 text-right tabular-nums ${pctTone(q?.changePct)}`}>{q ? fmtPct(q.changePct) : '—'}</span>
+                    <span className={`w-14 text-right tabular-nums ${pctTone(sinceAdd)}`}>{sinceAdd != null ? fmtPct(sinceAdd) : '—'}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
                         void invoke('watch-remove', { symbol: sym }).then(applyState)
                       }}
-                      className="hidden rounded p-0.5 text-muted hover:text-danger group-hover:block"
+                      className="w-4 rounded p-0.5 text-muted opacity-0 hover:text-danger group-hover:opacity-100"
                       title="Remove"
                     >
                       <X size={11} />

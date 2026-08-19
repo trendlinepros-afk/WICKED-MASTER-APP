@@ -8,10 +8,22 @@ export interface ChartSlot {
   tf: ChartTf
 }
 
+export interface WatchEntry {
+  symbol: string
+  /** when the ticker was added (ms); 0 = unknown (migrated from an older layout) */
+  addedAt: number
+  /**
+   * Price when the ticker was added — the anchor for the "% since added"
+   * metric. null until a price is first seen (market data down at add time,
+   * or a migrated entry); the renderer backfills it from the next quote poll.
+   */
+  addedPrice: number | null
+}
+
 export interface DashState {
   /** the three always-on charts across the top */
   charts: ChartSlot[]
-  watch: string[]
+  watch: WatchEntry[]
   /** watchlist ticker currently shown in the middle chart */
   selected: string
   selectedTf: ChartTf
@@ -38,7 +50,7 @@ export function defaultState(): DashState {
       { symbol: 'QQQ', tf: '5m' },
       { symbol: 'IWM', tf: '15m' }
     ],
-    watch: ['NVDA', 'TSLA', 'AAPL', 'AMD', 'META'],
+    watch: ['NVDA', 'TSLA', 'AAPL', 'AMD', 'META'].map((symbol) => ({ symbol, addedAt: 0, addedPrice: null })),
     selected: 'NVDA',
     selectedTf: '5m',
     // index/futures proxies day traders actually watch (ES→SPY, NQ→QQQ,

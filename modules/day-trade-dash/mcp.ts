@@ -15,13 +15,16 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__overview`,
       description:
-        'The dashboard at a glance: the three chart slots (ticker + timeframe), watchlist, tape symbols, and ' +
-        'live quotes (price + day %) for all of them, plus the current market session. Read-only.',
+        'The dashboard at a glance: the three chart slots (ticker + timeframe), watchlist (each entry carries ' +
+        'addedAt/addedPrice — the anchor for its "% since added" metric), tape symbols, and live quotes ' +
+        '(price + day %) for all of them, plus the current market session. Read-only.',
       inputSchema: {},
       handler: async () => {
         const st = (await ctx.invoke(`${ID}:state-get`)) as { state: DashState }
         const syms = [
-          ...new Set([...st.state.tape, ...st.state.watch, ...st.state.charts.map((c) => c.symbol)].filter(Boolean))
+          ...new Set(
+            [...st.state.tape, ...st.state.watch.map((w) => w.symbol), ...st.state.charts.map((c) => c.symbol)].filter(Boolean)
+          )
         ]
         const [quotes, session] = await Promise.all([
           ctx.invoke(`${ID}:quotes`, { symbols: syms }),

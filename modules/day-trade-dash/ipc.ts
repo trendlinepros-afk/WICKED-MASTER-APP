@@ -4,7 +4,7 @@ import type { ModuleDataPath } from '@shared/types'
 import { getAggregates, getMarketNews, getSnapshot } from '../stock-planner/ipc/market/massive'
 import { resolveQuote } from '../stock-planner/ipc/market/quotes'
 import { etParts, marketSession } from '../stock-planner/ipc/market/sessions'
-import { CHART_TFS, defaultState, type ChartTf, type DashQuote, type DashState, type SessionInfo } from './types'
+import { CHART_TFS, defaultState, type ChartTf, type DashQuote, type DashState, type SessionInfo, type WatchEntry } from './types'
 
 /* ------------------------------------------------------------------------ *
  *  DAY TRADE DASH — main process.
@@ -46,6 +46,26 @@ const cleanSyms = (v: unknown, cap: number): string[] => [
   ...new Set((Array.isArray(v) ? v : []).map(cleanSym).filter(Boolean))
 ].slice(0, cap)
 
+/** Watch entries — accepts the old plain-string layout and migrates it. */
+const cleanWatch = (v: unknown): WatchEntry[] => {
+  const out: WatchEntry[] = []
+  const seen = new Set<string>()
+  for (const raw of Array.isArray(v) ? v : []) {
+    const r = asRecord(raw)
+    const symbol = cleanSym(typeof raw === 'string' ? raw : r.symbol)
+    if (!symbol || seen.has(symbol)) continue
+    seen.add(symbol)
+    const price = Number(r.addedPrice)
+    out.push({
+      symbol,
+      addedAt: Number(r.addedAt) > 0 ? Number(r.addedAt) : 0,
+      addedPrice: Number.isFinite(price) && price > 0 ? price : null
+    })
+    if (out.length >= MAX_WATCH) break
+  }
+  return out
+}
+
 /** Merge any stored/patched shape into a fully-valid DashState. */
 function sanitize(raw: unknown): DashState {
   const d = defaultState()
@@ -55,13 +75,13 @@ function sanitize(raw: unknown): DashState {
     return { symbol: cleanSym(cc.symbol) || d.charts[i]?.symbol || 'SPY', tf: cleanTf(cc.tf, d.charts[i]?.tf ?? '5m') }
   })
   while (charts.length < 3) charts.push({ ...d.charts[charts.length] })
-  const watch = 'watch' in r ? cleanSyms(r.watch, MAX_WATCH) : d.watch
+  const watch = 'watch' in r ? cleanWatch(r.watch) : d.watch
   const tvUrl = typeof r.tvUrl === 'string' && /^https:\/\//i.test(r.tvUrl.trim()) ? r.tvUrl.trim().slice(0, 500) : d.tvUrl
-  const selected = cleanSym(r.selected) || watch[0] || ''
+  const selected = cleanSym(r.selected) || watch[0]?.symbol || ''
   return {
     charts,
     watch,
-    selected: watch.includes(selected) ? selected : watch[0] || '',
+    selected: watch.some((w) => w.symbol === selected) ? selected : watch[0]?.symbol || '',
     selectedTf: cleanTf(r.selectedTf, d.selectedTf),
     tape: 'tape' in r ? cleanSyms(r.tape, MAX_TAPE) : d.tape,
     tvUrl,
@@ -86,11 +106,21 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: true, state: writeState(next) }
   })
 
-  ctx.ipcMain.handle(`${ID}:watch-add`, (_e, raw: unknown) => {
+  ctx.ipcMain.handle(`${ID}:watch-add`, async (_e, raw: unknown) => {
     const sym = cleanSym(asRecord(raw).symbol)
     if (!sym) return { ok: false, error: 'Enter a ticker.' }
+    // capture the add-time price FIRST (the "% since added" anchor) — state is
+    // read after the await so a concurrent write isn't clobbered
+    let addedPrice: number | null = null
+    const k = key()
+    if (k) {
+      const snap = await getSnapshot(k, sym).catch(() => null)
+      const q = snap ? resolveQuote(snap, snap.prevDay ?? null) : null
+      addedPrice = q?.price ?? null
+    }
     const s = readState()
-    if (!s.watch.includes(sym)) s.watch = [...s.watch, sym].slice(0, MAX_WATCH)
+    if (!s.watch.some((w) => w.symbol === sym))
+      s.watch = [...s.watch, { symbol: sym, addedAt: Date.now(), addedPrice }].slice(0, MAX_WATCH)
     if (!s.selected) s.selected = sym
     return { ok: true, state: writeState(s) }
   })
@@ -98,8 +128,25 @@ export default function register(ctx: ModuleIpcContext): void {
   ctx.ipcMain.handle(`${ID}:watch-remove`, (_e, raw: unknown) => {
     const sym = cleanSym(asRecord(raw).symbol)
     const s = readState()
-    s.watch = s.watch.filter((w) => w !== sym)
-    if (s.selected === sym) s.selected = s.watch[0] ?? ''
+    s.watch = s.watch.filter((w) => w.symbol !== sym)
+    if (s.selected === sym) s.selected = s.watch[0]?.symbol ?? ''
+    return { ok: true, state: writeState(s) }
+  })
+
+  /**
+   * Backfill a missing "% since added" anchor with the first price seen —
+   * covers entries added while market data was down and layouts migrated from
+   * the pre-anchor version. Never overwrites an existing anchor.
+   */
+  ctx.ipcMain.handle(`${ID}:watch-anchor`, (_e, raw: unknown) => {
+    const r = asRecord(raw)
+    const sym = cleanSym(r.symbol)
+    const price = Number(r.price)
+    const s = readState()
+    const w = s.watch.find((x) => x.symbol === sym)
+    if (!w || w.addedPrice != null || !(Number.isFinite(price) && price > 0)) return { ok: true, state: s }
+    w.addedPrice = price
+    if (!w.addedAt) w.addedAt = Date.now()
     return { ok: true, state: writeState(s) }
   })
 

@@ -9,9 +9,12 @@ The all-day trading cockpit: everything a day trader glances at, on one screen.
   refreshed every 30s (5 min for daily). The tickers/timeframes persist in the
   module store (`day-trade-dash.state` in `wicked-modules.json`), so **Backup &
   Cloud Sync restore the exact layout** on any machine.
-- **Middle left — watchlist.** Add tickers; rows show live price + day % (20s
-  refresh); clicking a row charts it in the panel to the right (own timeframe
-  picker).
+- **Middle left — watchlist.** Add tickers; rows show live price, day % and
+  **% since added** (20s refresh); clicking a row charts it in the panel to
+  the right (own timeframe picker). The since-added anchor is the price at the
+  moment the ticker was added (hover a row for the date + anchor price); if no
+  price was available right then (or the entry predates this feature), the
+  first price seen afterwards becomes the anchor — it is never overwritten.
 - **Middle right — market news.** Market-wide headlines (Massive/Polygon
   reference news, no ticker filter) that refresh **on the hour, every hour**
   (plus a manual refresh button). Each row shows source, age and related
