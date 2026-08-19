@@ -326,6 +326,26 @@ export interface NewsItem {
   url: string
   source: string
   publishedAt: string
+  /** related tickers, when the feed provides them (market-wide news only) */
+  tickers?: string[]
+}
+
+/** Market-wide news, no ticker filter — the day-trading headline feed. */
+export async function getMarketNews(key: string, limit = 30): Promise<NewsItem[]> {
+  const n = Math.min(Math.max(Math.round(limit), 1), 50)
+  const j = await massiveFetch(key, `/v2/reference/news?limit=${n}&order=desc&sort=published_utc`)
+  return arr(rec(j).results)
+    .map((r) => {
+      const it = rec(r)
+      return {
+        title: String(it.title ?? ''),
+        url: String(it.article_url ?? ''),
+        source: String(rec(it.publisher).name ?? ''),
+        publishedAt: String(it.published_utc ?? ''),
+        tickers: arr(it.tickers).map((t) => String(t)).filter(Boolean).slice(0, 6)
+      }
+    })
+    .filter((x) => x.title)
 }
 
 /** Massive news — fallback only; Finnhub is preferred. */
