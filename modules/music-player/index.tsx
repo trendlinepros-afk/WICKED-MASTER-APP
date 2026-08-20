@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
+  Check,
+  ChevronDown,
   FolderOpen,
   ListMusic,
   Loader2,
@@ -15,10 +17,25 @@ import {
   SkipBack,
   SkipForward,
   Trash2,
+  Volume1,
+  Volume2,
+  VolumeX,
   X
 } from 'lucide-react'
 import { ModuleTitle } from '@/shell/moduleContext'
-import { next, playQueue, prev, seek, setRepeat, setShuffle, toggle, trackUrl, usePlayer } from './player'
+import {
+  next,
+  playQueue,
+  prev,
+  seek,
+  setRepeat,
+  setShuffle,
+  setVolume,
+  toggle,
+  toggleMute,
+  trackUrl,
+  usePlayer
+} from './player'
 import { useMusic, wireMusicEvents } from './store'
 import type { Playlist, Track } from './shared/types'
 
@@ -47,6 +64,7 @@ export default function MusicPlayer(): React.JSX.Element {
   const [sel, setSel] = useState<Selection>({ kind: 'all' })
   const [menuTrack, setMenuTrack] = useState<string | null>(null)
   const [newPlaylistName, setNewPlaylistName] = useState('')
+  const [bigPlayer, setBigPlayer] = useState(false)
 
   useEffect(() => {
     wireMusicEvents()
@@ -114,7 +132,7 @@ export default function MusicPlayer(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-edge px-5 py-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-raised text-accent">
           <Music size={19} />
@@ -249,6 +267,13 @@ export default function MusicPlayer(): React.JSX.Element {
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2 border-b border-edge px-4 py-2">
             <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{listTitle}</h2>
+            {sel.kind === 'playlist' && !q && (
+              <PlaylistAdder
+                tracks={tracks}
+                playlist={m.playlists.find((p) => sel.kind === 'playlist' && p.id === sel.id) ?? null}
+                onAdd={(trackId) => sel.kind === 'playlist' && addToPlaylist(sel.id, trackId)}
+              />
+            )}
             <span className="text-xs text-muted">{shown.length.toLocaleString()} track(s)</span>
             <button
               onClick={() => shown.length > 0 && playQueue(shown.map((t) => t.id))}
@@ -290,7 +315,94 @@ export default function MusicPlayer(): React.JSX.Element {
         </div>
       </div>
 
-      <PlayerBar />
+      <PlayerBar onExpand={() => setBigPlayer(true)} />
+      {bigPlayer && <BigPlayer onMinimize={() => setBigPlayer(false)} />}
+    </div>
+  )
+}
+
+/* ---------------------------- playlist adder ------------------------------- */
+
+/**
+ * The in-playlist "add songs" box: type-ahead over the whole library with a
+ * ＋ per suggestion that drops the track straight into the open playlist.
+ * Stays open after adding so several songs can be queued up in one go; a
+ * check mark replaces the ＋ for tracks already on the list.
+ */
+function PlaylistAdder({
+  tracks,
+  playlist,
+  onAdd
+}: {
+  tracks: Track[]
+  playlist: Playlist | null
+  onAdd: (trackId: string) => void
+}): React.JSX.Element | null {
+  const [text, setText] = useState('')
+  const q = text.trim().toLowerCase()
+  const hits = useMemo(
+    () =>
+      q
+        ? tracks
+            .filter((t) => t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q))
+            .slice(0, 12)
+        : [],
+    [q, tracks]
+  )
+  if (!playlist) return null
+  const inList = new Set(playlist.trackIds)
+
+  return (
+    <div className="relative w-72 shrink-0 xl:w-80">
+      <div className="relative">
+        <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted" />
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setText('')
+          }}
+          placeholder={`Add songs to “${playlist.name}”…`}
+          spellCheck={false}
+          className="w-full rounded-lg border border-edge bg-raised py-1 pl-6 pr-6 text-xs outline-none focus:border-accent"
+        />
+        {text && (
+          <button
+            onClick={() => setText('')}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted hover:text-ink"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+      {hits.length > 0 && (
+        <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-full overflow-y-auto rounded-lg border border-edge bg-surface shadow-2xl">
+          {hits.map((t) => {
+            const added = inList.has(t.id)
+            return (
+              <div key={t.id} className="flex items-center gap-2 px-2.5 py-1.5 hover:bg-raised">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm">{t.title}</span>
+                  <span className="block truncate text-[11px] text-muted">{t.artist}</span>
+                </span>
+                <button
+                  onClick={() => !added && onAdd(t.id)}
+                  disabled={added}
+                  title={added ? 'Already on this playlist' : 'Add to playlist'}
+                  className={`shrink-0 rounded-full p-1 ${added ? 'text-ok' : 'bg-raised text-muted hover:bg-accent hover:text-accent-ink'}`}
+                >
+                  {added ? <Check size={13} /> : <Plus size={13} />}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {q && hits.length === 0 && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-full rounded-lg border border-edge bg-surface p-2 text-xs text-muted shadow-2xl">
+          No songs match “{text.trim()}”.
+        </div>
+      )}
     </div>
   )
 }
@@ -375,9 +487,44 @@ function TrackRow({
   )
 }
 
+/* ----------------------------- volume control ------------------------------ */
+
+/** Volume icon (click = mute) that reveals a vertical slider on hover. */
+function VolumeControl(): React.JSX.Element {
+  const volume = usePlayer((s) => s.volume)
+  const muted = usePlayer((s) => s.muted)
+  const Icon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2
+  return (
+    <span className="group relative flex items-center">
+      <button
+        onClick={toggleMute}
+        title={muted ? 'Unmute' : `Volume ${Math.round(volume * 100)}% — click to mute`}
+        className={`rounded-lg p-1.5 ${muted || volume === 0 ? 'text-danger' : 'text-muted hover:text-ink'}`}
+      >
+        <Icon size={16} />
+      </button>
+      <span className="absolute bottom-full left-1/2 hidden -translate-x-1/2 pb-1 group-hover:block">
+        <span className="flex flex-col items-center gap-1 rounded-lg border border-edge bg-surface p-2 shadow-2xl">
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.02}
+            value={muted ? 0 : volume}
+            onChange={(e) => setVolume(Number(e.target.value))}
+            style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 96, width: 20 }}
+            className="accent-[rgb(var(--wk-accent))]"
+          />
+          <span className="text-[10px] tabular-nums text-muted">{Math.round((muted ? 0 : volume) * 100)}%</span>
+        </span>
+      </span>
+    </span>
+  )
+}
+
 /* ------------------------------- player bar -------------------------------- */
 
-function PlayerBar(): React.JSX.Element {
+function PlayerBar({ onExpand }: { onExpand: () => void }): React.JSX.Element {
   const s = usePlayer()
   // O(1) lookup via the engine's id map — this bar re-renders on every
   // position tick, so scanning the 50k-track array here would burn CPU
@@ -387,17 +534,26 @@ function PlayerBar(): React.JSX.Element {
     <footer className="border-t border-edge bg-surface px-4 py-2.5">
       {s.error && <p className="pb-1 text-xs text-danger">{s.error}</p>}
       <div className="flex items-center gap-3">
-        {t?.art && s.root ? (
-          <img src={trackUrl(s.root, t.art)} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
-        ) : (
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-raised text-accent">
-            <Music size={18} />
+        <button
+          onClick={() => t && onExpand()}
+          disabled={!t}
+          title={t ? 'Open the full player' : undefined}
+          className="flex min-w-0 items-center gap-3 rounded-lg text-left disabled:cursor-default"
+        >
+          {t?.art && s.root ? (
+            <img src={trackUrl(s.root, t.art)} alt="" className="h-11 w-11 shrink-0 rounded-lg object-cover" />
+          ) : (
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-raised text-accent">
+              <Music size={18} />
+            </span>
+          )}
+          <span className="w-52 min-w-0 shrink-0">
+            <span className={`block truncate text-sm font-semibold ${t ? 'hover:text-accent' : ''}`}>
+              {t?.title ?? 'Nothing playing'}
+            </span>
+            <span className="block truncate text-xs text-muted">{t?.artist ?? 'Pick a song to start'}</span>
           </span>
-        )}
-        <div className="w-52 min-w-0 shrink-0">
-          <p className="truncate text-sm font-semibold">{t?.title ?? 'Nothing playing'}</p>
-          <p className="truncate text-xs text-muted">{t?.artist ?? 'Pick a song to start'}</p>
-        </div>
+        </button>
 
         <button
           onClick={() => setShuffle(!s.shuffle)}
@@ -426,6 +582,7 @@ function PlayerBar(): React.JSX.Element {
         >
           {s.repeat === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
         </button>
+        <VolumeControl />
 
         <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted">{fmtTime(s.position)}</span>
         <input
@@ -441,5 +598,97 @@ function PlayerBar(): React.JSX.Element {
         <span className="w-10 shrink-0 text-xs tabular-nums text-muted">{fmtTime(s.duration)}</span>
       </div>
     </footer>
+  )
+}
+
+/* --------------------------- full-window player ---------------------------- */
+
+/** The big Now Playing view — fills the module area; chevron drops back to the lists. */
+function BigPlayer({ onMinimize }: { onMinimize: () => void }): React.JSX.Element | null {
+  const s = usePlayer()
+  const t = s.pos >= 0 ? (s.byId.get(s.queue[s.order[s.pos]]) ?? null) : null
+  if (!t) return null // queue emptied — nothing to show, the overlay vanishes
+  const art = t.art && s.root ? trackUrl(s.root, t.art) : null
+
+  return (
+    <div className="absolute inset-0 z-30 overflow-hidden bg-bg">
+      {/* the cover art as a blurred backdrop, content stacked above it */}
+      {art && <img src={art} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-3xl" />}
+      <div className="relative flex h-full flex-col">
+        <div className="flex justify-end p-3">
+          <button
+            onClick={onMinimize}
+            title="Back to your library"
+            className="flex items-center gap-1.5 rounded-lg border border-edge bg-surface/80 px-3 py-1.5 text-sm font-medium text-muted hover:border-accent/60 hover:text-ink"
+          >
+            <ChevronDown size={16} /> Minimize
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-8 pb-8">
+          {art ? (
+            <img
+              src={art}
+              alt=""
+              className="max-h-[52vh] w-auto max-w-[80%] rounded-2xl object-contain shadow-2xl"
+            />
+          ) : (
+            <span className="flex h-56 w-56 items-center justify-center rounded-2xl bg-raised text-accent shadow-2xl">
+              <Music size={80} />
+            </span>
+          )}
+
+          <div className="max-w-3xl text-center">
+            <p className="truncate text-3xl font-bold tracking-tight">{t.title}</p>
+            <p className="mt-1 truncate text-lg text-muted">{t.artist}</p>
+          </div>
+
+          <div className="flex w-full max-w-2xl items-center gap-3">
+            <span className="w-12 shrink-0 text-right text-sm tabular-nums text-muted">{fmtTime(s.position)}</span>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(1, s.duration)}
+              step={1}
+              value={Math.min(s.position, s.duration || 0)}
+              onChange={(e) => seek(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-[rgb(var(--wk-accent))]"
+            />
+            <span className="w-12 shrink-0 text-sm tabular-nums text-muted">{fmtTime(s.duration)}</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShuffle(!s.shuffle)}
+              title="Shuffle"
+              className={`rounded-lg p-2 ${s.shuffle ? 'bg-accent/10 text-accent' : 'text-muted hover:text-ink'}`}
+            >
+              <Shuffle size={20} />
+            </button>
+            <button onClick={prev} title="Previous" className="rounded-lg p-2 text-ink hover:text-accent">
+              <SkipBack size={26} />
+            </button>
+            <button
+              onClick={toggle}
+              title={s.playing ? 'Pause' : 'Play'}
+              className="flex h-16 w-16 items-center justify-center rounded-full bg-accent text-accent-ink shadow-xl hover:opacity-90"
+            >
+              {s.playing ? <Pause size={28} /> : <Play size={28} />}
+            </button>
+            <button onClick={() => next()} title="Next" className="rounded-lg p-2 text-ink hover:text-accent">
+              <SkipForward size={26} />
+            </button>
+            <button
+              onClick={() => setRepeat(s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off')}
+              title={`Repeat: ${s.repeat}`}
+              className={`rounded-lg p-2 ${s.repeat !== 'off' ? 'bg-accent/10 text-accent' : 'text-muted hover:text-ink'}`}
+            >
+              {s.repeat === 'one' ? <Repeat1 size={20} /> : <Repeat size={20} />}
+            </button>
+            <VolumeControl />
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }

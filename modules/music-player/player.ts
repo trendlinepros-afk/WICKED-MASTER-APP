@@ -41,8 +41,22 @@ interface PlayerState {
   duration: number
   shuffle: boolean
   repeat: Repeat
+  /** 0–1, persisted per device (renderer Local Storage) */
+  volume: number
+  muted: boolean
   /** user-facing error, e.g. the NAS went away */
   error: string
+}
+
+const VOLUME_KEY = 'music-player.volume'
+
+function savedVolume(): number {
+  try {
+    const v = Number(localStorage.getItem(VOLUME_KEY))
+    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1
+  } catch {
+    return 1
+  }
 }
 
 export const usePlayer = create<PlayerState>(() => ({
@@ -56,11 +70,14 @@ export const usePlayer = create<PlayerState>(() => ({
   duration: 0,
   shuffle: false,
   repeat: 'off',
+  volume: savedVolume(),
+  muted: false,
   error: ''
 }))
 
 const audio = new Audio()
 audio.preload = 'auto'
+audio.volume = savedVolume()
 
 /** consecutive load failures — cap so an unplugged NAS doesn't machine-gun the queue */
 let errorStreak = 0
@@ -179,6 +196,24 @@ export function setShuffle(on: boolean): void {
 
 export function setRepeat(mode: Repeat): void {
   usePlayer.setState({ repeat: mode })
+}
+
+export function setVolume(v: number): void {
+  const vol = Math.max(0, Math.min(1, v))
+  audio.volume = vol
+  if (vol > 0 && audio.muted) audio.muted = false
+  try {
+    localStorage.setItem(VOLUME_KEY, String(vol))
+  } catch {
+    /* private-mode etc. — volume just won't persist */
+  }
+  usePlayer.setState({ volume: vol, muted: audio.muted })
+}
+
+/** Mute keeps the slider position — unmute restores the previous loudness. */
+export function toggleMute(): void {
+  audio.muted = !audio.muted
+  usePlayer.setState({ muted: audio.muted })
 }
 
 /* ------------------------- audio element wiring --------------------------- */

@@ -47,6 +47,17 @@ music keeps going (and stays controllable) in every WICKED tool.
   / `__playlists` / `__search`. Playback lives in the renderer, so control
   returns a friendly error until the tool has been opened once per session.
 
+- **Volume**: the speaker icon in the player bar shows a vertical slider on
+  hover; clicking the icon mutes/unmutes (the slider position is kept). The
+  level persists per device via renderer Local Storage.
+- **Full-window player**: click the track's art or title in the player bar
+  for a big Now Playing view (blurred-art backdrop, large controls); the
+  Minimize chevron (top right) drops back to the song lists, and the view
+  closes itself if the queue ends.
+- **Playlist quick-add**: inside a playlist, the header search box type-aheads
+  over the whole library; ＋ on a suggestion adds it (✓ = already on the
+  list). The dropdown stays open so several songs can be added in one go.
+
 ## Quirks
 
 - The engine loads with the module's chunk — until the Music Player is
