@@ -51,8 +51,12 @@ import { buildAssFile } from './ipc/media/captions'
 import { generateShorts, refreshShorts } from './ipc/shorts/opusclip'
 
 // -- wcmedia scheme (MUST run before app ready — module scope) --------------
+// registerSchemesAsPrivileged may only be called ONCE per app, so every
+// privileged module scheme lives in this one list. `wkmusic` belongs to
+// modules/music-player (its handler + allowlist are registered there).
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'wcmedia', privileges: { stream: true, supportFetchAPI: true, bypassCSP: true } }
+  { scheme: 'wcmedia', privileges: { stream: true, supportFetchAPI: true, bypassCSP: true } },
+  { scheme: 'wkmusic', privileges: { stream: true, supportFetchAPI: true, bypassCSP: true } }
 ])
 
 /** Canonical roots the wcmedia:// scheme is allowed to read from — the

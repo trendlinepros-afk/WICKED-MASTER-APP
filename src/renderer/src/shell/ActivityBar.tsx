@@ -16,6 +16,7 @@ import { useShellUi } from '@/stores/shellUi'
 import { useUpdates } from '@/stores/updates'
 import { BrandLogo, BrandMark } from './BrandLogo'
 import ModuleIcon from './ModuleIcon'
+import NowPlayingBar from './NowPlayingBar'
 import SyncBadge from './SyncBadge'
 import { effectiveName, folderToolCount, groupDragToken, navEntries, orderedModules, reorderNav } from './moduleView'
 
@@ -282,6 +283,9 @@ export default function ActivityBar(): React.JSX.Element {
       </div>
 
       <div className="my-1 h-px shrink-0 bg-edge" />
+
+      {/* Mini music transport (hidden until a module publishes a track) */}
+      <NowPlayingBar expanded={expanded} />
 
       {/* Cloud Sync status (hidden until sync is set up) */}
       <SyncBadge expanded={expanded} />
