@@ -92,6 +92,15 @@ song, so pulling video is almost never what you want):
   folder). Progress events are wired at module scope (robocopy pattern), so
   jobs keep updating the store while you're on another module's route.
 
+- **JS runtime (Deno).** Since mid-2026 YouTube requires solving JavaScript
+  challenges during extraction — yt-dlp without a JS runtime fails with "No
+  supported JavaScript runtime could be found" + an HTTP error. The module
+  auto-downloads the standalone Deno binary into its bin folder (beside
+  yt-dlp.exe, where yt-dlp auto-discovers it — no flags/PATH changes) on the
+  first download/probe, and refreshes it with the yt-dlp update button. The
+  bin folder is already excluded from Backup & Cloud Sync. Shared with the
+  Total Channel Downloader.
+
 ## Quality
 
 Preset tiers, not per-video format IDs, so they apply uniformly to playlists:

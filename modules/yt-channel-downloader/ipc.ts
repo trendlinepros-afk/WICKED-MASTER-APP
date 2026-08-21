@@ -5,8 +5,10 @@ import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import {
   PGRESS,
+  downloadDeno,
   downloadYtDlp,
   formatArgs,
+  hasJsRuntime,
   hasYtDlp,
   isAudioQuality,
   parseProgressLine,
@@ -150,6 +152,15 @@ export default function register(ctx: ModuleIpcContext): void {
 
   const send = (payload: unknown): void => {
     ctx.getMainWindow()?.webContents.send(`${ID}:progress`, payload)
+  }
+
+  /** YouTube extraction needs a JS runtime (deno beside yt-dlp) since 2026 —
+   *  fetch it once on demand. Failure is soft: yt-dlp's own error still shows. */
+  const ensureJsRuntime = async (): Promise<void> => {
+    if (hasJsRuntime(userData())) return
+    send({ kind: 'note', note: 'Downloading the YouTube JS runtime (Deno) — one-time setup…' })
+    const res = await downloadDeno(userData())
+    if (!res.ok) send({ kind: 'note', note: `Could not download the JS runtime: ${res.error ?? 'unknown error'}` })
   }
 
   /* ------------------------------- history ------------------------------- */
@@ -455,6 +466,7 @@ export default function register(ctx: ModuleIpcContext): void {
         return { ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') }
       }
     }
+    await ensureJsRuntime()
     const dir = downloadDir()
     mkdirSync(dir, { recursive: true })
     const ffmpeg = resolveFfmpeg()
@@ -723,6 +735,7 @@ export default function register(ctx: ModuleIpcContext): void {
       const dl = await downloadYtDlp(ud)
       if (!dl.ok) return { ok: false, error: 'yt-dlp is not installed yet: ' + (dl.error ?? '') }
     }
+    await ensureJsRuntime()
     return probeChannel(url)
   })
 

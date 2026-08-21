@@ -6,7 +6,9 @@ import type { ModuleDataPath } from '@shared/types'
 import {
   binDir,
   buildDownloadArgs,
+  downloadDeno,
   downloadYtDlp,
+  hasJsRuntime,
   hasYtDlp,
   isAudioQuality,
   isBinaryTooOld,
@@ -133,6 +135,15 @@ export default function register(ctx: ModuleIpcContext): void {
     ctx.getMainWindow()?.webContents.send(channel, payload)
   }
 
+  /** YouTube extraction needs a JS runtime (deno beside yt-dlp) since 2026 —
+   *  fetch it once on demand. Failure is soft: yt-dlp's own error still shows. */
+  const ensureJsRuntime = async (): Promise<void> => {
+    if (hasJsRuntime(userData())) return
+    send(`${ID}:status-msg`, 'Downloading the YouTube JS runtime (Deno) — one-time setup…')
+    const res = await downloadDeno(userData())
+    if (!res.ok) send(`${ID}:status-msg`, `Could not download the JS runtime: ${res.error ?? 'unknown error'}`)
+  }
+
   /* ------------------------------- status -------------------------------- */
 
   ctx.ipcMain.handle(`${ID}:status`, async () => {
@@ -159,6 +170,7 @@ export default function register(ctx: ModuleIpcContext): void {
       version,
       stale: ready ? isBinaryTooOld(ytDlpPath(ud)) : false,
       ffmpegReady: resolveFfmpeg() !== null,
+      jsRuntimeReady: hasJsRuntime(ud),
       downloadDir: downloadDir(),
       busy: jobs.size > 0,
       activeJobs: jobs.size,
@@ -168,15 +180,23 @@ export default function register(ctx: ModuleIpcContext): void {
 
   ctx.ipcMain.handle(`${ID}:ensure`, async () => {
     const ud = userData()
-    if (hasYtDlp(ud)) return { ok: true, already: true }
+    if (hasYtDlp(ud)) {
+      await ensureJsRuntime()
+      return { ok: true, already: true }
+    }
     send(`${ID}:status-msg`, 'Downloading yt-dlp (one-time setup)…')
     const res = await downloadYtDlp(ud)
+    await ensureJsRuntime()
     return res.ok ? { ok: true } : { ok: false, error: res.error }
   })
 
   ctx.ipcMain.handle(`${ID}:update`, async () => {
     send(`${ID}:status-msg`, 'Updating yt-dlp to the latest release…')
     const res = await downloadYtDlp(userData())
+    // refresh the JS runtime alongside (and fetch it if it was never installed)
+    send(`${ID}:status-msg`, 'Updating the YouTube JS runtime (Deno)…')
+    const deno = await downloadDeno(userData())
+    if (!deno.ok) send(`${ID}:status-msg`, `Could not update the JS runtime: ${deno.error ?? 'unknown error'}`)
     return res.ok ? { ok: true } : { ok: false, error: res.error }
   })
 
@@ -295,6 +315,7 @@ export default function register(ctx: ModuleIpcContext): void {
       const dl = await downloadYtDlp(ud)
       if (!dl.ok) return { ok: false, error: 'yt-dlp is not installed yet: ' + (dl.error ?? '') }
     }
+    await ensureJsRuntime()
 
     const info = parseYtUrl(url)
     if (info.needsAuth)
@@ -406,6 +427,7 @@ export default function register(ctx: ModuleIpcContext): void {
         const dl = await downloadYtDlp(ud)
         if (!dl.ok) return finish({ ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') })
       }
+      await ensureJsRuntime()
       const dir = downloadDir()
       mkdirSync(dir, { recursive: true })
 

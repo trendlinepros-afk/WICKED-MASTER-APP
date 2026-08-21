@@ -36,6 +36,8 @@ interface Status {
   version: string | null
   stale: boolean
   ffmpegReady: boolean
+  /** deno beside yt-dlp — required by YouTube extraction since 2026 */
+  jsRuntimeReady: boolean
   downloadDir: string
   busy: boolean
 }

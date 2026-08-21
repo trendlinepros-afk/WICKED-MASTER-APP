@@ -1,3 +1,4 @@
+import AdmZip from 'adm-zip'
 import { spawn, type ChildProcess } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
@@ -69,6 +70,59 @@ export function hasYtDlp(userData: string): boolean {
 /** Path to invoke: the module copy if present, else rely on PATH. */
 export function ytDlpCmd(userData: string): string {
   return hasYtDlp(userData) ? ytDlpPath(userData) : ytDlpAsset().replace(/\.(exe)$|_.*$/, '')
+}
+
+/* ------------------------------ JS runtime (Deno) ------------------------- *
+ * Since mid-2026 YouTube requires solving JavaScript challenges during
+ * extraction; yt-dlp deprecated extraction without an external JS runtime
+ * ("EJS") and many downloads fail with "No supported JavaScript runtime
+ * could be found" + an HTTP error. Deno is the runtime yt-dlp enables by
+ * default, and per the yt-dlp EJS wiki it is auto-discovered on Windows when
+ * deno.exe sits IN THE SAME FOLDER as yt-dlp.exe. So deno is managed exactly
+ * like yt-dlp itself: auto-downloaded into the module bin folder (which the
+ * backup layer already excludes). No flags, no PATH edits — and older yt-dlp
+ * builds simply ignore the extra binary.
+ * -------------------------------------------------------------------------- */
+
+function denoAsset(): { zip: string; exe: string } {
+  if (process.platform === 'win32') return { zip: 'deno-x86_64-pc-windows-msvc.zip', exe: 'deno.exe' }
+  if (process.platform === 'darwin') return { zip: 'deno-aarch64-apple-darwin.zip', exe: 'deno' }
+  return { zip: 'deno-x86_64-unknown-linux-gnu.zip', exe: 'deno' }
+}
+
+export function denoPath(userData: string): string {
+  return join(binDir(userData), denoAsset().exe)
+}
+
+/** True when the yt-dlp JS runtime (deno, beside yt-dlp.exe) is installed. */
+export function hasJsRuntime(userData: string): boolean {
+  return existsSync(denoPath(userData))
+}
+
+/** Download the standalone Deno binary into the module bin folder. */
+export async function downloadDeno(userData: string): Promise<{ ok: boolean; error?: string }> {
+  const dir = binDir(userData)
+  mkdirSync(dir, { recursive: true })
+  const { zip, exe } = denoAsset()
+  const url = `https://github.com/denoland/deno/releases/latest/download/${zip}`
+  try {
+    const resp = await fetch(url, { redirect: 'follow' })
+    if (!resp.ok) return { ok: false, error: `Deno download failed: HTTP ${resp.status}` }
+    const buf = Buffer.from(await resp.arrayBuffer())
+    const archive = new AdmZip(buf)
+    const entry = archive
+      .getEntries()
+      .find((e) => e.entryName === exe || e.entryName.endsWith(`/${exe}`))
+    if (!entry) return { ok: false, error: 'The deno archive did not contain the binary.' }
+    const dest = denoPath(userData)
+    const tmp = dest + '.tmp'
+    writeFileSync(tmp, entry.getData())
+    if (process.platform !== 'win32') chmodSync(tmp, 0o755)
+    renameSync(tmp, dest)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /** Download the latest yt-dlp release binary into the module bin folder. */

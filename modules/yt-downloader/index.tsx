@@ -99,7 +99,8 @@ export default function YtDownloader(): React.JSX.Element {
           <p className="truncate text-xs text-muted">
             {binReady ? (
               <>
-                yt-dlp {status?.version ?? ''} {status?.ffmpegReady ? '· ffmpeg ready' : '· ffmpeg missing'} ·{' '}
+                yt-dlp {status?.version ?? ''} {status?.ffmpegReady ? '· ffmpeg ready' : '· ffmpeg missing'}
+                {status?.jsRuntimeReady === false ? ' · JS runtime auto-installs on next download' : ''} ·{' '}
                 <button
                   onClick={() => void s.openFolder()}
                   className="text-accent hover:underline"
