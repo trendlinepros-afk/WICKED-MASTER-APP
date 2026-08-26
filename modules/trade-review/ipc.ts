@@ -131,6 +131,7 @@ export default function register(ctx: ModuleIpcContext): void {
           avgPrice: d.price,
           limitPrice: d.price,
           fees: 0,
+          multiplier: 1,
           timeInForce: '',
           placedText: d.time,
           filledText: d.time,

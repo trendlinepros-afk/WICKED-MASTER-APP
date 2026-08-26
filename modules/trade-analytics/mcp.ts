@@ -53,7 +53,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__import`,
       description:
-        'Import one or more broker order/trade-history CSV files by absolute path (Webull, Robinhood, Schwab, Fidelity, Interactive Brokers, E*TRADE, tastytrade, or any generic CSV with symbol/side/qty/price/date columns — the header row is auto-detected). Additive and de-duplicated by a stable order fingerprint: rows already present are skipped, and orders that progressed since the last export (e.g. Working → Filled) are updated in place, so re-importing overlapping reports never double-counts. Optionally pass `account` (id) to import into a specific account; defaults to the Default account. Returns per-file counts (imported / updated / skipped / ignored non-trade rows / detected broker) and the full execution set.',
+        'Import one or more broker order/trade-history CSV files by absolute path (Webull, Robinhood, Schwab, Fidelity, Interactive Brokers, E*TRADE, tastytrade, NinjaTrader (Executions, Orders, or Trade Performance grid exports — futures point values applied automatically), or any generic CSV with symbol/side/qty/price/date columns — the header row is auto-detected). Additive and de-duplicated by a stable order fingerprint: rows already present are skipped, and orders that progressed since the last export (e.g. Working → Filled) are updated in place, so re-importing overlapping reports never double-counts. Optionally pass `account` (id) to import into a specific account; defaults to the Default account. Returns per-file counts (imported / updated / skipped / ignored non-trade rows / detected broker) and the full execution set.',
       inputSchema: {
         paths: z
           .array(z.string())

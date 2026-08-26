@@ -63,6 +63,12 @@ export interface Execution {
   limitPrice: number
   /** commissions + fees for this row (0 when the export has no fee columns) */
   fees: number
+  /**
+   * Dollars per 1.0 price move per contract/share (1 for equities). Set from
+   * the contract root for futures instruments ("ES 09-26" → $50/pt), so P&L
+   * math is right for NinjaTrader-style futures fills.
+   */
+  multiplier: number
   timeInForce: string
   placedText: string
   filledText: string
@@ -134,10 +140,10 @@ export function parseBrokerTime(text: string): number | null {
   const s = (text || '').trim()
   if (!s) return null
   const mdy = s.match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,7})?)?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
   )
   const ymd = s.match(
-    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
+    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,7})?)?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
   )
   const m = mdy ?? ymd
   if (m) {
@@ -242,6 +248,41 @@ export function normSide(raw: string): Side {
   return parseSideToken(raw) ?? 'buy'
 }
 
+/* ------------------------------ futures roots ------------------------------ */
+
+/**
+ * Dollars per 1.0 price move for common futures roots (CME/CBOT/NYMEX/COMEX/
+ * ICE/CFE). Without these, a 2-point ES scalp would book as $2 instead of $100.
+ */
+const FUTURES_POINT_VALUE: Record<string, number> = {
+  // equity index
+  ES: 50, MES: 5, NQ: 20, MNQ: 2, YM: 5, MYM: 0.5, RTY: 50, M2K: 5, EMD: 100, NKD: 5,
+  // energy
+  CL: 1000, MCL: 100, QM: 500, HO: 42000, RB: 42000, NG: 10000, QG: 2500, BZ: 1000,
+  // metals
+  GC: 100, MGC: 10, SI: 5000, SIL: 1000, QI: 2500, HG: 25000, MHG: 2500, QC: 12500, PL: 50, PA: 100,
+  // rates
+  ZB: 1000, ZN: 1000, ZF: 1000, ZT: 2000, UB: 1000, TN: 1000,
+  // grains / softs / livestock
+  ZC: 50, ZS: 50, ZW: 50, ZM: 100, ZL: 600, ZO: 50, KE: 50, ZR: 2000, HE: 400, LE: 400, GF: 500,
+  // FX
+  '6E': 125000, '6B': 62500, '6J': 12500000, '6A': 100000, '6C': 100000, '6S': 125000, '6N': 100000, '6M': 500000,
+  M6E: 12500, M6A: 10000, M6B: 6250, DX: 1000,
+  // crypto / vol
+  BTC: 5, MBT: 0.1, ETH: 50, MET: 0.1, VX: 1000, VXM: 100
+}
+
+/**
+ * Point value for a symbol — but ONLY when it is unambiguously a futures
+ * contract in NinjaTrader's "ROOT MM-YY" form. A bare stock ticker never
+ * matches (CL the stock is Colgate; CL the future is crude oil).
+ */
+export function futuresMultiplier(symbol: string): number {
+  const m = symbol.match(/^([A-Z0-9]{1,4})\s+\d{2}-\d{2}$/)
+  if (!m) return 1
+  return FUTURES_POINT_VALUE[m[1]] ?? 1
+}
+
 /* -------------------------------- headers ---------------------------------- */
 
 /** Aliases are in PRIORITY order — the first alias found in the header wins. */
@@ -249,11 +290,11 @@ const HEADER_ALIASES: Record<string, string[]> = {
   name: ['name', 'security description', 'description', 'company'],
   symbol: ['symbol', 'ticker', 'instrument'],
   side: ['side', 'action', 'trans code', 'transaction code', 'buy/sell', 'b/s', 'order action', 'transaction type', 'transactiontype'],
-  status: ['status', 'order status'],
+  status: ['status', 'order status', 'state'],
   filled: ['filled', 'filled qty', 'filledqty', 'filled quantity', 'executed qty', 'exec qty'],
   totalQty: ['total qty', 'totalqty', 'quantity', 'qty', 'shares', 'number of shares', 'no. of shares'],
   price: ['price', 't. price', 'trade price', 'price ($)', 'execution price', 'fill price', 'price per share'],
-  avgPrice: ['avg price', 'avgprice', 'average price', 'avg fill price', 'average fill price'],
+  avgPrice: ['avg price', 'avg. price', 'avgprice', 'average price', 'avg fill price', 'avg. fill price', 'average fill price'],
   commission: ['commission', 'commissions', 'commission ($)', 'comm/fee', 'fees & comm', 'commissions & fees', 'comm'],
   fees: ['fees', 'fee', 'fees ($)', 'reg fee', 'regulatory fees', 'other fees'],
   tif: ['time-in-force', 'time in force', 'tif'],
@@ -267,13 +308,25 @@ const HEADER_ALIASES: Record<string, string[]> = {
     'datetime',
     'trade time',
     'transaction time',
+    'time', // NinjaTrader executions/orders grids
     'trade date',
     'activity date',
     'run date',
     'transaction date',
     'date'
   ],
-  discriminator: ['datadiscriminator', 'data discriminator']
+  discriminator: ['datadiscriminator', 'data discriminator'],
+  // A REAL per-row id (NinjaTrader executions/orders "ID", tastytrade
+  // "Order #") — when present and non-empty it becomes the de-dup identity.
+  // Deliberately excludes sequential counters like "Trade number".
+  orderId: ['id', 'order id', 'orderid', 'exec id', 'execution id', 'order #', 'order number'],
+  // Round-trip "trade list" layouts (NinjaTrader Trade Performance grid):
+  // one row = entry + exit, split into two executions.
+  entryPrice: ['entry price'],
+  exitPrice: ['exit price'],
+  entryTime: ['entry time'],
+  exitTime: ['exit time'],
+  marketPos: ['market pos.', 'market pos', 'market position']
 }
 
 function buildColMap(header: string[]): Record<string, number> {
@@ -294,6 +347,8 @@ function buildColMap(header: string[]): Record<string, number> {
 function guessBroker(headerLower: string[]): string {
   const has = (...names: string[]): boolean => names.every((n) => headerLower.includes(n))
   if (has('placed time') || (has('filled') && has('side') && has('avg price'))) return 'Webull'
+  if (has('entry price', 'exit price')) return has('instrument') || has('market pos.') ? 'NinjaTrader (trades)' : 'Trade list'
+  if (has('instrument') && (has('e/x') || has('order id') || has('oco') || has('state'))) return 'NinjaTrader'
   if (has('trans code') || has('instrument', 'activity date')) return 'Robinhood'
   if (headerLower.some((h) => h === 'datadiscriminator' || h === 't. price')) return 'Interactive Brokers'
   if (has('run date')) return 'Fidelity'
@@ -338,7 +393,7 @@ export function assignOccurrenceHashes(execs: { hash: string }[]): void {
 
 /* --------------------------------- parser ---------------------------------- */
 
-const NON_EXECUTED_STATUS = /cancel|reject|fail|expir|pending|working|queued|submitt|placed|open/i
+const NON_EXECUTED_STATUS = /cancel|reject|fail|expir|pending|working|queued|submitt|placed|open|accept|initial|trigger/i
 
 interface HeaderPick {
   idx: number
@@ -415,6 +470,75 @@ export function parseBrokerCsv(text: string): ParseResult {
   }
 
   const executions: Execution[] = []
+  const cleanSymbol = (raw: string): string => raw.toUpperCase().replace(/^-/, '').replace(/\*+$/, '').trim()
+
+  /* ---- round-trip "trade list" layout (NinjaTrader Trade Performance) ----
+   * One row = a whole trade with entry AND exit — split into two executions
+   * so the FIFO engine, stats and editing all work exactly like fill imports. */
+  if (col.entryPrice !== undefined && col.exitPrice !== undefined) {
+    for (const row of pre) {
+      const { line, f } = row
+      const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
+      if (f.every((v) => !v)) continue
+      const symbol = cleanSymbol(get('symbol'))
+      if (!symbol || symbol === 'SYMBOL' || symbol === 'INSTRUMENT') {
+        ignored++
+        continue
+      }
+      const posRaw = get('marketPos') || get('side')
+      const dir: 'long' | 'short' = /short|sell/i.test(posRaw) ? 'short' : 'long'
+      const qty = Math.abs(num(get('totalQty')))
+      const entryPrice = Math.abs(num(get('entryPrice')))
+      const exitPrice = Math.abs(num(get('exitPrice')))
+      const entryTime = get('entryTime')
+      const exitTime = get('exitTime')
+      if (qty <= 0 || entryPrice <= 0) {
+        addError(line, `${symbol}: trade row without a usable quantity/entry price — skipped.`)
+        continue
+      }
+      const multiplier = futuresMultiplier(symbol)
+      const rowFees = Math.abs(num(get('commission'))) + Math.abs(num(get('fees')))
+      const hasExit = exitPrice > 0 && !!exitTime.trim()
+      const feeEach = hasExit ? rowFees / 2 : rowFees
+      const mk = (side: Side, price: number, when: string): Execution => {
+        const e: Execution = {
+          hash: '',
+          name: get('name'),
+          symbol,
+          side,
+          sideRaw: posRaw || dir,
+          status: 'Filled',
+          filled: true,
+          qty,
+          totalQty: qty,
+          price,
+          avgPrice: price,
+          limitPrice: price,
+          fees: feeEach,
+          multiplier,
+          timeInForce: '',
+          placedText: when,
+          filledText: when,
+          filledAt: parseBrokerTime(when),
+          placedAt: parseBrokerTime(when),
+          seq: executions.length
+        }
+        e.hash = execHash(e)
+        return e
+      }
+      executions.push(mk(dir === 'long' ? 'buy' : 'short', entryPrice, entryTime))
+      if (hasExit) executions.push(mk(dir === 'long' ? 'sell' : 'buy', exitPrice, exitTime))
+    }
+    assignOccurrenceHashes(executions)
+    return { executions, errors, columns: header, broker, ignored }
+  }
+
+  // A per-row id column becomes the de-dup identity when it's a REAL id: any
+  // explicitly-named id header, or the bare "ID" of NinjaTrader's grids. A
+  // bare "id" in an unknown format could be a row counter — not trusted.
+  const idHeaderName = col.orderId !== undefined ? header[col.orderId].toLowerCase().trim() : ''
+  const idTrusted = col.orderId !== undefined && (idHeaderName !== 'id' || broker === 'NinjaTrader')
+
   for (const row of pre) {
     const { line, f } = row
     if (acceptDisc && !acceptDisc(row.disc)) {
@@ -424,7 +548,7 @@ export function parseBrokerCsv(text: string): ParseResult {
     const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
     if (f.every((v) => !v)) continue
 
-    const symbol = get('symbol').toUpperCase().replace(/^-/, '').replace(/\*+$/, '').trim()
+    const symbol = cleanSymbol(get('symbol'))
     if (!symbol || symbol === 'SYMBOL') {
       ignored++ // fee/interest/total rows have no symbol; repeated headers too
       continue
@@ -482,6 +606,7 @@ export function parseBrokerCsv(text: string): ParseResult {
       avgPrice,
       limitPrice,
       fees,
+      multiplier: futuresMultiplier(symbol),
       timeInForce: get('tif'),
       placedText,
       filledText,
@@ -489,7 +614,8 @@ export function parseBrokerCsv(text: string): ParseResult {
       placedAt: parseBrokerTime(placedText),
       seq: executions.length
     }
-    e.hash = execHash(e)
+    const idVal = idTrusted ? get('orderId').trim() : ''
+    e.hash = idVal ? `v2|${symbol}|${side}|id:${idVal}` : execHash(e)
     executions.push(e)
   }
   assignOccurrenceHashes(executions)

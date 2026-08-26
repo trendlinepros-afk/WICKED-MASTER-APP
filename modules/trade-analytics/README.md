@@ -38,9 +38,21 @@ destination account) or **drag the file** onto the window. The parser
   ignored` per import. (Databases from older builds are migrated to this
   fingerprint on first launch, and duplicates the old scheme created are
   collapsed automatically — keeping the most-progressed copy of each order.)
-- **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade…) are captured
-  per fill; every P&L figure is **net of fees** (Webull's export has no fee
-  column, so nothing changes there).
+- **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade/NinjaTrader…)
+  are captured per fill; every P&L figure is **net of fees** (Webull's export
+  has no fee column, so nothing changes there).
+- **NinjaTrader** exports work from all three grids: **Executions** and
+  **Orders** (their per-row **ID** column becomes the de-dup identity, so
+  Accepted → Filled re-exports update in place), and the **Trade Performance**
+  grid, where each row is a whole round trip — it's split into entry + exit
+  executions so FIFO, stats and editing behave exactly like fill imports
+  (round-trip commission split across the two legs).
+- **Futures point values.** An instrument in NinjaTrader's `ROOT MM-YY` form
+  (`ES 09-26`, `MNQ 12-25`…) gets its contract multiplier applied to P&L and
+  cost basis — ES $50/pt, NQ $20, MES $5, CL $1000, GC $100, and ~60 other
+  CME/CBOT/NYMEX/COMEX/ICE roots. A bare stock ticker is never treated as a
+  future (CL the stock is Colgate; only `CL 09-26` is crude), and an unknown
+  root stays at 1×.
 - Multiple files — even from different brokers — can be imported at once.
 
 ## Market sectors

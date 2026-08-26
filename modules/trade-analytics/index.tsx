@@ -307,7 +307,8 @@ function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => v
       entryAt: eAt,
       exitPrice: xp,
       exitAt: xAt,
-      exitQty: xq
+      exitQty: xq,
+      multiplier: trade?.multiplier ?? 1
     }
     setBusy(true)
     setErr('')
@@ -499,7 +500,7 @@ function OpenTab(): React.JSX.Element {
             <div className={t.direction === 'long' ? 'text-ok' : 'text-danger'}>{t.direction}</div>
             <div className="text-right tabular-nums">{shares(t.openQty)}</div>
             <div className="text-right tabular-nums">{t.avgEntry.toFixed(4)}</div>
-            <div className="text-right font-medium tabular-nums">{money(t.avgEntry * t.openQty)}</div>
+            <div className="text-right font-medium tabular-nums">{money(t.avgEntry * t.openQty * t.multiplier)}</div>
             <div className={`text-right tabular-nums ${t.closedQty > 0 ? pos(t.realizedPnl) : 'text-muted'}`}>
               {t.closedQty > 0 ? `${signedMoney(t.realizedPnl)}` : '—'}
             </div>
@@ -836,7 +837,8 @@ export default function TradeAnalytics(): React.JSX.Element {
               <h2 className="mt-4 text-lg font-bold">Import your trades</h2>
               <p className="mt-2 text-sm text-muted">
                 Export your order/trade history as CSV from your broker — Webull, Robinhood, Schwab,
-                Fidelity, Interactive Brokers, E*TRADE, tastytrade and generic exports all parse — then
+                Fidelity, Interactive Brokers, E*TRADE, tastytrade, NinjaTrader and generic exports all
+                parse — then
                 drop the file here or click Import and pick the account it belongs to. Re-import anytime:
                 overlapping reports are de-duplicated, and orders that filled since your last export are
                 updated in place, so you never get doubles.

@@ -40,6 +40,8 @@ export interface TradeDraft {
   exitPrice: number | null
   exitAt: number | null
   exitQty: number | null
+  /** contract point value to keep when editing a futures trade (default 1) */
+  multiplier?: number
 }
 
 interface Ok {

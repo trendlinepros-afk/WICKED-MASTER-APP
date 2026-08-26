@@ -46,6 +46,8 @@ export interface Trade {
   realizedPnl: number
   /** commissions + fees across this episode's fills (0 for fee-free brokers) */
   fees: number
+  /** dollars per 1.0 price move per unit (1 for equities; ES future = 50) */
+  multiplier: number
   /** realized P&L as % of the closed cost basis */
   realizedPct: number
   openedAt: number | null
@@ -75,6 +77,7 @@ interface Episode {
   exitProceeds: number // sum(exitPrice*qty) over closed
   realizedPnl: number
   fees: number // commissions + fees across this episode's fills
+  multiplier: number // futures point value ($/point/contract); 1 for equities
   openedAt: number | null
   closedAt: number | null
   fills: Fill[]
@@ -84,7 +87,7 @@ function toTrade(ep: Episode, seq: number): Trade {
   const openQty = ep.lots.reduce((n, l) => n + l.qty, 0)
   const avgEntry = ep.entryQty > 0 ? ep.entryCost / ep.entryQty : 0
   const avgExit = ep.closedQty > 0 ? ep.exitProceeds / ep.closedQty : 0
-  const closedCost = avgEntry * ep.closedQty
+  const closedCost = avgEntry * ep.closedQty * ep.multiplier
   const netPnl = ep.realizedPnl - ep.fees
   return {
     id: `${ep.account}-${ep.symbol}-${seq}-${ep.openedAt ?? 0}`,
@@ -98,9 +101,10 @@ function toTrade(ep: Episode, seq: number): Trade {
     isOpen: openQty > 1e-9,
     avgEntry,
     avgExit,
-    costBasis: avgEntry * ep.entryQty,
+    costBasis: avgEntry * ep.entryQty * ep.multiplier,
     realizedPnl: netPnl,
     fees: ep.fees,
+    multiplier: ep.multiplier,
     realizedPct: closedCost > 0 ? (netPnl / closedCost) * 100 : 0,
     openedAt: ep.openedAt,
     closedAt: openQty > 1e-9 ? null : ep.closedAt,
@@ -133,7 +137,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
     let ep: Episode | null = null
     let seq = 0
 
-    const openEpisode = (dir: 'long' | 'short', name: string, account: string): Episode => ({
+    const openEpisode = (dir: 'long' | 'short', name: string, account: string, multiplier: number): Episode => ({
       symbol,
       name,
       account,
@@ -145,6 +149,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
       exitProceeds: 0,
       realizedPnl: 0,
       fees: 0,
+      multiplier: multiplier || 1,
       openedAt: null,
       closedAt: null,
       fills: []
@@ -156,7 +161,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
 
       // If flat, this fill opens a new episode in its own direction.
       if (!ep) {
-        ep = openEpisode(dirOfExec, e.name, e.account ?? 'default')
+        ep = openEpisode(dirOfExec, e.name, e.account ?? 'default', e.multiplier)
         ep.openedAt = e.filledAt
       }
 
@@ -178,8 +183,10 @@ export function buildTrades(executions: Execution[]): Trade[] {
         while (remaining > 1e-9 && ep.lots.length > 0) {
           const lot = ep.lots[0]
           const m = Math.min(remaining, lot.qty)
-          // long: (exit - entry); short: (entry - exit) === (entry-exit)
-          const pnl = ep.direction === 'long' ? (e.price - lot.price) * m : (lot.price - e.price) * m
+          // long: (exit - entry); short: (entry - exit) — × the contract point
+          // value (1 for equities; $50/pt for an ES future, etc.)
+          const pnl =
+            (ep.direction === 'long' ? (e.price - lot.price) * m : (lot.price - e.price) * m) * ep.multiplier
           ep.realizedPnl += pnl
           ep.closedQty += m
           ep.exitProceeds += m * e.price
@@ -193,7 +200,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
           trades.push(toTrade(ep, seq++))
           ep = null
           if (remaining > 1e-9) {
-            ep = openEpisode(dirOfExec, e.name, e.account ?? 'default')
+            ep = openEpisode(dirOfExec, e.name, e.account ?? 'default', e.multiplier)
             ep.openedAt = e.filledAt
             ep.lots.push({ qty: remaining, price: e.price, at: e.filledAt })
             ep.entryQty += remaining
@@ -403,7 +410,7 @@ export function computeStats(trades: Trade[]): Stats {
   // fold open positions into per-symbol view (open qty + cost basis)
   let openCostBasis = 0
   for (const t of open) {
-    openCostBasis += t.avgEntry * t.openQty
+    openCostBasis += t.avgEntry * t.openQty * t.multiplier
     const s = symMap.get(t.symbol) ?? {
       symbol: t.symbol,
       name: t.name,

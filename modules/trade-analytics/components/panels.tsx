@@ -191,7 +191,7 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
             )}
             <p className="mt-1.5 text-[11px] text-muted">
               Any broker&apos;s CSV export works (Webull, Robinhood, Schwab, Fidelity, IBKR, E*TRADE,
-              tastytrade…). Trades import only into this account and never mix with others.
+              tastytrade, NinjaTrader…). Trades import only into this account and never mix with others.
               Re-importing skips duplicates and updates orders that filled since the last export.
             </p>
           </div>
