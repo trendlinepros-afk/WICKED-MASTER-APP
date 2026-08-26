@@ -1,34 +1,59 @@
 /**
- * Webull "Orders Records" CSV parser (pure — no Node/Electron), so it can be
+ * Broker order/trade-history CSV parser (pure — no Node/Electron), so it can be
  * unit-tested directly against real exports.
  *
- * Columns (matched by HEADER NAME, so column reordering is tolerated):
- *   Name, Symbol, Side, Status, Filled, Total Qty, Price, Avg Price,
- *   Time-in-Force, Placed Time, Filled Time
+ * Columns are matched by HEADER NAME (never position), with aliases covering the
+ * common broker exports — Webull "Orders Records", Robinhood account activity,
+ * Schwab/TD transactions, Fidelity activity, Interactive Brokers trade reports,
+ * E*TRADE transactions, tastytrade history — plus any generic CSV that has a
+ * symbol, a side/action, a quantity, a price and a date. The header row is
+ * FOUND, not assumed: the first ~40 lines are scanned and the line that matches
+ * the most known columns wins, so exports with preamble/disclaimer lines parse
+ * fine. Comma, semicolon and tab delimiters are auto-detected.
  *
  * Quirks handled:
- *  - Prices sometimes carry a leading "@" (e.g. "@217.00") — stripped.
- *  - Cancelled orders have Filled=0 and empty Avg Price / Filled Time.
- *  - Times look like "07/15/2026 12:41:25 EDT"; parsed with an explicit ET
- *    offset (EDT=-04:00, EST=-05:00) so results don't depend on the host TZ.
- *  - Names may (in other exports) contain commas → a real quoted-CSV splitter.
+ *  - Prices may carry "@", "$", commas or parentheses-negatives — normalized.
+ *  - Signed quantities (IBKR: negative = sell) derive the side when no
+ *    side/action column exists.
+ *  - Activity exports mix in non-trade rows (dividends, transfers, interest,
+ *    totals) — recognized and counted as `ignored`, never imported as trades.
+ *  - Cancelled orders with a PARTIAL fill still count the filled shares (the
+ *    shares really executed); fully-unfilled rows are kept but excluded from
+ *    P&L.
+ *  - Times: "07/15/2026 12:41:25 EDT", "2026-07-15, 12:41:25", ISO, 12-hour
+ *    AM/PM, and date-only rows all parse. A named zone uses its fixed offset;
+ *    NO zone (or a bare "ET") is treated as an Eastern wall clock and converted
+ *    DST-correctly via Intl — never the host machine's timezone.
+ *  - Names may contain commas → a real quoted-CSV splitter.
+ *
+ * DE-DUP IDENTITY (`execHash`): brokers rarely export an order id, so each row
+ * gets a fingerprint from its STABLE fields only — symbol, side, placed/trade
+ * time, total order quantity and limit price. Mutable fields (status, filled
+ * quantity, average price) are deliberately EXCLUDED: an order exported while
+ * "Working" and re-exported after it filled must hash the same so the re-import
+ * UPDATES the row instead of duplicating it. Genuinely distinct orders that tie
+ * on every stable field (e.g. two identical same-second hotkey orders) are kept
+ * apart with an occurrence suffix (`#2`, `#3`, …) assigned in file order.
  */
+
+import { etInputToEpoch } from './et'
 
 export type Side = 'buy' | 'sell' | 'short'
 
 export interface Execution {
-  /** stable de-dup key (Webull exports carry no order id) */
+  /** stable de-dup key (see header comment; `manual:<uuid>` for hand-entered) */
   hash: string
   /** account this execution belongs to (assigned at import; '' before) */
   account?: string
   name: string
   symbol: string
   side: Side
-  /** raw side text from the file (Buy / Sell / Short / Sell Short / Buy to Cover) */
+  /** raw side text from the file (Buy / Sell Short / BTO / "YOU BOUGHT …") */
   sideRaw: string
   status: string
+  /** true when shares really executed (filled qty > 0 with a usable price) */
   filled: boolean
-  /** filled quantity (shares) */
+  /** filled quantity (shares actually executed) */
   qty: number
   /** total order quantity */
   totalQty: number
@@ -36,22 +61,33 @@ export interface Execution {
   price: number
   avgPrice: number
   limitPrice: number
+  /** commissions + fees for this row (0 when the export has no fee columns) */
+  fees: number
   timeInForce: string
   placedText: string
   filledText: string
   /** epoch ms of the fill (or placed time if no fill), null if unparseable */
   filledAt: number | null
   placedAt: number | null
+  /** row order within the source file — FIFO tie-breaker for equal timestamps */
+  seq: number | null
 }
 
 export interface ParseResult {
   executions: Execution[]
-  /** rows that couldn't be parsed (bad/blank lines), with a reason */
+  /** trade-looking rows that couldn't be used (bad numbers etc.), with a reason */
   errors: { line: number; reason: string }[]
   /** header columns actually seen */
   columns: string[]
+  /** best-guess source ("Webull", "Robinhood", …, or "CSV") */
+  broker: string
+  /** non-trade rows skipped (dividends, transfers, totals, unknown actions) */
+  ignored: number
 }
 
+/* --------------------------------- times ---------------------------------- */
+
+/** Fixed-offset zone tokens (unambiguous abbreviations). */
 const TZ_OFFSET: Record<string, string> = {
   EDT: '-04:00',
   EST: '-05:00',
@@ -62,11 +98,70 @@ const TZ_OFFSET: Record<string, string> = {
   PDT: '-07:00',
   PST: '-08:00',
   UTC: '+00:00',
-  GMT: '+00:00'
+  GMT: '+00:00',
+  Z: '+00:00'
 }
 
+/**
+ * Bare US zone tokens ("ET") are wall clocks whose DST tracks Eastern's: the
+ * same wall reading in Central happens exactly 1h later in absolute time, so
+ * converting as an ET wall clock and adding the hour gap stays DST-correct.
+ */
+const WALL_CLOCK_GAP_HOURS: Record<string, number> = { ET: 0, CT: 1, MT: 2, PT: 3 }
+
+const p2 = (n: string | number): string => String(n).padStart(2, '0')
+
+/** Wall-clock parts + optional zone token → epoch ms (host-TZ independent). */
+function wallToEpoch(y: string, mo: string, d: string, hh: number, mm: string, ss: string, tz: string): number | null {
+  const zone = tz.toUpperCase()
+  if (TZ_OFFSET[zone]) {
+    const t = Date.parse(`${y}-${p2(mo)}-${p2(d)}T${p2(hh)}:${mm}:${ss}${TZ_OFFSET[zone]}`)
+    return Number.isNaN(t) ? null : t
+  }
+  // No/unknown zone (or bare ET/CT/MT/PT): Eastern wall clock via Intl (DST-correct).
+  const et = etInputToEpoch(`${y}-${p2(mo)}-${p2(d)}T${p2(hh)}:${mm}:${ss}`)
+  if (et == null) return null
+  const gap = WALL_CLOCK_GAP_HOURS[zone] ?? 0
+  return et + gap * 3_600_000
+}
+
+/**
+ * Broker date/time text → epoch ms, or null. Handles "MM/DD/YYYY HH:MM:SS TZ",
+ * "YYYY-MM-DD, HH:MM:SS" (IBKR), ISO "T" forms, 12-hour AM/PM, and date-only
+ * rows (taken as 00:00 Eastern so the trading DAY is always right).
+ */
+export function parseBrokerTime(text: string): number | null {
+  const s = (text || '').trim()
+  if (!s) return null
+  const mdy = s.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
+  )
+  const ymd = s.match(
+    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
+  )
+  const m = mdy ?? ymd
+  if (m) {
+    const [, a, b, c, hh, mm, ss, ampm, tz] = m
+    const [y, mo, d] = mdy ? [c, a, b] : [a, b, c]
+    let hour = hh ? Number(hh) : 0
+    if (ampm) {
+      const pm = ampm.toLowerCase() === 'pm'
+      if (pm && hour < 12) hour += 12
+      if (!pm && hour === 12) hour = 0
+    }
+    return wallToEpoch(y, mo, d, hour, mm ?? '00', ss ?? '00', tz ?? '')
+  }
+  const t = Date.parse(s) // last resort (host-TZ dependent, e.g. RFC dates)
+  return Number.isNaN(t) ? null : t
+}
+
+/** Back-compat alias (older callers/tests). */
+export const parseWebullTime = parseBrokerTime
+
+/* ------------------------------- primitives -------------------------------- */
+
 /** Split one CSV line honoring double-quoted fields (with "" escapes). */
-export function splitCsvLine(line: string): string[] {
+export function splitCsvLine(line: string, delim = ','): string[] {
   const out: string[] = []
   let cur = ''
   let inQuotes = false
@@ -80,7 +175,7 @@ export function splitCsvLine(line: string): string[] {
         } else inQuotes = false
       } else cur += c
     } else if (c === '"') inQuotes = true
-    else if (c === ',') {
+    else if (c === delim) {
       out.push(cur)
       cur = ''
     } else cur += c
@@ -89,143 +184,317 @@ export function splitCsvLine(line: string): string[] {
   return out.map((s) => s.trim())
 }
 
-/** "07/15/2026 12:41:25 EDT" → epoch ms (host-TZ-independent), or null. */
-export function parseWebullTime(text: string): number | null {
-  const s = (text || '').trim()
-  if (!s) return null
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s+([A-Z]{2,4}))?$/)
-  if (m) {
-    const [, mo, d, y, hh, mm, ss, tz] = m
-    const off = tz && TZ_OFFSET[tz] ? TZ_OFFSET[tz] : '-04:00' // default to ET summer
-    const iso = `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}T${hh.padStart(2, '0')}:${mm}:${ss}${off}`
-    const t = Date.parse(iso)
-    return Number.isNaN(t) ? null : t
-  }
-  const t = Date.parse(s)
-  return Number.isNaN(t) ? null : t
-}
-
+/** "@217.00", "$1,234.56", "(45.10)", "-45.10" → number (signed); junk → 0. */
 function num(v: string): number {
-  const cleaned = (v || '').replace(/[@$,\s]/g, '')
-  if (!cleaned) return 0
-  const n = Number(cleaned)
-  return Number.isFinite(n) ? n : 0
+  let s = (v || '').trim()
+  let neg = false
+  if (/^\(.*\)$/.test(s)) {
+    neg = true
+    s = s.slice(1, -1)
+  }
+  s = s.replace(/[@$,\s]/g, '')
+  if (!s || s === '-' || s === '--') return 0
+  const n = Number(s)
+  if (!Number.isFinite(n)) return 0
+  return neg ? -n : n
 }
 
-function normSide(raw: string): Side {
-  const s = (raw || '').trim().toLowerCase()
-  if (s === 'short' || s === 'sell short' || s === 'sellshort') return 'short'
-  if (s === 'buy to cover' || s === 'buy-to-cover' || s.startsWith('cover')) return 'buy'
-  if (s.startsWith('sell')) return 'sell'
-  return 'buy'
+/**
+ * Side/action text → side, or null when the value is clearly not a trade
+ * (Dividend, ACH, Interest, Journal, …). Covers plain words, broker codes
+ * (BTO/STC/STO/BTC, BOT/SLD, B/S/SS) and sentence actions ("YOU BOUGHT …").
+ */
+export function parseSideToken(raw: string): Side | null {
+  const s = (raw || '').trim().toLowerCase().replace(/[_-]+/g, ' ')
+  if (!s) return null
+  const compact = s.replace(/[^a-z]/g, '')
+  const exact: Record<string, Side> = {
+    b: 'buy',
+    buy: 'buy',
+    bot: 'buy',
+    bto: 'buy', // buy to open
+    btc: 'buy', // buy to close/cover
+    cvr: 'buy',
+    cover: 'buy',
+    s: 'sell',
+    sell: 'sell',
+    sld: 'sell',
+    stc: 'sell', // sell to close
+    ss: 'short',
+    sto: 'short', // sell to open
+    short: 'short'
+  }
+  if (exact[compact]) return exact[compact]
+  // Short forms first ("Sell Short", "Sold Short", "Short Sale", "Sell to
+  // Open") — but only ADJACENT words, so a security NAME containing "Short"
+  // ("YOU BOUGHT PROSHARES ULTRAPRO SHORT QQQ") can't hijack the side.
+  if (/(?:^|\s)(?:sell|sold)\s+short(?:\s|$)/.test(s)) return 'short'
+  if (/(?:^|\s)short\s+(?:sell|sale|sold)(?:\s|$)/.test(s)) return 'short'
+  if (/s(?:ell|old)\s*to\s*open/.test(s)) return 'short'
+  if (/buy|bought|cover/.test(s)) return 'buy'
+  if (/sell|sold/.test(s)) return 'sell'
+  if (/^short\b/.test(s)) return 'short'
+  return null
 }
 
+/** Old lenient normalizer (unknown → buy) — for text KNOWN to be a side. */
+export function normSide(raw: string): Side {
+  return parseSideToken(raw) ?? 'buy'
+}
+
+/* -------------------------------- headers ---------------------------------- */
+
+/** Aliases are in PRIORITY order — the first alias found in the header wins. */
 const HEADER_ALIASES: Record<string, string[]> = {
-  name: ['name'],
-  symbol: ['symbol', 'ticker'],
-  side: ['side'],
-  status: ['status'],
-  filled: ['filled', 'filled qty', 'filledqty'],
-  totalQty: ['total qty', 'totalqty', 'quantity', 'qty'],
-  price: ['price'],
-  avgPrice: ['avg price', 'avgprice', 'average price'],
+  name: ['name', 'security description', 'description', 'company'],
+  symbol: ['symbol', 'ticker', 'instrument'],
+  side: ['side', 'action', 'trans code', 'transaction code', 'buy/sell', 'b/s', 'order action', 'transaction type', 'transactiontype'],
+  status: ['status', 'order status'],
+  filled: ['filled', 'filled qty', 'filledqty', 'filled quantity', 'executed qty', 'exec qty'],
+  totalQty: ['total qty', 'totalqty', 'quantity', 'qty', 'shares', 'number of shares', 'no. of shares'],
+  price: ['price', 't. price', 'trade price', 'price ($)', 'execution price', 'fill price', 'price per share'],
+  avgPrice: ['avg price', 'avgprice', 'average price', 'avg fill price', 'average fill price'],
+  commission: ['commission', 'commissions', 'commission ($)', 'comm/fee', 'fees & comm', 'commissions & fees', 'comm'],
+  fees: ['fees', 'fee', 'fees ($)', 'reg fee', 'regulatory fees', 'other fees'],
   tif: ['time-in-force', 'time in force', 'tif'],
-  placed: ['placed time', 'placed', 'placed time(edt)'],
-  filledTime: ['filled time', 'filled time(edt)', 'executed time']
+  placed: ['placed time', 'placed', 'placed time(edt)', 'order time', 'order date'],
+  filledTime: [
+    'filled time',
+    'filled time(edt)',
+    'executed time',
+    'execution time',
+    'date/time',
+    'datetime',
+    'trade time',
+    'transaction time',
+    'trade date',
+    'activity date',
+    'run date',
+    'transaction date',
+    'date'
+  ],
+  discriminator: ['datadiscriminator', 'data discriminator']
 }
 
 function buildColMap(header: string[]): Record<string, number> {
   const lower = header.map((h) => h.toLowerCase().trim())
   const map: Record<string, number> = {}
   for (const [key, aliases] of Object.entries(HEADER_ALIASES)) {
-    const idx = lower.findIndex((h) => aliases.includes(h))
-    if (idx >= 0) map[key] = idx
+    for (const a of aliases) {
+      const idx = lower.indexOf(a)
+      if (idx >= 0) {
+        map[key] = idx
+        break
+      }
+    }
   }
   return map
 }
 
-/** Stable de-dup hash for a row. Webull has no order id, so we compose one. */
-export function execHash(e: {
-  symbol: string
-  sideRaw: string
-  status: string
-  placedText: string
-  filledText: string
-  qty: number
-  totalQty: number
-  price: number
-  avgPrice: number
-}): string {
-  return [
-    e.symbol,
-    e.sideRaw.toLowerCase(),
-    e.status.toLowerCase(),
-    e.placedText,
-    e.filledText,
-    e.qty,
-    e.totalQty,
-    e.price,
-    e.avgPrice
-  ].join('|')
+function guessBroker(headerLower: string[]): string {
+  const has = (...names: string[]): boolean => names.every((n) => headerLower.includes(n))
+  if (has('placed time') || (has('filled') && has('side') && has('avg price'))) return 'Webull'
+  if (has('trans code') || has('instrument', 'activity date')) return 'Robinhood'
+  if (headerLower.some((h) => h === 'datadiscriminator' || h === 't. price')) return 'Interactive Brokers'
+  if (has('run date')) return 'Fidelity'
+  if (has('fees & comm')) return 'Schwab'
+  if (headerLower.some((h) => h === 'transactiontype' || h === 'transaction type') && has('symbol')) return 'E*TRADE'
+  if (has('instrument type') || has('root symbol')) return 'tastytrade'
+  return 'CSV'
 }
 
-export function parseWebullCsv(text: string): ParseResult {
-  const errors: ParseResult['errors'] = []
-  const executions: Execution[] = []
-  const rawLines = text.split(/\r?\n/)
-  // find header line (first non-empty)
-  let headerIdx = rawLines.findIndex((l) => l.trim().length > 0)
-  if (headerIdx < 0) return { executions, errors, columns: [] }
-  const header = splitCsvLine(rawLines[headerIdx])
-  const col = buildColMap(header)
-  if (col.symbol === undefined || col.side === undefined) {
-    return {
-      executions,
-      errors: [{ line: headerIdx + 1, reason: 'Not a Webull orders CSV (no Symbol/Side columns).' }],
-      columns: header
+/* --------------------------------- hashing --------------------------------- */
+
+/**
+ * Stable de-dup fingerprint from IMMUTABLE order fields only (see header
+ * comment). `side` is the normalized side so capitalization/wording changes
+ * between exports can't split an order into two.
+ */
+export function execHash(e: {
+  symbol: string
+  side: Side
+  placedText: string
+  filledText: string
+  totalQty: number
+  limitPrice: number
+}): string {
+  const timeKey = (e.placedText || e.filledText || '').trim()
+  return ['v2', e.symbol, e.side, timeKey, e.totalQty, e.limitPrice].join('|')
+}
+
+/**
+ * Distinct orders that tie on every stable field get `#2`, `#3`, … suffixes in
+ * source order, so identical same-second orders survive de-dup as separate rows
+ * (and re-imports map back onto the same suffixes).
+ */
+export function assignOccurrenceHashes(execs: { hash: string }[]): void {
+  const seen = new Map<string, number>()
+  for (const e of execs) {
+    const n = (seen.get(e.hash) ?? 0) + 1
+    seen.set(e.hash, n)
+    if (n > 1) e.hash = `${e.hash}#${n}`
+  }
+}
+
+/* --------------------------------- parser ---------------------------------- */
+
+const NON_EXECUTED_STATUS = /cancel|reject|fail|expir|pending|working|queued|submitt|placed|open/i
+
+interface HeaderPick {
+  idx: number
+  delim: string
+  header: string[]
+  col: Record<string, number>
+  score: number
+}
+
+/** Scan the first lines for the row that matches the most known columns. */
+function findHeader(lines: string[]): HeaderPick | null {
+  let best: HeaderPick | null = null
+  const limit = Math.min(lines.length, 40)
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i]
+    if (!line.trim()) continue
+    for (const delim of [',', ';', '\t']) {
+      if (!line.includes(delim)) continue
+      const header = splitCsvLine(line, delim)
+      if (header.length < 3) continue
+      const col = buildColMap(header)
+      const essentials =
+        col.symbol !== undefined && (col.side !== undefined || col.totalQty !== undefined || col.filled !== undefined)
+      if (!essentials) continue
+      const score = Object.keys(col).length
+      if (!best || score > best.score) best = { idx: i, delim, header, col, score }
     }
   }
+  return best
+}
 
+export function parseBrokerCsv(text: string): ParseResult {
+  const errors: ParseResult['errors'] = []
+  const rawLines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
+  const picked = findHeader(rawLines)
+  if (!picked) {
+    return {
+      executions: [],
+      errors: [{ line: 1, reason: 'No recognizable header row (need at least Symbol plus a Side/Action or Quantity column).' }],
+      columns: [],
+      broker: 'CSV',
+      ignored: 0
+    }
+  }
+  const { idx: headerIdx, delim, header, col } = picked
+  const broker = guessBroker(header.map((h) => h.toLowerCase().trim()))
+  let ignored = 0
+  const addError = (line: number, reason: string): void => {
+    if (errors.length < 50) errors.push({ line, reason })
+  }
+
+  // First pass: raw rows (so DataDiscriminator-style exports can be filtered
+  // as a set — IBKR statements list the same trades at both "Order" and
+  // "Trade" level; importing both would double-count).
+  interface PreRow {
+    line: number
+    f: string[]
+    disc: string
+  }
+  const pre: PreRow[] = []
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
     const line = rawLines[i]
     if (!line.trim()) continue
-    const f = splitCsvLine(line)
-    const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
-    const symbol = get('symbol').toUpperCase()
-    if (!symbol) {
-      errors.push({ line: i + 1, reason: 'Missing symbol.' })
+    const f = splitCsvLine(line, delim)
+    const disc = col.discriminator !== undefined ? (f[col.discriminator] ?? '').trim().toLowerCase() : ''
+    pre.push({ line: i + 1, f, disc })
+  }
+  let acceptDisc: ((d: string) => boolean) | null = null
+  if (col.discriminator !== undefined) {
+    const values = new Set(pre.map((r) => r.disc))
+    const level = values.has('order') ? 'order' : values.has('trade') ? 'trade' : values.has('execution') ? 'execution' : null
+    acceptDisc = (d) => d === '' || d === level
+    if (level == null) acceptDisc = (d) => d === ''
+  }
+
+  const executions: Execution[] = []
+  for (const row of pre) {
+    const { line, f } = row
+    if (acceptDisc && !acceptDisc(row.disc)) {
+      ignored++
       continue
     }
+    const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
+    if (f.every((v) => !v)) continue
+
+    const symbol = get('symbol').toUpperCase().replace(/^-/, '').replace(/\*+$/, '').trim()
+    if (!symbol || symbol === 'SYMBOL') {
+      ignored++ // fee/interest/total rows have no symbol; repeated headers too
+      continue
+    }
+
+    // Side: explicit column, else derive from a signed quantity (IBKR-style).
     const sideRaw = get('side')
+    const qtySigned = num(get('totalQty'))
+    let side: Side | null
+    if (col.side !== undefined) {
+      side = parseSideToken(sideRaw)
+      if (!side) {
+        ignored++ // "Dividend", "ACH", "Journal", "Interest", …
+        continue
+      }
+    } else {
+      side = qtySigned < 0 ? 'sell' : 'buy'
+    }
+
     const status = get('status') || 'Filled'
-    const avgPrice = num(get('avgPrice'))
-    const limitPrice = num(get('price'))
-    const qty = num(get('filled'))
-    const totalQty = num(get('totalQty')) || qty
+    const statusExecuted = !NON_EXECUTED_STATUS.test(status)
+    const filledColQty = col.filled !== undefined ? Math.abs(num(get('filled'))) : null
+    const rawTotal = Math.abs(qtySigned)
+    // With a Filled column, trust it (a cancelled order's partial fill is real
+    // executed shares). Without one, only executed statuses count.
+    const qty = filledColQty ?? (statusExecuted ? rawTotal : 0)
+    const totalQty = rawTotal > 0 ? rawTotal : qty
+    if (totalQty <= 0 && qty <= 0) {
+      ignored++
+      continue
+    }
+
+    const avgPrice = Math.abs(num(get('avgPrice')))
+    const limitPrice = Math.abs(num(get('price')))
+    const price = avgPrice > 0 ? avgPrice : limitPrice
+    if (qty > 0 && price <= 0) {
+      addError(line, `${symbol}: filled ${qty} shares but no usable price — row skipped.`)
+      continue
+    }
+
+    const fees = Math.abs(num(get('commission'))) + Math.abs(num(get('fees')))
     const placedText = get('placed')
     const filledText = get('filledTime')
-    const price = avgPrice > 0 ? avgPrice : limitPrice
     const e: Execution = {
       hash: '',
       name: get('name'),
       symbol,
-      side: normSide(sideRaw),
-      sideRaw,
+      side,
+      sideRaw: sideRaw || side,
       status,
-      filled: status.toLowerCase() === 'filled' && qty > 0,
+      filled: qty > 0 && price > 0,
       qty,
       totalQty,
       price,
       avgPrice,
       limitPrice,
+      fees,
       timeInForce: get('tif'),
       placedText,
       filledText,
-      filledAt: parseWebullTime(filledText) ?? parseWebullTime(placedText),
-      placedAt: parseWebullTime(placedText)
+      filledAt: parseBrokerTime(filledText) ?? parseBrokerTime(placedText),
+      placedAt: parseBrokerTime(placedText),
+      seq: executions.length
     }
     e.hash = execHash(e)
     executions.push(e)
   }
-  return { executions, errors, columns: header }
+  assignOccurrenceHashes(executions)
+  return { executions, errors, columns: header, broker, ignored }
 }
+
+/** Back-compat alias (the parser now accepts any broker's export). */
+export const parseWebullCsv = parseBrokerCsv

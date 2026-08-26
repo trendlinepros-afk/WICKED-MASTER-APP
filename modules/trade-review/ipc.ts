@@ -130,11 +130,16 @@ export default function register(ctx: ModuleIpcContext): void {
           price: d.price,
           avgPrice: d.price,
           limitPrice: d.price,
+          fees: 0,
           timeInForce: '',
           placedText: d.time,
           filledText: d.time,
           filledAt: parseWebullTime(d.time),
-          placedAt: parseWebullTime(d.time)
+          placedAt: parseWebullTime(d.time),
+          // No occurrence suffixing here on purpose: overlapping screenshots
+          // legitimately show the same order twice — identical rows should
+          // collapse, not survive as "two trades".
+          seq: null
         }
         e.hash = execHash(e)
         executions.push(e)

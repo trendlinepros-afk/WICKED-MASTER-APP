@@ -116,6 +116,7 @@ function OverviewTab(): React.JSX.Element {
           <Row label="Short P&L" value={`${signedMoney(stats.shortPnl)} · ${stats.shortTrades}`} tone={stats.shortPnl >= 0 ? 'ok' : 'danger'} />
           <Row label="Gross profit" value={money(stats.grossProfit)} tone="ok" />
           <Row label="Gross loss" value={money(-stats.grossLoss)} tone="danger" />
+          {stats.totalFees > 0 && <Row label="Fees & commissions (deducted)" value={money(-stats.totalFees)} tone="danger" />}
           <Row label="Total volume" value={money(stats.totalVolume, false)} />
           <Row label="Shares traded" value={num(stats.sharesTraded)} />
           <Row label="Best / worst" value={`${stats.bestSymbol?.symbol ?? '—'} / ${stats.worstSymbol?.symbol ?? '—'}`} />
@@ -200,7 +201,7 @@ function TradesTab(): React.JSX.Element {
         </button>
       </div>
       {trades.length === 0 ? (
-        <div className="p-8 text-sm text-muted">No trades yet — import a Webull CSV or add one manually with “Add trade”.</div>
+        <div className="p-8 text-sm text-muted">No trades yet — import a broker CSV or add one manually with “Add trade”.</div>
       ) : (
         <>
           <div className="grid grid-cols-[70px_1fr_90px_90px_100px_100px_64px] gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
@@ -507,8 +508,8 @@ function OpenTab(): React.JSX.Element {
         ))}
       </div>
       <p className="mt-2 text-xs text-muted">
-        Cost basis is what you paid to open. Unrealized P&L needs live prices (not in the Webull order
-        export), so it isn&apos;t shown — import a fresh report after you close a position and it moves
+        Cost basis is what you paid to open. Unrealized P&L needs live prices (not in broker order
+        exports), so it isn&apos;t shown — import a fresh report after you close a position and it moves
         to your realized stats automatically.
         {bankedPartial !== 0 && (
           <>
@@ -746,7 +747,7 @@ export default function TradeAnalytics(): React.JSX.Element {
         <div className="min-w-0 flex-1">
           <h1 className="text-base font-bold tracking-tight"><ModuleTitle fallback="Trade Journal" /></h1>
           <p className="truncate text-xs text-muted">
-            {s.executions.length > 0 ? `${num(s.executions.length)} executions · ${num(s.trades.length)} trades · ${s.stats?.openTrades ?? 0} open` : 'Import your Webull order records'}
+            {s.executions.length > 0 ? `${num(s.executions.length)} executions · ${num(s.trades.length)} trades · ${s.stats?.openTrades ?? 0} open` : 'Import trade history from any broker'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -832,11 +833,13 @@ export default function TradeAnalytics(): React.JSX.Element {
               <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-raised text-accent">
                 <Download size={30} />
               </span>
-              <h2 className="mt-4 text-lg font-bold">Import your Webull trades</h2>
+              <h2 className="mt-4 text-lg font-bold">Import your trades</h2>
               <p className="mt-2 text-sm text-muted">
-                In Webull: <strong>Orders → Export</strong> your order records as CSV, then drop the file
-                here or click Import. Re-import anytime — overlapping/old trades are de-duplicated
-                automatically, so you never get doubles.
+                Export your order/trade history as CSV from your broker — Webull, Robinhood, Schwab,
+                Fidelity, Interactive Brokers, E*TRADE, tastytrade and generic exports all parse — then
+                drop the file here or click Import and pick the account it belongs to. Re-import anytime:
+                overlapping reports are de-duplicated, and orders that filled since your last export are
+                updated in place, so you never get doubles.
               </p>
               <button
                 onClick={() => setImportOpen(true)}
@@ -873,7 +876,11 @@ export default function TradeAnalytics(): React.JSX.Element {
         {s.importing && <Loader2 size={12} className="shrink-0 animate-spin text-accent" />}
         <span className="truncate">{s.status}</span>
         {s.lastImport && !s.importing && (
-          <span className="ml-auto shrink-0">{s.lastImport.imported} new · {s.lastImport.skipped} dupes skipped</span>
+          <span className="ml-auto shrink-0">
+            {s.lastImport.imported} new
+            {s.lastImport.updated > 0 && ` · ${s.lastImport.updated} updated`} · {s.lastImport.skipped} dupes skipped
+            {s.lastImport.ignored > 0 && ` · ${s.lastImport.ignored} non-trade`}
+          </span>
         )}
       </footer>
 
@@ -882,7 +889,7 @@ export default function TradeAnalytics(): React.JSX.Element {
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-accent/10 backdrop-blur-sm">
           <div className="rounded-2xl border-2 border-dashed border-accent bg-surface px-8 py-6 text-center">
             <Upload size={28} className="mx-auto text-accent" />
-            <p className="mt-2 text-sm font-medium">Drop Webull CSV to import</p>
+            <p className="mt-2 text-sm font-medium">Drop broker CSV to import</p>
           </div>
         </div>
       )}

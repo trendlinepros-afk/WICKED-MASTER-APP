@@ -3,23 +3,45 @@
 _(module id `trade-analytics` — the route, data folder and MCP tool prefix keep that
 id; the tool is named **Trade Journal** everywhere it's shown.)_
 
-Import your **Webull order-records CSV** and get an analytics dashboard: realized
-P&L, win rate, profit factor, expectancy, an equity curve, per-symbol and timing
-breakdowns, a live **open-positions** view (buys with no sell yet), and an **AI
-coach** that critiques your process.
+Import your **broker's order/trade-history CSV** — from **any broker** — and get
+an analytics dashboard: realized P&L, win rate, profit factor, expectancy, an
+equity curve, per-symbol and timing breakdowns, a live **open-positions** view
+(buys with no sell yet), and an **AI coach** that critiques your process.
 
-## Importing
+## Importing (any broker)
 
-In Webull: **Orders → Export** to CSV, then in the module click **Import CSV** or
-**drag the file** onto the window. You can import as often as you like — including
-reports that overlap ones you already imported.
+Export your order or trade history as CSV, then click **Import CSV** (picking the
+destination account) or **drag the file** onto the window. The parser
+(`lib/parse.ts`) is broker-agnostic:
 
-- **De-duplication.** Webull exports carry no order id, so each row gets a stable
-  fingerprint (`lib/parse.ts` → `execHash`) from symbol + side + status + placed/
-  filled times + prices + quantities. Executions are stored in SQLite with that
-  fingerprint as the PRIMARY KEY and inserted with `INSERT OR IGNORE`, so a row
-  already present is skipped. The status bar shows `N new · M dupes skipped`.
-- Multiple files can be imported at once.
+- **Header detection.** Columns are matched by NAME (with aliases per broker),
+  and the header row is *found* by scanning the first ~40 lines — exports with
+  preamble/disclaimer lines (Fidelity, Schwab) parse fine. Comma, semicolon and
+  tab delimiters are auto-detected. Known formats are recognized and named in
+  the status bar: Webull, Robinhood, Schwab/TD, Fidelity, Interactive Brokers,
+  E*TRADE, tastytrade — plus any generic CSV with symbol / side / qty / price /
+  date columns. Signed quantities (IBKR: negative = sell) derive the side when
+  no action column exists.
+- **Non-trade rows** in activity exports (dividends, transfers, interest,
+  totals) are recognized and ignored — never imported as trades.
+- **De-duplication that survives re-exports.** Brokers rarely export an order
+  id, so each row gets a fingerprint (`execHash`) from its **stable** fields
+  only — symbol + side + placed/trade time + total quantity + limit price.
+  Mutable fields (status, filled qty, avg price) are deliberately excluded:
+  - a row already present is **skipped**;
+  - a row whose order **progressed** since your last export (Working → Filled,
+    partial → full fill) **updates the stored row in place** — no duplicate;
+  - importing an *older* report over a newer one never regresses anything;
+  - two genuinely identical same-second orders (hotkey scalps) are kept apart
+    with an occurrence suffix, so nothing is silently lost.
+  The status bar reports `new · updated · duplicates skipped · non-trade
+  ignored` per import. (Databases from older builds are migrated to this
+  fingerprint on first launch, and duplicates the old scheme created are
+  collapsed automatically — keeping the most-progressed copy of each order.)
+- **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade…) are captured
+  per fill; every P&L figure is **net of fees** (Webull's export has no fee
+  column, so nothing changes there).
+- Multiple files — even from different brokers — can be imported at once.
 
 ## Market sectors
 
@@ -46,14 +68,19 @@ leaves flat, takes entries, is reduced by exits, and returns to flat. Realized
 P&L is booked per matched lot. An episode that never returns to flat is an **open
 position** — that's how the dashboard flags "bought but not sold yet".
 
-- Only **Filled** rows with qty > 0 feed the P&L engine; Cancelled/unfilled rows
-  are stored but ignored for stats.
-- Times are parsed with an explicit Eastern offset (EDT/EST) so results don't
-  depend on the machine's timezone.
-- The Webull order export has **no fees** column, so P&L is gross of commissions
-  (Webull equities are typically commission-free; regulatory fees aren't in the
-  file). Unrealized P&L on open positions needs live prices (not in the export),
-  so open positions show cost basis only.
+- Rows with **actually-executed shares** (filled qty > 0 with a usable price)
+  feed the P&L engine — including the partial fill of an order that was later
+  cancelled (those shares really traded). Fully-unfilled/cancelled rows are
+  stored but ignored for stats.
+- Replay order is fill time, then **source-file row order** for equal
+  timestamps (so date-only exports keep the broker's chronology); rows with an
+  unparseable time sort last, never to 1970.
+- Times are host-TZ independent: a named zone (EDT/EST/CST/…) uses its fixed
+  offset; a missing or bare zone ("ET") is treated as an Eastern wall clock and
+  converted DST-correctly via Intl.
+- P&L is **net of any imported fees/commissions**. Exports without fee columns
+  (Webull) are unaffected. Unrealized P&L on open positions needs live prices
+  (not in exports), so open positions show cost basis only.
 
 The parser + engine are pure and were validated against a real 591-row export
 (0 parse errors, equity curve reconciles to total realized P&L to the cent, FIFO

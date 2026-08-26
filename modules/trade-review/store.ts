@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 // Shared engines from the Trade Journal — CSV parsing runs client-side
 // (ported behavior) and FIFO matching is the same tested implementation.
-import { parseWebullCsv, type Execution } from '../trade-analytics/lib/parse'
+import { parseBrokerCsv, type Execution } from '../trade-analytics/lib/parse'
 import { buildTrades, computeStats, type Stats, type Trade } from '../trade-analytics/lib/analytics'
 import type { ReportSpec } from '../stock-planner/ipc/report'
 
@@ -124,7 +124,7 @@ export const useTradeReview = create<State>((set, get) => {
     extracting: false,
     exporting: false,
     error: '',
-    statusMsg: 'Import a Webull CSV or order screenshots to review a session.',
+    statusMsg: 'Import a broker CSV or order screenshots to review a session.',
 
     setCoachInput: (v) => set({ coachInput: v }),
     dismissError: () => set({ error: '' }),
@@ -137,9 +137,9 @@ export const useTradeReview = create<State>((set, get) => {
     },
 
     importCsvText: (text) => {
-      const parsed = parseWebullCsv(text)
+      const parsed = parseBrokerCsv(text)
       if (parsed.executions.length === 0) {
-        set({ error: 'No order rows found in that CSV — export your Orders Records from Webull.' })
+        set({ error: 'No order rows found in that CSV — export your order/trade history from your broker.' })
         return
       }
       const seen = new Set(get().executions.map((e) => e.hash))

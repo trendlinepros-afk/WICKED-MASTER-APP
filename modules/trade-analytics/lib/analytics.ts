@@ -42,7 +42,10 @@ export interface Trade {
   /** avg exit over the closed portion (0 if nothing closed yet) */
   avgExit: number
   costBasis: number
+  /** realized P&L NET of this episode's commissions/fees */
   realizedPnl: number
+  /** commissions + fees across this episode's fills (0 for fee-free brokers) */
+  fees: number
   /** realized P&L as % of the closed cost basis */
   realizedPct: number
   openedAt: number | null
@@ -71,6 +74,7 @@ interface Episode {
   closedQty: number
   exitProceeds: number // sum(exitPrice*qty) over closed
   realizedPnl: number
+  fees: number // commissions + fees across this episode's fills
   openedAt: number | null
   closedAt: number | null
   fills: Fill[]
@@ -81,6 +85,7 @@ function toTrade(ep: Episode, seq: number): Trade {
   const avgEntry = ep.entryQty > 0 ? ep.entryCost / ep.entryQty : 0
   const avgExit = ep.closedQty > 0 ? ep.exitProceeds / ep.closedQty : 0
   const closedCost = avgEntry * ep.closedQty
+  const netPnl = ep.realizedPnl - ep.fees
   return {
     id: `${ep.account}-${ep.symbol}-${seq}-${ep.openedAt ?? 0}`,
     account: ep.account,
@@ -94,8 +99,9 @@ function toTrade(ep: Episode, seq: number): Trade {
     avgEntry,
     avgExit,
     costBasis: avgEntry * ep.entryQty,
-    realizedPnl: ep.realizedPnl,
-    realizedPct: closedCost > 0 ? (ep.realizedPnl / closedCost) * 100 : 0,
+    realizedPnl: netPnl,
+    fees: ep.fees,
+    realizedPct: closedCost > 0 ? (netPnl / closedCost) * 100 : 0,
     openedAt: ep.openedAt,
     closedAt: openQty > 1e-9 ? null : ep.closedAt,
     holdSeconds:
@@ -117,8 +123,13 @@ export function buildTrades(executions: Execution[]): Trade[] {
   }
 
   const trades: Trade[] = []
+  // Replay order: fill time, then source-file row order (`seq`) for equal
+  // timestamps (date-only exports keep the broker's chronology), then hash.
+  // Unparseable times sort LAST, never to 1970 where they'd scramble FIFO.
+  const atOf = (e: Execution): number => e.filledAt ?? Number.MAX_SAFE_INTEGER
+  const seqOf = (e: Execution): number => e.seq ?? Number.MAX_SAFE_INTEGER
   for (const [symbol, execs] of bySymbol) {
-    execs.sort((a, b) => (a.filledAt ?? 0) - (b.filledAt ?? 0) || a.hash.localeCompare(b.hash))
+    execs.sort((a, b) => atOf(a) - atOf(b) || seqOf(a) - seqOf(b) || a.hash.localeCompare(b.hash))
     let ep: Episode | null = null
     let seq = 0
 
@@ -133,6 +144,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
       closedQty: 0,
       exitProceeds: 0,
       realizedPnl: 0,
+      fees: 0,
       openedAt: null,
       closedAt: null,
       fills: []
@@ -151,6 +163,9 @@ export function buildTrades(executions: Execution[]): Trade[] {
       const posSign = ep.direction === 'long' ? 1 : -1
       const execSign = signOf(e.side)
       ep.fills.push({ side: e.side, qty: e.qty, price: e.price, at: e.filledAt, hash: e.hash, account: e.account ?? 'default' })
+      // A fill's fees book to the episode it lands in (a fill that closes one
+      // episode and opens the next books its fee to the closing episode).
+      ep.fees += e.fees || 0
 
       if (execSign === posSign) {
         // Adding to the position (entry).
@@ -267,6 +282,8 @@ export interface Stats {
   longTrades: number
   shortTrades: number
   openCostBasis: number
+  /** commissions + fees across all trades (P&L figures are already net of it) */
+  totalFees: number
   bestSymbol: SymbolStat | null
   worstSymbol: SymbolStat | null
   maxWinStreak: number
@@ -402,6 +419,7 @@ export function computeStats(trades: Trade[]): Stats {
   }
 
   const totalRealized = grossProfit - grossLoss
+  const totalFees = trades.reduce((n, t) => n + (t.fees || 0), 0)
   const totalVolume = [...symMap.values()].reduce((n, s) => n + s.volume, 0)
   const sharesTraded = trades.reduce((n, t) => n + t.qty, 0)
   const bySymbol = [...symMap.values()].sort((a, b) => b.realizedPnl - a.realizedPnl)
@@ -431,6 +449,7 @@ export function computeStats(trades: Trade[]): Stats {
     longTrades,
     shortTrades,
     openCostBasis,
+    totalFees,
     bestSymbol: withTrades.length > 0 ? withTrades[0] : null,
     worstSymbol: withTrades.length > 0 ? withTrades[withTrades.length - 1] : null,
     maxWinStreak,

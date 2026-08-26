@@ -53,24 +53,25 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__import`,
       description:
-        'Import one or more Webull "Orders Records" CSV files by absolute path. Additive and de-duplicated: rows already present (same order fingerprint) are skipped, so re-importing overlapping reports never double-counts. Returns per-file counts and the full execution set.',
+        'Import one or more broker order/trade-history CSV files by absolute path (Webull, Robinhood, Schwab, Fidelity, Interactive Brokers, E*TRADE, tastytrade, or any generic CSV with symbol/side/qty/price/date columns — the header row is auto-detected). Additive and de-duplicated by a stable order fingerprint: rows already present are skipped, and orders that progressed since the last export (e.g. Working → Filled) are updated in place, so re-importing overlapping reports never double-counts. Optionally pass `account` (id) to import into a specific account; defaults to the Default account. Returns per-file counts (imported / updated / skipped / ignored non-trade rows / detected broker) and the full execution set.',
       inputSchema: {
         paths: z
           .array(z.string())
-          .describe('Absolute path(s) to Webull order-records .csv file(s) to import.')
+          .describe('Absolute path(s) to broker order/trade-history .csv file(s) to import.'),
+        account: z.string().optional().describe('Account id to import into (see trade-analytics__accounts). Default: "default".')
       },
-      handler: (args) => ctx.invoke(`${ID}:import-file`, args.paths)
+      handler: (args) => ctx.invoke(`${ID}:import-file`, args.paths, args.account)
     },
     {
       name: `${ID}__clear`,
       description:
-        'Delete ALL imported executions from the analytics database. Destructive (the imported history is removed — the Webull account is untouched and CSVs can be re-imported). Requires confirmation.',
+        'Delete ALL imported executions from the analytics database. Destructive (the imported history is removed — the brokerage account is untouched and CSVs can be re-imported). Requires confirmation.',
       destructive: true,
       inputSchema: { confirm: z.boolean().optional() },
       handler: (args) => {
         const gate = ctx.confirm(
           args.confirm as boolean | undefined,
-          'Delete all imported trade executions from the Trade Journal database. This clears the local analytics only (your Webull account and CSV files are untouched); you can re-import anytime.'
+          'Delete all imported trade executions from the Trade Journal database. This clears the local analytics only (your brokerage account and CSV files are untouched); you can re-import anytime.'
         )
         if (gate) return gate
         return ctx.invoke(`${ID}:clear`)

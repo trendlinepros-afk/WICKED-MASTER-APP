@@ -17,7 +17,9 @@ export interface Account {
 
 interface ImportSummary {
   imported: number
+  updated: number
   skipped: number
+  ignored: number
   files: number
 }
 
@@ -173,20 +175,31 @@ export const useTrades = create<State>((set, get) => {
     }
     const executions = Array.isArray((res as Ok).executions) ? ((res as Ok).executions as Execution[]) : get().allExecutions
     const imported = Number((res as Ok).imported) || 0
+    const updated = Number((res as Ok).updated) || 0
     const skipped = Number((res as Ok).skipped) || 0
     const crossSkipped = Number((res as Ok).crossSkipped) || 0
+    const ignored = Number((res as Ok).ignored) || 0
+    const rowErrors = Number((res as Ok).rowErrors) || 0
+    const brokers = Array.isArray((res as Ok).brokers) ? ((res as Ok).brokers as string[]) : []
     const files = Array.isArray((res as Ok).files) ? ((res as Ok).files as unknown[]).length : 1
     recompute(executions)
     await get().refreshAccounts()
     void get().loadSectors()
     void get().auditDuplicates()
-    const dupNote = crossSkipped > 0 ? ` ${crossSkipped} already in another account were kept out (accounts stay separate).` : ''
+    const brokerNote = brokers.length === 1 && brokers[0] !== 'CSV' ? ` ${brokers[0]} format detected.` : ''
+    const parts: string[] = []
+    if (imported > 0) parts.push(`${imported} new execution(s)`)
+    if (updated > 0) parts.push(`${updated} updated (order progressed since last export)`)
+    if (skipped > 0) parts.push(`${skipped} duplicate(s) skipped`)
+    if (ignored > 0) parts.push(`${ignored} non-trade row(s) ignored`)
+    if (rowErrors > 0) parts.push(`${rowErrors} unreadable row(s)`)
+    if (crossSkipped > 0) parts.push(`${crossSkipped} kept out (already in another account)`)
     set({
-      lastImport: { imported, skipped, files },
+      lastImport: { imported, updated, skipped, ignored, files },
       status:
-        imported > 0
-          ? `Imported ${imported} new execution(s)${skipped > 0 ? `, skipped ${skipped} duplicate(s)` : ''}.${dupNote}`
-          : `No new executions — all ${skipped} row(s) were already imported.${dupNote}`
+        imported > 0 || updated > 0
+          ? `Imported: ${parts.join(' · ')}.${brokerNote}`
+          : `No new executions — ${parts.length > 0 ? parts.join(' · ') : 'nothing usable in that file'}.${brokerNote}`
     })
   }
 
@@ -199,7 +212,7 @@ export const useTrades = create<State>((set, get) => {
     stats: null,
     metrics: null,
     importing: false,
-    status: 'Import your Webull order records to begin.',
+    status: 'Import your broker trade history (CSV) to begin.',
     error: '',
     lastImport: null,
     dragOver: false,
@@ -326,8 +339,8 @@ export const useTrades = create<State>((set, get) => {
 
     clearAll: async (account) => {
       const label = account
-        ? `Delete all trade data for this account? Your Webull account is untouched — you can re-import anytime.`
-        : 'Delete ALL imported trade data across every account? This only clears the analytics database — your Webull account is untouched. You can re-import your CSVs anytime.'
+        ? `Delete all trade data for this account? Your brokerage account is untouched — you can re-import anytime.`
+        : 'Delete ALL imported trade data across every account? This only clears the analytics database — your brokerage account is untouched. You can re-import your CSVs anytime.'
       if (!window.confirm(label)) return
       set({ importing: true, status: 'Clearing…', error: '' })
       try {

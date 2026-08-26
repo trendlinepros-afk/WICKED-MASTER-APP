@@ -155,7 +155,7 @@ export default function TradeReview(): React.JSX.Element {
               </span>
               <h2 className="mt-4 text-lg font-bold">Review a trading session</h2>
               <p className="mt-2 text-sm text-muted">
-                Import your Webull orders CSV (or screenshots of filled orders). Your buys and sells get
+                Import your broker orders CSV (or screenshots of filled orders). Your buys and sells get
                 mapped onto a 1-minute chart with round-trip P&amp;L, and the AI coach judges the session
                 against your trendline/swing strategy. Nothing is stored — session only.
               </p>

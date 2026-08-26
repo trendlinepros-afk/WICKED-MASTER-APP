@@ -138,7 +138,7 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
       <div className="w-full max-w-md rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
           <Upload size={15} className="text-accent" />
-          <span className="text-sm font-semibold">Import Webull CSV</span>
+          <span className="text-sm font-semibold">Import trades (CSV)</span>
           <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
             <X size={15} />
           </button>
@@ -190,7 +190,9 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
               </div>
             )}
             <p className="mt-1.5 text-[11px] text-muted">
-              Trades import only into this account and never mix with others. Re-importing skips duplicates.
+              Any broker&apos;s CSV export works (Webull, Robinhood, Schwab, Fidelity, IBKR, E*TRADE,
+              tastytrade…). Trades import only into this account and never mix with others.
+              Re-importing skips duplicates and updates orders that filled since the last export.
             </p>
           </div>
 
