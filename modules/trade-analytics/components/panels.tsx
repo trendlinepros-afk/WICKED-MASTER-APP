@@ -194,6 +194,12 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
               tastytrade, NinjaTrader…). Trades import only into this account and never mix with others.
               Re-importing skips duplicates and updates orders that filled since the last export.
             </p>
+            <p className="mt-1.5 rounded-lg bg-accent/10 px-2.5 py-1.5 text-[11px] text-muted">
+              <strong className="text-ink">NinjaTrader:</strong> for an exact match including commissions,
+              export <strong className="text-ink">Trade Performance → Display: Trades</strong> (in $ mode) and
+              import that. WICKED uses NinjaTrader&apos;s own net P&amp;L and commission, so the numbers
+              reconcile to the cent. The Orders/Executions grids have no fee data.
+            </p>
           </div>
 
           <button

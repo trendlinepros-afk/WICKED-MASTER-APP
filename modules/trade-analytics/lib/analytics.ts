@@ -44,8 +44,10 @@ export interface Trade {
   costBasis: number
   /** realized P&L NET of this episode's commissions/fees */
   realizedPnl: number
-  /** commissions + fees across this episode's fills (0 for fee-free brokers) */
+  /** total cost (commission + fees) across this episode's fills; reduces P&L */
   fees: number
+  /** the commission-only portion of `fees` (for reporting) */
+  commission: number
   /** dollars per 1.0 price move per unit (1 for equities; ES future = 50) */
   multiplier: number
   /** realized P&L as % of the closed cost basis */
@@ -76,7 +78,8 @@ interface Episode {
   closedQty: number
   exitProceeds: number // sum(exitPrice*qty) over closed
   realizedPnl: number
-  fees: number // commissions + fees across this episode's fills
+  fees: number // total cost (commission + fees) across this episode's fills
+  commission: number // commission-only portion of fees
   multiplier: number // futures point value ($/point/contract); 1 for equities
   openedAt: number | null
   closedAt: number | null
@@ -104,6 +107,7 @@ function toTrade(ep: Episode, seq: number): Trade {
     costBasis: avgEntry * ep.entryQty * ep.multiplier,
     realizedPnl: netPnl,
     fees: ep.fees,
+    commission: ep.commission,
     multiplier: ep.multiplier,
     realizedPct: closedCost > 0 ? (netPnl / closedCost) * 100 : 0,
     openedAt: ep.openedAt,
@@ -149,6 +153,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
       exitProceeds: 0,
       realizedPnl: 0,
       fees: 0,
+      commission: 0,
       multiplier: multiplier || 1,
       openedAt: null,
       closedAt: null,
@@ -171,6 +176,7 @@ export function buildTrades(executions: Execution[]): Trade[] {
       // A fill's fees book to the episode it lands in (a fill that closes one
       // episode and opens the next books its fee to the closing episode).
       ep.fees += e.fees || 0
+      ep.commission += e.commission || 0
 
       if (execSign === posSign) {
         // Adding to the position (entry).
@@ -289,8 +295,10 @@ export interface Stats {
   longTrades: number
   shortTrades: number
   openCostBasis: number
-  /** commissions + fees across all trades (P&L figures are already net of it) */
+  /** total cost (commission + fees) across all trades — P&L is already net of it */
   totalFees: number
+  /** commission-only portion of totalFees */
+  totalCommission: number
   bestSymbol: SymbolStat | null
   worstSymbol: SymbolStat | null
   maxWinStreak: number
@@ -427,6 +435,7 @@ export function computeStats(trades: Trade[]): Stats {
 
   const totalRealized = grossProfit - grossLoss
   const totalFees = trades.reduce((n, t) => n + (t.fees || 0), 0)
+  const totalCommission = trades.reduce((n, t) => n + (t.commission || 0), 0)
   const totalVolume = [...symMap.values()].reduce((n, s) => n + s.volume, 0)
   const sharesTraded = trades.reduce((n, t) => n + t.qty, 0)
   const bySymbol = [...symMap.values()].sort((a, b) => b.realizedPnl - a.realizedPnl)
@@ -457,6 +466,7 @@ export function computeStats(trades: Trade[]): Stats {
     shortTrades,
     openCostBasis,
     totalFees,
+    totalCommission,
     bestSymbol: withTrades.length > 0 ? withTrades[0] : null,
     worstSymbol: withTrades.length > 0 ? withTrades[withTrades.length - 1] : null,
     maxWinStreak,

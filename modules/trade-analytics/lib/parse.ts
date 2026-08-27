@@ -61,8 +61,10 @@ export interface Execution {
   price: number
   avgPrice: number
   limitPrice: number
-  /** commissions + fees for this row (0 when the export has no fee columns) */
+  /** TOTAL cost that reduces P&L for this row: commission + exchange/reg fees */
   fees: number
+  /** the commission-only portion of `fees` (≤ fees), for reporting; 0 if unknown */
+  commission: number
   /**
    * Dollars per 1.0 price move per contract/share (1 for equities). Set from
    * the contract root for futures instruments ("ES 09-26" → $50/pt), so P&L
@@ -344,7 +346,13 @@ const HEADER_ALIASES: Record<string, string[]> = {
   exitPrice: ['exit price'],
   entryTime: ['entry time'],
   exitTime: ['exit time'],
-  marketPos: ['market pos.', 'market pos', 'market position']
+  marketPos: ['market pos.', 'market pos', 'market position'],
+  // Authoritative net P&L per trade (NinjaTrader Trade Performance): "Cum. net
+  // profit" is the running NET total — differencing consecutive rows gives each
+  // trade's exact net, which we honor verbatim so WICKED matches the platform.
+  profit: ['profit', 'net profit', 'realized pnl', 'realized p/l', 'pnl'],
+  cumNetProfit: ['cum. net profit', 'cum net profit', 'cumulative net profit', 'cum. profit', 'cum profit'],
+  tradeNumber: ['trade number', 'trade #', 'trade no.', 'trade no']
 }
 
 function buildColMap(header: string[]): Record<string, number> {
@@ -492,8 +500,16 @@ export function parseBrokerCsv(text: string): ParseResult {
 
   /* ---- round-trip "trade list" layout (NinjaTrader Trade Performance) ----
    * One row = a whole trade with entry AND exit — split into two executions
-   * so the FIFO engine, stats and editing all work exactly like fill imports. */
+   * so the FIFO engine, stats and editing all work exactly like fill imports.
+   *
+   * When the export carries NinjaTrader's own P&L — "Cum. net profit" (running
+   * NET total, differenced per row) or a per-trade "Profit" — we HONOR IT: the
+   * trade's cost is set to (our gross price P&L − that net) so WICKED's realized
+   * P&L equals the platform's to the cent, and any "Commission" column is kept
+   * as the commission-only portion so the split matches too. This is the report
+   * that reconciles 1:1 with NinjaTrader. */
   if (col.entryPrice !== undefined && col.exitPrice !== undefined) {
+    let prevCum: number | null = null
     for (const row of pre) {
       const { line, f } = row
       const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
@@ -515,9 +531,35 @@ export function parseBrokerCsv(text: string): ParseResult {
         continue
       }
       const multiplier = futuresMultiplier(symbol)
-      const rowFees = Math.abs(num(get('commission'))) + Math.abs(num(get('fees')))
       const hasExit = exitPrice > 0 && !!exitTime.trim()
-      const feeEach = hasExit ? rowFees / 2 : rowFees
+
+      // Authoritative net P&L for this trade, if the report provides it.
+      let net: number | null = null
+      if (col.cumNetProfit !== undefined && get('cumNetProfit').trim() !== '') {
+        const cum = num(get('cumNetProfit'))
+        net = prevCum == null ? cum : cum - prevCum
+        prevCum = cum
+      } else if (col.profit !== undefined && get('profit').trim() !== '') {
+        net = num(get('profit'))
+      }
+      const grossPnl = (dir === 'long' ? exitPrice - entryPrice : entryPrice - exitPrice) * qty * multiplier
+
+      // Total cost (commission + fees) = gross − net when net is known; else fall
+      // back to any explicit Commission/Fees columns.
+      const commissionCol = Math.abs(num(get('commission')))
+      const feesCol = Math.abs(num(get('fees')))
+      let totalCost: number
+      if (net != null && hasExit) {
+        totalCost = grossPnl - net
+        if (Math.abs(totalCost) < 0.005) totalCost = 0 // float dust
+        totalCost = Math.max(0, totalCost)
+      } else {
+        totalCost = commissionCol + feesCol
+      }
+      const commission = Math.min(commissionCol, totalCost)
+
+      const costEach = hasExit ? totalCost / 2 : totalCost
+      const commEach = hasExit ? commission / 2 : commission
       const mk = (side: Side, price: number, when: string): Execution => {
         const e: Execution = {
           hash: '',
@@ -532,7 +574,8 @@ export function parseBrokerCsv(text: string): ParseResult {
           price,
           avgPrice: price,
           limitPrice: price,
-          fees: feeEach,
+          fees: costEach,
+          commission: commEach,
           multiplier,
           timeInForce: '',
           placedText: when,
@@ -607,7 +650,8 @@ export function parseBrokerCsv(text: string): ParseResult {
       continue
     }
 
-    const fees = Math.abs(num(get('commission'))) + Math.abs(num(get('fees')))
+    const commission = Math.abs(num(get('commission')))
+    const fees = commission + Math.abs(num(get('fees')))
     const placedText = get('placed')
     const filledText = get('filledTime')
     const e: Execution = {
@@ -624,6 +668,7 @@ export function parseBrokerCsv(text: string): ParseResult {
       avgPrice,
       limitPrice,
       fees,
+      commission,
       multiplier: futuresMultiplier(symbol),
       timeInForce: get('tif'),
       placedText,

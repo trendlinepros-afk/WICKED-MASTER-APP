@@ -52,12 +52,25 @@ destination account) or **drag the file** onto the window. The parser
   day that is −$128.25 gross becomes −$205.79 (matching NinjaTrader's Trade
   Performance) at ≈ $0.90/ct·side. Leave it 0 for commission-free brokers or
   files that already include fees.
-- **NinjaTrader** exports work from all three grids: **Executions** and
-  **Orders** (their per-row **ID** column becomes the de-dup identity, so
-  Accepted → Filled re-exports update in place), and the **Trade Performance**
-  grid, where each row is a whole round trip — it's split into entry + exit
-  executions so FIFO, stats and editing behave exactly like fill imports
-  (round-trip commission split across the two legs).
+- **NinjaTrader — use the Trade Performance report for a 1:1 match.** The
+  Orders/Executions grids carry **no commission or fee data**, so P&L from them
+  is gross. The **Trade Performance → Trades** export includes NinjaTrader's own
+  **Cum. net profit** and **Commission** columns, and WICKED **honors them
+  verbatim**: each trade's realized P&L is set to NinjaTrader's net (via the
+  cumulative-net difference, falling back to a per-trade Profit column), and the
+  Commission column is captured so the commission/fee split matches too. Result:
+  realized P&L, commissions, and fees reconcile to NinjaTrader **to the cent**.
+  How to export it:
+  1. In NinjaTrader, **Control Center → New → Trade Performance** (or the
+     **Analyze** tab). Pick the account and date range and click **Generate**.
+  2. Set the **Display** dropdown to **Trades** (a per-trade grid), in **$**
+     (currency) mode.
+  3. **Right-click the grid → Export… → CSV**, then import that file here.
+
+  The Orders and Executions grids still import (their per-row **ID** is the
+  de-dup identity, so Accepted → Filled re-exports update in place), but they
+  can't include commissions — use them only if you don't need cost accuracy, or
+  set a per-account rate (below).
 - **Futures point values.** An instrument in NinjaTrader's `ROOT MM-YY` form
   (`ES 09-26`, `MNQ 12-25`…) gets its contract multiplier applied to P&L and
   cost basis — ES $50/pt, NQ $20, MES $5, CL $1000, GC $100, and ~60 other
@@ -111,8 +124,12 @@ cross-checked by hand).
 
 ## Tabs
 
-- **Overview** — KPI tiles, equity curve, win/loss donut, avg win/loss, streaks,
-  long-vs-short, volume, best/worst symbol.
+- **Overview** — KPI tiles, equity curve, a **Commissions & fees paid** card
+  (latest day / last 7 / 30 / 365 days, lifetime total, per-day/month/year
+  averages, and the commission-vs-fee split when the import provides it),
+  win/loss donut, avg win/loss, streaks, long-vs-short, volume, best/worst
+  symbol. Filter the account bar to see one account's cost; realized P&L is
+  always shown net of commissions & fees.
 - **Trades** — every round-trip trade (open ones flagged), entry/exit/hold/P&L.
   Hover a row to **edit** or **delete** it, or use **Add trade** to enter one by
   hand (symbol, direction, qty, entry/exit price + ET time, optional partial

@@ -86,6 +86,9 @@ function OverviewTab(): React.JSX.Element {
         <EquityCurve points={stats.equityCurve.map((p) => ({ at: p.at, value: p.cumulative }))} />
       </div>
 
+      {/* commissions & fees paid */}
+      <CommissionsCard />
+
       {/* market sector P&L */}
       <SectorCard />
 
@@ -122,6 +125,54 @@ function OverviewTab(): React.JSX.Element {
           <Row label="Best / worst" value={`${stats.bestSymbol?.symbol ?? '—'} / ${stats.worstSymbol?.symbol ?? '—'}`} />
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Commissions & fees paid, by period — money spent trading (P&L is net of it). */
+function CommissionsCard(): React.JSX.Element | null {
+  const m = useTrades((s) => s.metrics)
+  if (!m || m.totalFees <= 0.005) return null
+  const feeOnly = Math.max(0, m.totalFees - m.totalCommission)
+  const Tile = ({ label, value }: { label: string; value: number }): React.JSX.Element => (
+    <div className="rounded-lg border border-edge bg-raised/40 p-2.5">
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className="mt-0.5 text-lg font-bold tabular-nums text-danger">{money(value)}</div>
+    </div>
+  )
+  return (
+    <div className="rounded-xl border border-edge bg-surface p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">Commissions &amp; fees paid</h3>
+        <span className="text-sm font-semibold text-danger">{money(m.totalFees)} lifetime</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <Tile label="Latest day" value={m.feesLastDay} />
+        <Tile label="Last 7 days" value={m.feesLastWeek} />
+        <Tile label="Last 30 days" value={m.feesLastMonth} />
+        <Tile label="Last 365 days" value={m.feesLastYear} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted">
+        <span>
+          Avg / day <strong className="text-ink">{money(m.feesPerDay)}</strong>
+        </span>
+        <span>
+          Avg / month <strong className="text-ink">{money(m.feesPerMonth)}</strong>
+        </span>
+        <span>
+          Avg / year <strong className="text-ink">{money(m.feesPerYear)}</strong>
+        </span>
+        {m.totalCommission > 0.005 && (
+          <span>
+            Commission <strong className="text-ink">{money(m.totalCommission)}</strong> · Exchange/reg fees{' '}
+            <strong className="text-ink">{money(feeOnly)}</strong>
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-[11px] text-muted">
+        Realized P&amp;L above is already net of these. Periods count back from your most recent trade. Filter the
+        account bar to see a single account&apos;s cost.
+      </p>
     </div>
   )
 }

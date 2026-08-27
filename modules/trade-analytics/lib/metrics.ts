@@ -25,6 +25,8 @@ export interface MetricBucket {
   losses: number
   volume: number // summed cost basis
   shares: number
+  fees: number // total cost (commission + fees) for trades in this bucket
+  commission: number // commission-only portion of fees
 }
 
 const emptyBucket = (label: string): MetricBucket => ({
@@ -34,7 +36,9 @@ const emptyBucket = (label: string): MetricBucket => ({
   wins: 0,
   losses: 0,
   volume: 0,
-  shares: 0
+  shares: 0,
+  fees: 0,
+  commission: 0
 })
 
 function addToBucket(b: MetricBucket, t: Trade): void {
@@ -44,6 +48,8 @@ function addToBucket(b: MetricBucket, t: Trade): void {
   else if (t.realizedPnl < -1e-6) b.losses += 1
   b.volume += t.costBasis
   b.shares += t.qty
+  b.fees += t.fees || 0
+  b.commission += t.commission || 0
 }
 
 /** Ranges are [min, maxExclusive); the last has max = Infinity. */
@@ -174,10 +180,20 @@ export interface PeriodAvg {
 }
 
 export interface TradeMetrics {
-  // TOTALS (no commission/deposit data → gross = net = realized)
+  // TOTALS
   totalPnl: number
   onlyProfit: number
   onlyLoss: number
+  // COMMISSIONS & FEES (money spent trading — deducted from P&L above)
+  totalFees: number // total cost = commission + exchange/reg fees
+  totalCommission: number // commission-only portion
+  feesLastDay: number
+  feesLastWeek: number
+  feesLastMonth: number
+  feesLastYear: number
+  feesPerDay: number // average per trading day
+  feesPerMonth: number
+  feesPerYear: number
   // EXTREMES
   bestTrade: number
   worstTrade: number
@@ -238,7 +254,7 @@ export interface TradeMetrics {
   longestDrawdownDays: number // longest run of consecutive days under water
   dailyStdev: number // std-dev of daily P&L (consistency)
   // per-day P&L for the calendar heatmap
-  daily: { date: string; pnl: number; trades: number; wins: number; losses: number }[]
+  daily: { date: string; pnl: number; trades: number; wins: number; losses: number; fees: number }[]
   // per-trade P&L histogram
   pnlDistribution: MetricBucket[]
   // weekday × hour P&L heatmap ([dow 0-6][hour 0-23])
@@ -364,9 +380,16 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
   const latest = closed.reduce((m, t) => Math.max(m, t.closedAt as number), 0)
   const windowSum = (ms: number): number =>
     closed.reduce((n, t) => ((latest - (t.closedAt as number)) <= ms ? n + t.realizedPnl : n), 0)
+  const windowFees = (ms: number): number =>
+    closed.reduce((n, t) => ((latest - (t.closedAt as number)) <= ms ? n + (t.fees || 0) : n), 0)
   const DAY = 86400_000
   const lastDayAnchor = latest ? etParts(latest).ymd : ''
   const lastDay = closed.reduce((n, t) => (etParts(t.closedAt as number).ymd === lastDayAnchor ? n + t.realizedPnl : n), 0)
+  const feesLastDay = closed.reduce((n, t) => (etParts(t.closedAt as number).ymd === lastDayAnchor ? n + (t.fees || 0) : n), 0)
+
+  // commissions & fees — money spent trading (P&L above is already net of it)
+  const totalFees = closed.reduce((n, t) => n + (t.fees || 0), 0)
+  const totalCommission = closed.reduce((n, t) => n + (t.commission || 0), 0)
 
   // averages
   const totalCost = closed.reduce((n, t) => n + t.costBasis, 0)
@@ -417,7 +440,7 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
   // per-day P&L (calendar), P&L histogram, and daily-P&L std-dev (consistency)
   const daily = [...dayMap.values()]
     .sort((a, b) => (a.label < b.label ? -1 : 1))
-    .map((b) => ({ date: b.label, pnl: b.pnl, trades: b.trades, wins: b.wins, losses: b.losses }))
+    .map((b) => ({ date: b.label, pnl: b.pnl, trades: b.trades, wins: b.wins, losses: b.losses, fees: b.fees }))
   const pnlDistribution = bucketByRange(closed, PNL_RANGES, (t) => t.realizedPnl)
   const dayVals = [...dayPnl.values()]
   const dayMean = dayVals.length ? dayVals.reduce((n, v) => n + v, 0) / dayVals.length : 0
@@ -429,6 +452,15 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     totalPnl,
     onlyProfit,
     onlyLoss,
+    totalFees,
+    totalCommission,
+    feesLastDay,
+    feesLastWeek: windowFees(7 * DAY),
+    feesLastMonth: windowFees(30 * DAY),
+    feesLastYear: windowFees(365 * DAY),
+    feesPerDay: tradingDays ? totalFees / tradingDays : 0,
+    feesPerMonth: tradingMonths ? totalFees / tradingMonths : 0,
+    feesPerYear: tradingYears ? totalFees / tradingYears : 0,
     bestTrade: nClosed ? bestTrade : 0,
     worstTrade: nClosed ? worstTrade : 0,
     bestDay,
