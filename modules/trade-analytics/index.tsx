@@ -177,11 +177,13 @@ function CommissionsCard({ onManage }: { onManage: () => void }): React.JSX.Elem
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs">
           <AlertTriangle size={14} className="shrink-0 text-warn" />
           <span className="min-w-0 flex-1">
-            This import has commission but <strong>$0.00 exchange/reg fees</strong> — NinjaTrader&apos;s
-            Executions/Orders exports don&apos;t include the platform&apos;s separate &quot;Total Fees&quot; line, so
-            your net P&amp;L reads high by that amount. Set the account&apos;s{' '}
-            <strong>$/ct·side</strong> rate (NinjaTrader report&apos;s Total Fees ÷ contracts traded) and P&amp;L
-            reprices instantly.
+            Commission ({money(m.totalCommission)}) imported fine, but this file has <strong>$0.00
+            exchange/reg fees</strong>. NinjaTrader&apos;s Executions/Orders grids only carry a Commission
+            column — the platform&apos;s separate &quot;Total Fees&quot; line isn&apos;t in the file, so net P&amp;L
+            reads high by that amount. Two fixes: <strong>(A)</strong> re-export as{' '}
+            <strong>Trade Performance → Trades</strong> (its net already includes fees — matches to the cent, no
+            setup), or <strong>(B)</strong> set the account&apos;s <strong>$/ct·side</strong> rate here (your
+            report&apos;s Total Fees ÷ contract-sides traded) to reprice instantly.
           </span>
           <button
             onClick={onManage}
