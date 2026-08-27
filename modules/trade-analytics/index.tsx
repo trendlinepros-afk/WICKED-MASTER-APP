@@ -64,7 +64,7 @@ function Stat({
 
 /* ------------------------------- overview -------------------------------- */
 
-function OverviewTab(): React.JSX.Element {
+function OverviewTab({ onManage }: { onManage: () => void }): React.JSX.Element {
   const stats = useTrades((s) => s.stats)
   if (!stats) return <div className="p-8 text-sm text-muted">No data.</div>
 
@@ -87,7 +87,7 @@ function OverviewTab(): React.JSX.Element {
       </div>
 
       {/* commissions & fees paid */}
-      <CommissionsCard />
+      <CommissionsCard onManage={onManage} />
 
       {/* market sector P&L */}
       <SectorCard />
@@ -130,10 +130,14 @@ function OverviewTab(): React.JSX.Element {
 }
 
 /** Commissions & fees paid, by period — money spent trading (P&L is net of it). */
-function CommissionsCard(): React.JSX.Element | null {
+function CommissionsCard({ onManage }: { onManage: () => void }): React.JSX.Element | null {
   const m = useTrades((s) => s.metrics)
   if (!m || m.totalFees <= 0.005) return null
   const feeOnly = Math.max(0, m.totalFees - m.totalCommission)
+  // Commission present but $0.00 exchange/reg fees = a NinjaTrader
+  // Executions/Orders-style import whose file omits the platform's separate
+  // fee line — the per-account rate is the missing step, so say so loudly.
+  const missingFees = m.totalCommission > 0.005 && feeOnly < 0.005
   const Tile = ({ label, value }: { label: string; value: number }): React.JSX.Element => (
     <div className="rounded-lg border border-edge bg-raised/40 p-2.5">
       <div className="text-[11px] text-muted">{label}</div>
@@ -169,6 +173,24 @@ function CommissionsCard(): React.JSX.Element | null {
           </span>
         )}
       </div>
+      {missingFees && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs">
+          <AlertTriangle size={14} className="shrink-0 text-warn" />
+          <span className="min-w-0 flex-1">
+            This import has commission but <strong>$0.00 exchange/reg fees</strong> — NinjaTrader&apos;s
+            Executions/Orders exports don&apos;t include the platform&apos;s separate &quot;Total Fees&quot; line, so
+            your net P&amp;L reads high by that amount. Set the account&apos;s{' '}
+            <strong>$/ct·side</strong> rate (NinjaTrader report&apos;s Total Fees ÷ contracts traded) and P&amp;L
+            reprices instantly.
+          </span>
+          <button
+            onClick={onManage}
+            className="shrink-0 rounded-lg bg-warn px-3 py-1.5 text-xs font-semibold text-bg hover:opacity-90"
+          >
+            Set fee rate
+          </button>
+        </div>
+      )}
       <p className="mt-2 text-[11px] text-muted">
         Realized P&amp;L above is already net of these. Periods count back from your most recent trade. Filter the
         account bar to see a single account&apos;s cost.
@@ -908,7 +930,7 @@ export default function TradeAnalytics(): React.JSX.Element {
           <SectorDetail />
         ) : (
           <>
-            {s.tab === 'overview' && <OverviewTab />}
+            {s.tab === 'overview' && <OverviewTab onManage={() => setManageOpen(true)} />}
             {s.tab === 'calendar' && <CalendarTab />}
             {s.tab === 'stats' && <StatsTab />}
             {s.tab === 'breakdown' && <BreakdownTab />}
