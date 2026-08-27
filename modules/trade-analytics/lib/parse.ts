@@ -273,14 +273,32 @@ const FUTURES_POINT_VALUE: Record<string, number> = {
 }
 
 /**
- * Point value for a symbol — but ONLY when it is unambiguously a futures
- * contract in NinjaTrader's "ROOT MM-YY" form. A bare stock ticker never
- * matches (CL the stock is Colgate; CL the future is crude oil).
+ * Contract root for a symbol — but ONLY when it is unambiguously a futures
+ * contract: NinjaTrader's "ROOT MM-YY" ("MES 09-26") or "ROOT MMMYY"
+ * ("MES SEP26" / "MES SEP 26") forms, or the compact exchange code
+ * ("MESU6" / "ESZ25") when the root is a KNOWN futures root. A bare stock
+ * ticker never matches (CL the stock is Colgate; CL the future is crude oil).
  */
+const FUT_SPACED = /^([A-Z0-9]{1,4})\s+(?:\d{2}-\d{2}|(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s?\d{2,4})$/
+const FUT_CODE = /^([A-Z0-9]{1,4})[FGHJKMNQUVXZ]\d{1,2}$/
+
+function futuresRoot(symbol: string): string | null {
+  const spaced = symbol.match(FUT_SPACED)
+  if (spaced) return spaced[1]
+  const code = symbol.match(FUT_CODE)
+  if (code && FUTURES_POINT_VALUE[code[1]] !== undefined) return code[1]
+  return null
+}
+
+/** True when the symbol is a recognizable futures contract (any root). */
+export function isFuturesInstrument(symbol: string): boolean {
+  return futuresRoot(symbol) != null
+}
+
+/** Point value for a futures contract symbol; 1 for everything else. */
 export function futuresMultiplier(symbol: string): number {
-  const m = symbol.match(/^([A-Z0-9]{1,4})\s+\d{2}-\d{2}$/)
-  if (!m) return 1
-  return FUTURES_POINT_VALUE[m[1]] ?? 1
+  const root = futuresRoot(symbol)
+  return root ? FUTURES_POINT_VALUE[root] ?? 1 : 1
 }
 
 /* -------------------------------- headers ---------------------------------- */
@@ -293,7 +311,7 @@ const HEADER_ALIASES: Record<string, string[]> = {
   status: ['status', 'order status', 'state'],
   filled: ['filled', 'filled qty', 'filledqty', 'filled quantity', 'executed qty', 'exec qty'],
   totalQty: ['total qty', 'totalqty', 'quantity', 'qty', 'shares', 'number of shares', 'no. of shares'],
-  price: ['price', 't. price', 'trade price', 'price ($)', 'execution price', 'fill price', 'price per share'],
+  price: ['price', 't. price', 'trade price', 'price ($)', 'execution price', 'fill price', 'price per share', 'limit price', 'limit'],
   avgPrice: ['avg price', 'avg. price', 'avgprice', 'average price', 'avg fill price', 'avg. fill price', 'average fill price'],
   commission: ['commission', 'commissions', 'commission ($)', 'comm/fee', 'fees & comm', 'commissions & fees', 'comm'],
   fees: ['fees', 'fee', 'fees ($)', 'reg fee', 'regulatory fees', 'other fees'],
