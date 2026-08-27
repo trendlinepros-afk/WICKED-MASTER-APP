@@ -456,9 +456,17 @@ export function parseBrokerCsv(text: string): ParseResult {
   const rawLines = text.replace(/^\uFEFF/, '').split(/\r?\n/)
   const picked = findHeader(rawLines)
   if (!picked) {
+    // A NinjaTrader "Summary" export has aggregate stats, not per-trade rows —
+    // point the user at the right report instead of a generic parse error.
+    const head = text.slice(0, 2000).toLowerCase()
+    const isNtSummary =
+      /total net profit/.test(head) && (/profit factor/.test(head) || /gross profit/.test(head)) && /commission/.test(head)
+    const reason = isNtSummary
+      ? 'That is the NinjaTrader "Summary" report — it has totals only, no per-trade rows to import. In Trade Performance, set the Display dropdown to "Trades" (or "Executions") and export THAT instead.'
+      : 'No recognizable header row (need at least Symbol/Instrument plus a Side/Action or Quantity column).'
     return {
       executions: [],
-      errors: [{ line: 1, reason: 'No recognizable header row (need at least Symbol plus a Side/Action or Quantity column).' }],
+      errors: [{ line: 1, reason }],
       columns: [],
       broker: 'CSV',
       ignored: 0

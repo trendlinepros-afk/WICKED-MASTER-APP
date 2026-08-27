@@ -67,10 +67,25 @@ destination account) or **drag the file** onto the window. The parser
      (currency) mode.
   3. **Right-click the grid → Export… → CSV**, then import that file here.
 
-  The Orders and Executions grids still import (their per-row **ID** is the
-  de-dup identity, so Accepted → Filled re-exports update in place), but they
-  can't include commissions — use them only if you don't need cost accuracy, or
-  set a per-account rate (below).
+  **Prefer per-fill detail?** The **Executions** display (Trade Performance →
+  Display: **Executions**, or Control Center → **Executions** tab → right-click →
+  Export) gives one row per individual fill — instrument, exact fill time,
+  price, quantity **and a Commission column** — and WICKED imports it natively
+  (the per-fill **ID** is the de-dup key). If your NinjaTrader commission
+  template is all-in, this matches the platform exactly *and* keeps every fill's
+  timestamp. If your setup itemizes exchange/reg fees separately from commission
+  (the Trade Performance summary shows a non-zero **"Total Fees"** line), the
+  Executions grid captures only the commission part — use the **Trades** display
+  for a guaranteed to-the-cent match in that case.
+
+  The **Orders** grid also imports but has **no** commission column at all — use
+  it only when you don't need cost accuracy, or pair it with a per-account rate
+  (below).
+
+  ⚠️ The **Summary** display is aggregate totals only (no per-trade rows) — it
+  can't be imported; WICKED will tell you to switch to Trades/Executions.
+  Import Trades **or** Executions **or** Orders for a given period into one
+  account — not more than one — or the same trades would count twice.
 - **Futures point values.** An instrument in NinjaTrader's `ROOT MM-YY` form
   (`ES 09-26`, `MNQ 12-25`…) gets its contract multiplier applied to P&L and
   cost basis — ES $50/pt, NQ $20, MES $5, CL $1000, GC $100, and ~60 other

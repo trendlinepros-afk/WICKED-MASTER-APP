@@ -186,7 +186,12 @@ export const useTrades = create<State>((set, get) => {
     const ignored = Number((res as Ok).ignored) || 0
     const rowErrors = Number((res as Ok).rowErrors) || 0
     const brokers = Array.isArray((res as Ok).brokers) ? ((res as Ok).brokers as string[]) : []
+    const errorSample = Array.isArray((res as Ok).errorSample) ? ((res as Ok).errorSample as string[]) : []
     const files = Array.isArray((res as Ok).files) ? ((res as Ok).files as unknown[]).length : 1
+    // Nothing landed AND the file had a problem → surface the reason prominently.
+    if (imported === 0 && updated === 0 && skipped === 0 && errorSample.length > 0) {
+      set({ error: errorSample[0].replace(/^line \d+:\s*/, '') })
+    }
     recompute(executions)
     await get().refreshAccounts()
     void get().loadSectors()
