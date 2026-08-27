@@ -285,7 +285,7 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
               />
               <label
                 className="flex shrink-0 items-center gap-1 rounded-lg border border-edge/60 bg-raised/40 px-1.5 py-0.5"
-                title="Commission + fees per contract/share, per fill (entry and exit are each charged). Applied to imports whose CSV has no fee column — e.g. NinjaTrader's Orders grid — so P&L matches your platform. Leave 0 for commission-free brokers or files that already include fees."
+                title="Cost per contract/share, per fill (entry and exit are each charged). Files with NO cost data (NinjaTrader Orders grid) get this as their full cost; files with commission but no exchange/reg fees (NinjaTrader Executions grid) get it ADDED on top. Leave 0 for commission-free brokers or files that already include the complete cost (Trade Performance, Schwab)."
               >
                 <span className="text-[11px] text-muted">$</span>
                 <input
@@ -342,10 +342,10 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
           Imports never mix between accounts — each account is matched into round trips on its own. Deleting an
           account also deletes its imported trades.
           <br />
-          <strong className="text-ink">$/ct·side</strong> is your commission + fees per contract (or share), charged
-          on <em>every</em> fill — so a round trip pays it twice. It only applies to imports whose file has no fee
-          column (like NinjaTrader&apos;s Orders grid); set it so realized P&L matches your platform&apos;s net, or
-          leave 0.
+          <strong className="text-ink">$/ct·side</strong> is a cost per contract (or share) charged on <em>every</em>{' '}
+          fill — a round trip pays it twice. Files with <em>no</em> cost data (NinjaTrader Orders grid) get it as
+          their full cost; files with commission but missing exchange/reg fees (NinjaTrader Executions grid) get it{' '}
+          <em>added on top</em>. Leave 0 for files that already carry the complete cost (Trade Performance, Schwab).
         </p>
       </div>
     </div>

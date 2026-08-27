@@ -41,17 +41,24 @@ destination account) or **drag the file** onto the window. The parser
 - **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade/NinjaTrader
   Trade Performance…) are captured per fill; every P&L figure is **net of fees**
   (Webull's export has no fee column, so nothing changes there).
-- **Commission for files without a fee column.** Some exports — notably
-  **NinjaTrader's Orders/Executions grids** — carry no commission or fee data at
-  all, so imported P&L is *gross* (price-only) and won't match your platform's
-  net. In **Manage Accounts**, set a per-account **$/ct·side** — your commission
-  plus fees per contract (or share), charged on every fill (a round trip pays it
-  twice). Realized P&L reprices instantly, so you can dial it until it matches
-  your broker's net. It only applies to fills that don't already carry an
-  imported fee, so it never double-charges. Example: a NinjaTrader Orders-grid
-  day that is −$128.25 gross becomes −$205.79 (matching NinjaTrader's Trade
-  Performance) at ≈ $0.90/ct·side. Leave it 0 for commission-free brokers or
-  files that already include fees.
+- **The per-account $/ct·side rate (Manage Accounts)** fills in cost data an
+  export omits, charged per contract (or share) on every fill (a round trip
+  pays it twice). Realized P&L reprices instantly, so you can dial it until it
+  matches your broker's net. Two behaviors:
+  - a file with **no cost columns at all** (NinjaTrader **Orders** grid) gets
+    the rate as its **full** per-fill cost;
+  - a file with **commission but not exchange/reg fees** (NinjaTrader
+    **Executions** grid — its Commission column omits NT's separate "Total
+    Fees" line) gets the rate **added on top**, filling in just the missing
+    fee portion.
+  Leave it 0 for commission-free brokers and for files that already carry the
+  **complete** cost (NinjaTrader Trade Performance's net, Schwab's Fees & Comm)
+  — the rate would over-charge those. To find your rate: NinjaTrader's Trade
+  Performance summary shows "Total Fees" — divide it by the contract-sides
+  traded in the period (e.g. $46.20 over 90 sides → 0.5133). Exchange fee
+  schedules can change over time, so a flat rate reconciles period totals to
+  the cent while individual days may drift by pennies; the Trades-display
+  export remains the only file that is exact per-trade.
 - **NinjaTrader — use the Trade Performance report for a 1:1 match.** The
   Orders/Executions grids carry **no commission or fee data**, so P&L from them
   is gross. The **Trade Performance → Trades** export includes NinjaTrader's own
