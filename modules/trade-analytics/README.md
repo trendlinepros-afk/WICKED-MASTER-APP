@@ -38,9 +38,20 @@ destination account) or **drag the file** onto the window. The parser
   ignored` per import. (Databases from older builds are migrated to this
   fingerprint on first launch, and duplicates the old scheme created are
   collapsed automatically — keeping the most-progressed copy of each order.)
-- **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade/NinjaTrader…)
-  are captured per fill; every P&L figure is **net of fees** (Webull's export
-  has no fee column, so nothing changes there).
+- **Fees & commissions** columns (Schwab/Fidelity/IBKR/tastytrade/NinjaTrader
+  Trade Performance…) are captured per fill; every P&L figure is **net of fees**
+  (Webull's export has no fee column, so nothing changes there).
+- **Commission for files without a fee column.** Some exports — notably
+  **NinjaTrader's Orders/Executions grids** — carry no commission or fee data at
+  all, so imported P&L is *gross* (price-only) and won't match your platform's
+  net. In **Manage Accounts**, set a per-account **$/ct·side** — your commission
+  plus fees per contract (or share), charged on every fill (a round trip pays it
+  twice). Realized P&L reprices instantly, so you can dial it until it matches
+  your broker's net. It only applies to fills that don't already carry an
+  imported fee, so it never double-charges. Example: a NinjaTrader Orders-grid
+  day that is −$128.25 gross becomes −$205.79 (matching NinjaTrader's Trade
+  Performance) at ≈ $0.90/ct·side. Leave it 0 for commission-free brokers or
+  files that already include fees.
 - **NinjaTrader** exports work from all three grids: **Executions** and
   **Orders** (their per-row **ID** column becomes the de-dup identity, so
   Accepted → Filled re-exports update in place), and the **Trade Performance**

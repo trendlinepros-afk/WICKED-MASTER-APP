@@ -13,6 +13,8 @@ export interface Account {
   name: string
   createdAt: number
   executions: number
+  /** commission+fee applied per contract/share per fill ($); 0 = none */
+  feePerContract: number
 }
 
 interface ImportSummary {
@@ -143,6 +145,7 @@ interface State {
   refreshAccounts: () => Promise<void>
   createAccount: (name: string) => Promise<string | null>
   renameAccount: (id: string, name: string) => Promise<void>
+  setAccountFee: (id: string, feePerContract: number) => Promise<void>
   deleteAccount: (id: string) => Promise<void>
   importDialog: (account?: string) => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
@@ -303,6 +306,20 @@ export const useTrades = create<State>((set, get) => {
       const res = (await invoke('accounts-rename', { id, name })) as Res & { accounts?: Account[] }
       if (res.ok === true) set({ accounts: res.accounts ?? get().accounts })
       else set({ error: (res as Err).error ?? 'Could not rename account.' })
+    },
+
+    setAccountFee: async (id, feePerContract) => {
+      const res = (await invoke('accounts-set-fee', { id, feePerContract })) as Res & {
+        accounts?: Account[]
+        executions?: Execution[]
+      }
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? 'Could not set the commission.' })
+        return
+      }
+      set({ accounts: res.accounts ?? get().accounts })
+      // reprice P&L immediately with the new fee applied
+      recompute((res.executions as Execution[]) ?? get().allExecutions)
     },
 
     deleteAccount: async (id) => {

@@ -216,6 +216,7 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
   const accounts = useTrades((s) => s.accounts)
   const create = useTrades((s) => s.createAccount)
   const rename = useTrades((s) => s.renameAccount)
+  const setAccountFee = useTrades((s) => s.setAccountFee)
   const del = useTrades((s) => s.deleteAccount)
   const clearAll = useTrades((s) => s.clearAll)
   const [newName, setNewName] = useState('')
@@ -276,6 +277,28 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-edge focus:border-accent"
               />
+              <label
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-edge/60 bg-raised/40 px-1.5 py-0.5"
+                title="Commission + fees per contract/share, per fill (entry and exit are each charged). Applied to imports whose CSV has no fee column — e.g. NinjaTrader's Orders grid — so P&L matches your platform. Leave 0 for commission-free brokers or files that already include fees."
+              >
+                <span className="text-[11px] text-muted">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={a.feePerContract ? String(a.feePerContract) : ''}
+                  placeholder="0.00"
+                  onBlur={(e) => {
+                    const v = Math.max(0, Number(e.target.value) || 0)
+                    if (v !== (a.feePerContract || 0)) void setAccountFee(a.id, v)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  }}
+                  className="w-12 bg-transparent text-right text-xs tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <span className="text-[10px] text-muted">/ct·side</span>
+              </label>
               <span className="shrink-0 text-xs text-muted">{num(a.executions)} exec</span>
               <Pencil size={12} className="shrink-0 text-muted" />
               <button
@@ -312,6 +335,11 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
         <p className="border-t border-edge px-4 py-2 text-[11px] text-muted">
           Imports never mix between accounts — each account is matched into round trips on its own. Deleting an
           account also deletes its imported trades.
+          <br />
+          <strong className="text-ink">$/ct·side</strong> is your commission + fees per contract (or share), charged
+          on <em>every</em> fill — so a round trip pays it twice. It only applies to imports whose file has no fee
+          column (like NinjaTrader&apos;s Orders grid); set it so realized P&L matches your platform&apos;s net, or
+          leave 0.
         </p>
       </div>
     </div>
