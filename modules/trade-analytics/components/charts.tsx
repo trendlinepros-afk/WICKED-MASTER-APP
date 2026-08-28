@@ -202,27 +202,41 @@ export function BarChart({
 
 export function ColumnChart({
   columns,
-  height = 160
+  height = 180
 }: {
   columns: { label: string; value: number }[]
   height?: number
 }): React.JSX.Element {
   if (columns.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxAbs = Math.max(1, ...columns.map((c) => Math.abs(c.value)))
+  // Bar heights are computed in PIXELS, not CSS percentages: a %-height chain
+  // inside auto-height flex columns silently resolves to 0 and every bar
+  // collapses to its 2px min-height stub.
+  const showValues = columns.length <= 16
+  const labelH = 18
+  const valueH = showValues ? 16 : 0
+  const barArea = Math.max(24, height - labelH - valueH)
   return (
-    <div className="flex items-end gap-1" style={{ height }}>
+    <div className="flex items-stretch gap-1.5" style={{ height: barArea + labelH + valueH }}>
       {columns.map((c) => {
-        const h = (Math.abs(c.value) / maxAbs) * 100
+        const px = Math.round((Math.abs(c.value) / maxAbs) * barArea)
         const pos = c.value >= 0
         return (
-          <div key={c.label} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1" title={`${c.label}: ${pos ? '+' : '-'}$${Math.abs(c.value).toFixed(0)}`}>
-            <div className="flex h-full w-full flex-col justify-end">
+          <div key={c.label} className="flex min-w-0 flex-1 flex-col" title={`${c.label}: ${pos ? '+' : '-'}$${Math.abs(c.value).toFixed(2)}`}>
+            <div className="flex w-full flex-col items-center justify-end" style={{ height: barArea + valueH }}>
+              {showValues && (
+                <div className={`w-full truncate text-center text-[11px] font-medium tabular-nums ${pos ? 'text-ok' : 'text-danger'}`}>
+                  {pos ? '+' : '-'}${Math.abs(c.value) >= 1000 ? `${(Math.abs(c.value) / 1000).toFixed(1)}k` : Math.abs(c.value).toFixed(0)}
+                </div>
+              )}
               <div
                 className="w-full rounded-t"
-                style={{ height: `${h}%`, background: pos ? OK : DANGER, opacity: 0.85, minHeight: c.value !== 0 ? 2 : 0 }}
+                style={{ height: px, background: pos ? OK : DANGER, opacity: 0.85, minHeight: c.value !== 0 ? 3 : 0 }}
               />
             </div>
-            <div className="w-full truncate text-center text-[10px] text-muted">{c.label}</div>
+            <div className="w-full truncate text-center text-[11px] text-muted" style={{ height: labelH, lineHeight: `${labelH}px` }}>
+              {c.label}
+            </div>
           </div>
         )
       })}
@@ -304,11 +318,14 @@ export function AggPnlColumns({
 }): React.JSX.Element {
   if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxAbs = Math.max(1, ...cols.map((c) => Math.abs(c.pnl)))
+  // Pixel-based bar heights (see ColumnChart) — % chains collapse to 0 here.
+  const labelH = 38
+  const halfH = Math.max(20, Math.floor((height - labelH - 1) / 2))
   return (
     <div className="w-full overflow-x-auto">
-      <div className="flex min-w-full items-stretch gap-1" style={{ height }}>
+      <div className="flex min-w-full items-stretch gap-1" style={{ height: halfH * 2 + 1 + labelH }}>
         {cols.map((c) => {
-          const frac = Math.abs(c.pnl) / maxAbs
+          const px = Math.round((Math.abs(c.pnl) / maxAbs) * halfH)
           const pos = c.pnl >= 0
           return (
             <div
@@ -316,14 +333,14 @@ export function AggPnlColumns({
               className="group relative flex min-w-[26px] flex-1 flex-col"
               title={`${c.label}\n${pos ? '+' : '-'}$${Math.abs(c.pnl).toFixed(2)} · ${c.trades} trade(s) · ${c.wins}W/${c.losses}L`}
             >
-              <div className="flex flex-1 flex-col justify-end">
-                {pos && <div className="w-full rounded-t" style={{ height: `${frac * 50}%`, background: OK, opacity: 0.88, minHeight: c.pnl !== 0 ? 2 : 0 }} />}
+              <div className="flex w-full flex-col justify-end" style={{ height: halfH }}>
+                {pos && <div className="w-full rounded-t" style={{ height: px, background: OK, opacity: 0.88, minHeight: c.pnl !== 0 ? 3 : 0 }} />}
               </div>
               <div className="h-px w-full bg-edge" />
-              <div className="flex flex-1 flex-col justify-start">
-                {!pos && <div className="w-full rounded-b" style={{ height: `${frac * 50}%`, background: DANGER, opacity: 0.88, minHeight: c.pnl !== 0 ? 2 : 0 }} />}
+              <div className="flex w-full flex-col justify-start" style={{ height: halfH }}>
+                {!pos && <div className="w-full rounded-b" style={{ height: px, background: DANGER, opacity: 0.88, minHeight: c.pnl !== 0 ? 3 : 0 }} />}
               </div>
-              <div className="mt-1 h-8 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{c.label}</div>
+              <div className="mt-1 origin-top-left -rotate-45 whitespace-nowrap text-[10px] leading-tight text-muted">{c.label}</div>
             </div>
           )
         })}
@@ -342,20 +359,23 @@ export function WinLossColumns({
 }): React.JSX.Element {
   if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxN = Math.max(1, ...cols.map((c) => Math.max(c.wins, c.losses)))
+  // Pixel-based bar heights (see ColumnChart) — % chains collapse to 0 here.
+  const labelH = 38
+  const barArea = Math.max(24, height - labelH)
   return (
     <div className="w-full overflow-x-auto">
-      <div className="flex min-w-full items-end gap-1.5" style={{ height }}>
+      <div className="flex min-w-full items-stretch gap-1.5" style={{ height: barArea + labelH }}>
         {cols.map((c) => (
           <div
             key={c.label}
-            className="group flex min-w-[26px] flex-1 flex-col items-center justify-end gap-1"
+            className="group flex min-w-[26px] flex-1 flex-col"
             title={`${c.label}\n${c.wins} win(s) / ${c.losses} loss(es)`}
           >
-            <div className="flex h-full w-full items-end justify-center gap-0.5">
-              <div className="w-1/2 rounded-t" style={{ height: `${(c.wins / maxN) * 100}%`, background: OK, opacity: 0.88, minHeight: c.wins ? 2 : 0 }} />
-              <div className="w-1/2 rounded-t" style={{ height: `${(c.losses / maxN) * 100}%`, background: DANGER, opacity: 0.88, minHeight: c.losses ? 2 : 0 }} />
+            <div className="flex w-full items-end justify-center gap-0.5" style={{ height: barArea }}>
+              <div className="w-1/2 rounded-t" style={{ height: Math.round((c.wins / maxN) * barArea), background: OK, opacity: 0.88, minHeight: c.wins ? 3 : 0 }} />
+              <div className="w-1/2 rounded-t" style={{ height: Math.round((c.losses / maxN) * barArea), background: DANGER, opacity: 0.88, minHeight: c.losses ? 3 : 0 }} />
             </div>
-            <div className="h-8 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{c.label}</div>
+            <div className="mt-1 origin-top-left -rotate-45 whitespace-nowrap text-[10px] leading-tight text-muted">{c.label}</div>
           </div>
         ))}
       </div>

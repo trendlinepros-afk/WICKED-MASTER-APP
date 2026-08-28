@@ -524,10 +524,10 @@ export function SectorDetail(): React.JSX.Element | null {
 function StatCell({ label, value, tone, sub }: { label: string; value: string; tone?: 'ok' | 'danger'; sub?: string }): React.JSX.Element {
   const color = tone === 'ok' ? 'text-ok' : tone === 'danger' ? 'text-danger' : 'text-ink'
   return (
-    <div className="rounded-lg border border-edge bg-surface px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className={`mt-0.5 text-sm font-bold tabular-nums ${color}`}>{value}</div>
-      {sub && <div className="text-[10px] text-muted">{sub}</div>}
+    <div className="rounded-xl border border-edge bg-surface p-4">
+      <div className="text-xs font-medium text-muted">{label}</div>
+      <div className={`mt-1 text-2xl font-bold tracking-tight tabular-nums ${color}`}>{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-muted">{sub}</div>}
     </div>
   )
 }
@@ -535,8 +535,8 @@ function StatCell({ label, value, tone, sub }: { label: string; value: string; t
 function StatGroup({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
   return (
     <div>
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{children}</div>
+      <h3 className="mb-2.5 text-sm font-semibold text-ink">{title}</h3>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
     </div>
   )
 }
@@ -546,14 +546,29 @@ export function StatsTab(): React.JSX.Element {
   if (!m || m.closedTrades === 0) return <div className="p-8 text-sm text-muted">No closed trades yet.</div>
   const sm = signedMoney
   const t = (tone: number): 'ok' | 'danger' => (tone >= 0 ? 'ok' : 'danger')
+  const hasFees = m.totalFees > 0.005
   return (
-    <div className="space-y-5 p-4">
+    <div className="mx-auto max-w-6xl space-y-7 p-5">
       <StatGroup title="Totals">
-        <StatCell label="Total P&L (realized)" value={sm(m.totalPnl)} tone={t(m.totalPnl)} />
-        <StatCell label="Gross P&L" value={sm(m.totalPnl)} tone={t(m.totalPnl)} sub="no commission data in export" />
+        <StatCell label="Total P&L (realized, net)" value={sm(m.totalPnl)} tone={t(m.totalPnl)} sub={hasFees ? `after ${money(m.totalFees)} costs` : undefined} />
+        <StatCell
+          label="Gross P&L (before costs)"
+          value={sm(m.totalPnl + m.totalFees)}
+          tone={t(m.totalPnl + m.totalFees)}
+          sub={hasFees ? `${money(m.totalFees)} commissions & fees deducted` : 'no fee data in this export'}
+        />
         <StatCell label="Only profit" value={sm(m.onlyProfit)} tone="ok" />
         <StatCell label="Only loss" value={sm(m.onlyLoss)} tone="danger" />
       </StatGroup>
+
+      {hasFees && (
+        <StatGroup title="Commissions & fees">
+          <StatCell label="Total cost (lifetime)" value={money(m.totalFees)} tone="danger" sub="commission + exchange/reg fees" />
+          <StatCell label="Commission" value={money(m.totalCommission)} tone="danger" />
+          <StatCell label="Exchange / reg fees" value={money(Math.max(0, m.totalFees - m.totalCommission))} tone="danger" />
+          <StatCell label="Cost per day" value={money(m.feesPerDay)} sub={`avg over ${num(m.tradingDays)} trading day(s)`} />
+        </StatGroup>
+      )}
 
       <StatGroup title="Extremes">
         <StatCell label="Best trade" value={sm(m.bestTrade)} tone="ok" />

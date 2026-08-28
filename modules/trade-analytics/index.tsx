@@ -928,20 +928,28 @@ export default function TradeAnalytics(): React.JSX.Element {
               </button>
             </div>
           </div>
-        ) : s.sectorFocus ? (
-          <SectorDetail />
+        ) : s.tab === 'trades' && !s.sectorFocus ? (
+          // Trades + AI manage their own full-height layout (internal scroll)
+          <TradesTab />
+        ) : s.tab === 'ai' && !s.sectorFocus ? (
+          <AiTab />
         ) : (
-          <>
-            {s.tab === 'overview' && <OverviewTab onManage={() => setManageOpen(true)} />}
-            {s.tab === 'calendar' && <CalendarTab />}
-            {s.tab === 'stats' && <StatsTab />}
-            {s.tab === 'breakdown' && <BreakdownTab />}
-            {s.tab === 'trades' && <TradesTab />}
-            {s.tab === 'open' && <OpenTab />}
-            {s.tab === 'symbols' && <SymbolsTab />}
-            {s.tab === 'timing' && <TimingTab />}
-            {s.tab === 'ai' && <AiTab />}
-          </>
+          // every other view scrolls as a page
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {s.sectorFocus ? (
+              <SectorDetail />
+            ) : (
+              <>
+                {s.tab === 'overview' && <OverviewTab onManage={() => setManageOpen(true)} />}
+                {s.tab === 'calendar' && <CalendarTab />}
+                {s.tab === 'stats' && <StatsTab />}
+                {s.tab === 'breakdown' && <BreakdownTab />}
+                {s.tab === 'open' && <OpenTab />}
+                {s.tab === 'symbols' && <SymbolsTab />}
+                {s.tab === 'timing' && <TimingTab />}
+              </>
+            )}
+          </div>
         )}
       </div>
 
