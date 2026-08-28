@@ -19,6 +19,7 @@ import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
 import { duration, money, num, pct, signedMoney } from '../lib/format'
 import { AggPnlColumns, DrawdownArea, WinLossColumns, type MetricCol } from './charts'
+import { etParts } from '../lib/et'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -824,114 +825,184 @@ function HeatmapCard({ pnl, n }: { pnl: number[][]; n: number[][] }): React.JSX.
 export function CalendarTab(): React.JSX.Element {
   const m = useTrades((s) => s.metrics)
   const byDate = new Map((m?.daily ?? []).map((d) => [d.date, d]))
-  // default to the latest trading month (or the current month if none)
-  const latest = m?.daily.length ? m.daily[m.daily.length - 1].date : ''
-  const [ym, setYm] = useState(() => {
-    if (latest) {
-      const [y, mo] = latest.split('-').map(Number)
-      return { y, m: mo }
-    }
-    const now = new Date()
-    return { y: now.getFullYear(), m: now.getMonth() + 1 }
-  })
+
+  type RangeMode = 'this-week' | 'last-2-weeks' | 'this-month' | 'last-month' | 'last-90' | 'custom'
+  const [mode, setMode] = useState<RangeMode>('this-month')
+  // month paging (‹ ›), relative to the CURRENT month — only used in month modes
+  const [monthOffset, setMonthOffset] = useState(0)
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
 
   if (!m || m.closedTrades === 0) return <div className="p-8 text-sm text-muted">No closed trades yet.</div>
 
-  const key = (d: number): string => `${ym.y}-${String(ym.m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-  const daysInMonth = new Date(Date.UTC(ym.y, ym.m, 0)).getUTCDate()
-  const firstDow = new Date(Date.UTC(ym.y, ym.m - 1, 1)).getUTCDay()
-  const monthName = new Date(Date.UTC(ym.y, ym.m - 1, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  /* ---- pure ET-calendar day math (ymd strings, DST-proof via UTC) ---- */
+  const DAY = 86400_000
+  const toMs = (ymd: string): number => {
+    const [y, mo, d] = ymd.split('-').map(Number)
+    return Date.UTC(y, mo - 1, d)
+  }
+  const toYmd = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
+  const addDays = (ymd: string, n: number): string => toYmd(toMs(ymd) + n * DAY)
+  const dowOf = (ymd: string): number => new Date(toMs(ymd)).getUTCDay()
 
-  // month summary
-  let monthPnl = 0
-  let monthTrades = 0
+  const today = etParts(Date.now()).ymd
+  const weekStart = addDays(today, -dowOf(today)) // Sunday of the current week
+
+  // anchor month for the month modes ('last-month' preset is offset −1)
+  const now = new Date()
+  const baseOffset = mode === 'last-month' ? -1 : 0
+  const anchor = new Date(Date.UTC(now.getFullYear(), now.getMonth() + baseOffset + monthOffset, 1))
+  const anchorFirst = toYmd(anchor.getTime())
+  const anchorLast = toYmd(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0))
+
+  let rangeStart = anchorFirst
+  let rangeEnd = anchorLast
+  if (mode === 'this-week') {
+    rangeStart = weekStart
+    rangeEnd = addDays(weekStart, 6)
+  } else if (mode === 'last-2-weeks') {
+    rangeStart = addDays(weekStart, -7)
+    rangeEnd = addDays(weekStart, 6)
+  } else if (mode === 'last-90') {
+    rangeStart = addDays(today, -89)
+    rangeEnd = today
+  } else if (mode === 'custom') {
+    const a = customStart || addDays(today, -13)
+    const b = customEnd || today
+    rangeStart = a <= b ? a : b
+    rangeEnd = a <= b ? b : a
+  }
+
+  const isMonthMode = mode === 'this-month' || mode === 'last-month'
+  const monthName = anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const rangeLabel = isMonthMode
+    ? monthName
+    : `${(() => { const [y, mo, d] = rangeStart.split('-').map(Number); void y; return `${MONTHS_SHORT[mo - 1]} ${d}` })()} – ${(() => { const [y, mo, d] = rangeEnd.split('-').map(Number); return `${MONTHS_SHORT[mo - 1]} ${d}, ${y}` })()}`
+
+  // pad the range out to whole Sun–Sat weeks; out-of-range cells render dimmed
+  const gridStart = addDays(rangeStart, -dowOf(rangeStart))
+  const gridEnd = addDays(rangeEnd, 6 - dowOf(rangeEnd))
+  const days: string[] = []
+  for (let ms = toMs(gridStart); ms <= toMs(gridEnd); ms += DAY) days.push(toYmd(ms))
+  const weeks: string[][] = []
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7))
+
+  // range summary (in-range days only)
+  let rangePnl = 0
+  let rangeTrades = 0
   let greenDays = 0
   let redDays = 0
-  for (let d = 1; d <= daysInMonth; d++) {
-    const cell = byDate.get(key(d))
+  for (const d of days) {
+    if (d < rangeStart || d > rangeEnd) continue
+    const cell = byDate.get(d)
     if (!cell) continue
-    monthPnl += cell.pnl
-    monthTrades += cell.trades
+    rangePnl += cell.pnl
+    rangeTrades += cell.trades
     if (cell.pnl > 0) greenDays++
     else if (cell.pnl < 0) redDays++
   }
 
-  const shift = (delta: number): void => {
-    let y = ym.y
-    let mo = ym.m + delta
-    if (mo < 1) {
-      mo = 12
-      y--
-    } else if (mo > 12) {
-      mo = 1
-      y++
-    }
-    setYm({ y, m: mo })
-  }
-
-  // build week rows (each 7 cells; leading blanks before firstDow)
-  const cells: (number | null)[] = []
-  for (let i = 0; i < firstDow; i++) cells.push(null)
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d)
-  while (cells.length % 7 !== 0) cells.push(null)
-  const weeks: (number | null)[][] = []
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7))
+  const inputCls = 'rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent'
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="flex min-h-full flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <button onClick={() => shift(-1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised">
-            <ChevronLeft size={16} />
-          </button>
-          <h2 className="min-w-[160px] text-center text-base font-bold">{monthName}</h2>
-          <button onClick={() => shift(1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised">
-            <ChevronRight size={16} />
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={mode}
+            onChange={(e) => {
+              setMode(e.target.value as RangeMode)
+              setMonthOffset(0)
+            }}
+            className="cursor-pointer rounded-lg border border-edge bg-raised px-2.5 py-1.5 text-sm font-medium outline-none focus:border-accent [&>option]:bg-surface"
+          >
+            <option value="this-week">This week</option>
+            <option value="last-2-weeks">Last 2 weeks</option>
+            <option value="this-month">This month</option>
+            <option value="last-month">Last month</option>
+            <option value="last-90">Last 90 days</option>
+            <option value="custom">Custom…</option>
+          </select>
+          {isMonthMode && (
+            <>
+              <button onClick={() => setMonthOffset((v) => v - 1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised" title="Previous month">
+                <ChevronLeft size={16} />
+              </button>
+              <button onClick={() => setMonthOffset((v) => v + 1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-edge hover:bg-raised" title="Next month">
+                <ChevronRight size={16} />
+              </button>
+            </>
+          )}
+          {mode === 'custom' && (
+            <span className="flex items-center gap-1.5 text-sm text-muted">
+              <input type="date" value={customStart || addDays(today, -13)} onChange={(e) => setCustomStart(e.target.value)} className={inputCls} />
+              to
+              <input type="date" value={customEnd || today} onChange={(e) => setCustomEnd(e.target.value)} className={inputCls} />
+            </span>
+          )}
+          <h2 className="ml-1 text-base font-bold">{rangeLabel}</h2>
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">
           <span>
-            Month P&L <b className={pos(monthPnl)}>{signedMoney(monthPnl)}</b>
+            P&L <b className={pos(rangePnl)}>{signedMoney(rangePnl)}</b>
           </span>
-          <span className="text-muted">{num(monthTrades)} trades</span>
+          <span className="text-muted">{num(rangeTrades)} trades</span>
           <span className="text-ok">{greenDays} green</span>
           <span className="text-danger">{redDays} red</span>
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-edge bg-surface">
-        <div className="grid grid-cols-7 border-b border-edge bg-raised/40 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">
+      {/* the grid fills the remaining window height; long ranges scroll the page */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-edge bg-surface">
+        <div className="grid grid-cols-[repeat(7,1fr)_92px] border-b border-edge bg-raised/40 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
             <div key={d} className="py-1.5">{d}</div>
           ))}
+          <div className="border-l border-edge/60 py-1.5">Week</div>
         </div>
-        <div>
+        <div className="flex min-h-0 flex-1 flex-col">
           {weeks.map((week, wi) => {
             let weekPnl = 0
+            let weekHasData = false
             for (const d of week) {
-              const c = d ? byDate.get(key(d)) : undefined
-              if (c) weekPnl += c.pnl
+              if (d < rangeStart || d > rangeEnd) continue
+              const c = byDate.get(d)
+              if (c) {
+                weekPnl += c.pnl
+                weekHasData = true
+              }
             }
             return (
-              <div key={wi} className="grid grid-cols-[repeat(7,1fr)] border-b border-edge/50 last:border-b-0">
-                {week.map((d, di) => {
-                  const c = d ? byDate.get(key(d)) : undefined
+              <div key={wi} className="grid min-h-[84px] flex-1 grid-cols-[repeat(7,1fr)_92px] border-b border-edge/50 last:border-b-0">
+                {week.map((d) => {
+                  const inRange = d >= rangeStart && d <= rangeEnd
+                  const c = inRange ? byDate.get(d) : undefined
+                  const dayNum = Number(d.slice(8))
+                  const label = dayNum === 1 || d === days[0] ? `${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]} ${dayNum}` : String(dayNum)
                   return (
                     <div
-                      key={di}
-                      className="relative min-h-[74px] border-r border-edge/40 p-1.5 last:border-r-0"
+                      key={d}
+                      className="relative border-r border-edge/40 p-1.5"
                       style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${Math.min(0.22, 0.06 + Math.abs(c.pnl) / 3000).toFixed(2)})` : 'transparent' }}
                     >
-                      {d && <div className="text-[11px] font-medium text-muted">{d}</div>}
+                      <div className={`text-[11px] font-medium ${inRange ? 'text-muted' : 'text-muted/30'}`}>{label}</div>
                       {c && (
                         <div className="mt-1">
-                          <div className={`text-[13px] font-bold tabular-nums ${pos(c.pnl)}`}>{signedMoney(c.pnl)}</div>
-                          <div className="text-[10px] text-muted">{c.trades} trade{c.trades === 1 ? '' : 's'}</div>
+                          <div className={`text-sm font-bold tabular-nums ${pos(c.pnl)}`}>{signedMoney(c.pnl)}</div>
+                          <div className="text-[11px] text-muted">{c.trades} trade{c.trades === 1 ? '' : 's'}</div>
                         </div>
                       )}
                     </div>
                   )
                 })}
+                <div className="flex flex-col items-end justify-center border-l border-edge/60 px-2">
+                  {weekHasData ? (
+                    <div className={`text-sm font-bold tabular-nums ${pos(weekPnl)}`}>{signedMoney(weekPnl)}</div>
+                  ) : (
+                    <div className="text-xs text-muted/40">—</div>
+                  )}
+                </div>
               </div>
             )
           })}
