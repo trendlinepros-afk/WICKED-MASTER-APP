@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Check, ExternalLink, Eye, EyeOff, FolderPlus, Pencil, SquareArrowOutUpRight } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, FolderPlus, Pencil, Pin, PinOff, SquareArrowOutUpRight } from 'lucide-react'
 import { SHELL_IPC } from '@shared/types'
 import { useSettings } from '@/stores/settings'
 import { useShellUi } from '@/stores/shellUi'
@@ -128,6 +128,13 @@ export default function ModuleMenu(): React.JSX.Element | null {
     closeMenu()
   }
 
+  const pinned = (settings.navPinnedModules ?? []).includes(id)
+  const togglePinned = (): void => {
+    const list = settings.navPinnedModules ?? []
+    update({ navPinnedModules: pinned ? list.filter((x) => x !== id) : [...list, id] })
+    closeMenu()
+  }
+
   return (
     <div
       ref={ref}
@@ -157,6 +164,18 @@ export default function ModuleMenu(): React.JSX.Element | null {
       <button className={item} onClick={() => openEdit(id)}>
         <Pencil size={15} className="text-muted" />
         Edit name &amp; description
+      </button>
+      <button
+        className={item}
+        title={
+          pinned
+            ? 'Remove this tool’s pinned row from the top of the left menu'
+            : 'Give this tool its own row at the top of the left menu — even while it stays in its folder'
+        }
+        onClick={togglePinned}
+      >
+        {pinned ? <PinOff size={15} className="text-muted" /> : <Pin size={15} className="text-muted" />}
+        {pinned ? 'Unpin from sidebar' : 'Pin to sidebar'}
       </button>
       <button
         className={item}

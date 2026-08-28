@@ -71,6 +71,12 @@ export interface ShellSettings {
   navHiddenModules: string[]
   /** folder ids hidden from the SIDEBAR only (still shown on the home screen) */
   navHiddenGroups: string[]
+  /**
+   * Module ids PINNED to the sidebar (right-click → Pin to sidebar), in pin
+   * order. A pinned tool gets its own row at the top of the left menu even when
+   * it lives inside a folder; pinning wins over navHiddenModules.
+   */
+  navPinnedModules: string[]
   update: {
     autoCheck: boolean
     /** hours between background checks */
@@ -115,6 +121,7 @@ export const DEFAULT_SETTINGS: ShellSettings = {
   disabledModules: [],
   navHiddenModules: [],
   navHiddenGroups: [],
+  navPinnedModules: [],
   update: { autoCheck: true, intervalHours: 4 },
   mcpEnabled: false,
   navExpanded: true,

@@ -46,7 +46,8 @@ export const INCLUDE_TOP = new Set([
 /** Paths (relative to userData, '/'-joined) whose subtree is never backed up. */
 export const EXCLUDE_RELPATHS = new Set([
   'modules/web-browser/chrome-profile', // full Chrome profile: huge, Chrome-sync owned
-  'modules/yt-downloader/bin' // yt-dlp binary: ~20 MB, machine-local, refetched on demand
+  'modules/yt-downloader/bin', // yt-dlp binary: ~20 MB, machine-local, refetched on demand
+  'modules/file-vault/auth.json' // Google OAuth secrets: DPAPI-bound to this PC/user, must never travel in a snapshot
 ])
 
 /**

@@ -8,6 +8,7 @@ import {
   PackagePlus,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   Settings
 } from 'lucide-react'
 import { SHELL_IPC } from '@shared/types'
@@ -81,7 +82,17 @@ export default function ActivityBar(): React.JSX.Element {
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({})
 
   const all = orderedModules(order, overrides)
-  const entries = navEntries(settings, { sidebar: true })
+  // Pinned tools (right-click → Pin to sidebar) get their own rows at the top,
+  // in pin order — even when they live inside a folder, and even when the tool
+  // is otherwise hidden from the sidebar. A pinned top-level module is dropped
+  // from the regular list below so it never shows twice.
+  const pinnedIds = settings.navPinnedModules ?? []
+  const pinnedModules = pinnedIds
+    .map((id) => all.find((m) => m.manifest.id === id))
+    .filter((m): m is (typeof all)[number] => !!m && !disabled.includes(m.manifest.id))
+  const entries = navEntries(settings, { sidebar: true }).filter(
+    (e) => !(e.kind === 'module' && pinnedIds.includes(e.module.manifest.id))
+  )
   const activeModuleId = location.pathname.startsWith('/m/')
     ? decodeURIComponent(location.pathname.slice(4))
     : ''
@@ -103,19 +114,19 @@ export default function ActivityBar(): React.JSX.Element {
     return r.height > 0 && (e.clientY - r.top) / r.height > 0.5
   }
 
-  /** One module row (used at top level and nested inside a folder). */
+  /** One module row (used at top level, nested inside a folder, and pinned). */
   const moduleRow = (
     m: (typeof all)[number],
-    opts: { nested?: boolean } = {}
+    opts: { nested?: boolean; pinned?: boolean } = {}
   ): React.JSX.Element => {
     const { manifest } = m
     const id = manifest.id
     const name = effectiveName(m, overrides)
     return (
       <NavLink
-        key={id}
+        key={opts.pinned ? `pin:${id}` : id}
         to={`/m/${id}`}
-        draggable
+        draggable={!opts.pinned}
         onDragStart={(e) => {
           setDragId(id)
           e.dataTransfer.effectAllowed = 'move'
@@ -124,12 +135,14 @@ export default function ActivityBar(): React.JSX.Element {
           e.dataTransfer.setData('text/plain', id)
         }}
         onDragOver={(e) => {
+          if (opts.pinned) return // pinned rows sit outside the drag order
           e.preventDefault()
           e.dataTransfer.dropEffect = 'move'
           if (dragId && dragId !== id) setDropTarget(id)
         }}
         onDragLeave={() => setDropTarget((t) => (t === id ? null : t))}
         onDrop={(e) => {
+          if (opts.pinned) return
           e.preventDefault()
           commitReorder(id, droppedAfter(e))
         }}
@@ -150,6 +163,7 @@ export default function ActivityBar(): React.JSX.Element {
       >
         <ModuleIcon name={manifest.icon} size={opts.nested ? 18 : 20} strokeWidth={1.8} className="shrink-0" />
         {expanded && <span className="min-w-0 flex-1 truncate text-sm">{name}</span>}
+        {opts.pinned && expanded && <Pin size={12} className="shrink-0 text-muted/60" />}
         {manifest.status === 'beta' &&
           (expanded ? (
             <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warn">
@@ -205,6 +219,9 @@ export default function ActivityBar(): React.JSX.Element {
 
       {/* Modules & folders — drag to reorder, right-click for options */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden">
+        {/* Pinned tools (right-click → Pin to sidebar) */}
+        {pinnedModules.map((m) => moduleRow(m, { pinned: true }))}
+        {pinnedModules.length > 0 && <div className="my-1 h-px shrink-0 bg-edge" />}
         {entries.map((e) => {
           if (e.kind === 'module') return moduleRow(e.module)
 

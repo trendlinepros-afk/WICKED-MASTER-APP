@@ -1,0 +1,8 @@
+{
+  "id": "file-vault",
+  "name": "File Vault",
+  "icon": "Vault",
+  "version": "1.0.0",
+  "description": "Cloud file storage on your own Google Drive — installers, executables, big files. Verified transfers, zero extra cost.",
+  "status": "stable"
+}
