@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { buildTradesByAccount, computeStats, type Stats, type Trade } from './lib/analytics'
 import { computeMetrics, type TradeMetrics } from './lib/metrics'
+import { filterTradesToRange, resolveRange, type RangePreset } from './lib/range'
 import type { Execution } from './lib/parse'
 import { duration, money, pct } from './lib/format'
 
@@ -23,7 +24,7 @@ export interface Account {
 export interface SummaryExportReq {
   /** account id, or 'all' for the combined view */
   account: string
-  preset: 'lifetime' | '1d' | '7d' | '14d' | '30d' | '90d' | '180d' | '365d' | 'custom'
+  preset: RangePreset
   startYmd?: string
   endYmd?: string
 }
@@ -137,6 +138,14 @@ interface State {
   /** account new imports land in */
   importAccount: string
 
+  // global date-range filter (applies to every tab; closed trades only —
+  // open positions always show). Same presets as the summary export.
+  rangePreset: RangePreset
+  rangeStartYmd: string
+  rangeEndYmd: string
+  /** resolved display label, e.g. "1 month · Aug 3 – Sep 1, 2026" */
+  rangeLabel: string
+
   // sectors (symbol → broad sector)
   sectors: Record<string, string>
   /** manual per-symbol sector overrides (symbol → sector); these win over auto */
@@ -166,6 +175,7 @@ interface State {
   setImportAccount: (id: string) => void
   toggleAccount: (id: string) => void
   selectAllAccounts: () => void
+  setRange: (preset: RangePreset, startYmd?: string, endYmd?: string) => void
 
   load: () => Promise<void>
   refreshAccounts: () => Promise<void>
@@ -188,17 +198,25 @@ interface State {
 }
 
 export const useTrades = create<State>((set, get) => {
-  /** Recompute trades/stats/metrics for the current account selection. */
+  /** Recompute trades/stats/metrics for the current account selection AND the
+   *  global date-range filter. Closed trades outside the range are dropped;
+   *  open positions always stay (they're current state, not period activity). */
   const recompute = (
     all: Execution[],
     selected: string[] = get().selectedAccounts,
     sectors: Record<string, string> = get().sectors
   ): void => {
     const filtered = selected.length > 0 ? all.filter((e) => selected.includes(e.account || 'default')) : all
-    const trades = buildTradesByAccount(filtered)
+    const allTrades = buildTradesByAccount(filtered)
+    const { rangePreset, rangeStartYmd, rangeEndYmd } = get()
+    const closed = allTrades.filter((t) => !t.isOpen && t.closedAt != null)
+    const latest = closed.length ? closed.reduce((mx, t) => Math.max(mx, t.closedAt as number), 0) : null
+    const first = closed.length ? closed.reduce((mn, t) => Math.min(mn, t.closedAt as number), Infinity) : null
+    const range = resolveRange(rangePreset, latest, first, rangeStartYmd, rangeEndYmd)
+    const trades = range.error ? allTrades : filterTradesToRange(allTrades, range)
     const stats = computeStats(trades)
     const metrics = computeMetrics(trades, sectors)
-    set({ allExecutions: all, executions: filtered, trades, stats, metrics })
+    set({ allExecutions: all, executions: filtered, trades, stats, metrics, rangeLabel: range.label })
   }
 
   const handleImport = async (res: Res): Promise<void> => {
@@ -260,6 +278,11 @@ export const useTrades = create<State>((set, get) => {
     selectedAccounts: [],
     importAccount: 'default',
 
+    rangePreset: 'lifetime',
+    rangeStartYmd: '',
+    rangeEndYmd: '',
+    rangeLabel: 'Lifetime',
+
     sectors: {},
     sectorOverrides: {},
     sectorsBusy: false,
@@ -301,6 +324,11 @@ export const useTrades = create<State>((set, get) => {
     selectAllAccounts: () => {
       set({ selectedAccounts: [] })
       recompute(get().allExecutions, [])
+    },
+
+    setRange: (preset, startYmd, endYmd) => {
+      set({ rangePreset: preset, rangeStartYmd: startYmd ?? get().rangeStartYmd, rangeEndYmd: endYmd ?? get().rangeEndYmd })
+      recompute(get().allExecutions)
     },
 
     load: async () => {

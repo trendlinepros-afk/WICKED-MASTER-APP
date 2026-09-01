@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -17,6 +18,7 @@ import {
   X
 } from 'lucide-react'
 import { useTrades, type SummaryExportReq } from '../store'
+import { RANGE_PRESETS, type RangePreset } from '../lib/range'
 import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
 import { duration, money, num, pct, signedMoney } from '../lib/format'
@@ -102,6 +104,118 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
       >
         <Wallet size={14} /> Manage Accounts
       </button>
+
+      <RangeSelector />
+    </div>
+  )
+}
+
+/* ========================= global date-range filter ======================== */
+
+/**
+ * Filters EVERY tab's stats/trades/metrics to a date range — same presets as
+ * the Export Account Summary. Closed trades outside the range are hidden;
+ * open positions always show. Resets to Lifetime on app restart.
+ */
+function RangeSelector(): React.JSX.Element {
+  const preset = useTrades((s) => s.rangePreset)
+  const label = useTrades((s) => s.rangeLabel)
+  const storeStart = useTrades((s) => s.rangeStartYmd)
+  const storeEnd = useTrades((s) => s.rangeEndYmd)
+  const setRange = useTrades((s) => s.setRange)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const todayYmd = etParts(Date.now()).ymd
+  const twoWeeksBack = ((): string => {
+    const [y, m, d] = todayYmd.split('-').map(Number)
+    const t = new Date(Date.UTC(y, m - 1, d - 13))
+    return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
+  })()
+  const [startYmd, setStartYmd] = useState(storeStart || twoWeeksBack)
+  const [endYmd, setEndYmd] = useState(storeEnd || todayYmd)
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [])
+
+  const active = preset !== 'lifetime'
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Filter every tab to a date range (open positions always show)"
+        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium ${
+          active ? 'border-accent/70 bg-accent/10 text-accent' : 'border-edge bg-raised hover:border-accent/60'
+        }`}
+      >
+        <CalendarDays size={14} className={active ? '' : 'text-accent'} />
+        <span className="max-w-[16rem] truncate">{label}</span>
+        <ChevronDown size={13} className={active ? 'text-accent' : 'text-muted'} />
+      </button>
+      {open && (
+        <div className="absolute left-0 z-30 mt-1 w-72 rounded-xl border border-edge bg-surface p-2 shadow-2xl">
+          <div className="grid grid-cols-3 gap-1.5">
+            {RANGE_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => {
+                  if (p.id === 'custom') {
+                    setRange('custom', startYmd, endYmd)
+                  } else {
+                    setRange(p.id)
+                    setOpen(false)
+                  }
+                }}
+                title={p.hint}
+                className={`rounded-lg border px-2 py-2 text-xs font-medium ${
+                  preset === p.id
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-edge bg-raised text-muted hover:text-ink'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {preset === 'custom' && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium text-muted">Start</span>
+                <input
+                  type="date"
+                  value={startYmd}
+                  max={endYmd}
+                  onChange={(e) => {
+                    setStartYmd(e.target.value)
+                    if (e.target.value) setRange('custom', e.target.value, endYmd)
+                  }}
+                  className="w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-xs outline-none focus:border-accent"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium text-muted">End</span>
+                <input
+                  type="date"
+                  value={endYmd}
+                  min={startYmd}
+                  onChange={(e) => {
+                    setEndYmd(e.target.value)
+                    if (e.target.value) setRange('custom', startYmd, e.target.value)
+                  }}
+                  className="w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-xs outline-none focus:border-accent"
+                />
+              </label>
+            </div>
+          )}
+          <p className="px-1 pt-2 text-[11px] text-muted">
+            Filters every tab. Rolling ranges end at your most recent trade; open positions always show.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -1040,18 +1154,6 @@ export function CalendarTab(): React.JSX.Element {
 
 /* ========================= account summary export ========================= */
 
-const EXPORT_PRESETS: { id: SummaryExportReq['preset']; label: string; hint?: string }[] = [
-  { id: 'lifetime', label: 'Lifetime', hint: 'everything' },
-  { id: '1d', label: 'Daily', hint: 'latest trading day' },
-  { id: '7d', label: 'Weekly', hint: 'last 7 days' },
-  { id: '14d', label: '2 weeks' },
-  { id: '30d', label: '1 month' },
-  { id: '90d', label: '90 days' },
-  { id: '180d', label: '180 days' },
-  { id: '365d', label: '365 days' },
-  { id: 'custom', label: 'Custom…', hint: 'pick start & end' }
-]
-
 /**
  * "Export Account Summary": pick the account + timeframe, then main builds a
  * two-page PDF (equity curve, hourly P&L candles, win/loss pie, fees, streaks,
@@ -1065,7 +1167,8 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
   const hasAiKey = useTrades((s) => s.hasAiKey)
 
   const [account, setAccount] = useState(selected.length === 1 ? selected[0] : 'all')
-  const [preset, setPreset] = useState<SummaryExportReq['preset']>('30d')
+  // start from whatever range the dashboard is currently filtered to
+  const [preset, setPreset] = useState<RangePreset>(useTrades.getState().rangePreset)
   const todayYmd = etParts(Date.now()).ymd
   const thirteenBack = ((): string => {
     const [y, m, d] = todayYmd.split('-').map(Number)
@@ -1114,7 +1217,7 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
           <div className="space-y-1.5">
             <span className="text-xs font-medium text-muted">Timeframe</span>
             <div className="grid grid-cols-3 gap-1.5">
-              {EXPORT_PRESETS.map((p) => (
+              {RANGE_PRESETS.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => setPreset(p.id)}
