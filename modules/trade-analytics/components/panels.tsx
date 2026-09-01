@@ -4,17 +4,19 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FileDown,
   FolderOpen,
   Layers,
   Loader2,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
   Upload,
   Wallet,
   X
 } from 'lucide-react'
-import { useTrades } from '../store'
+import { useTrades, type SummaryExportReq } from '../store'
 import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
 import { duration, money, num, pct, signedMoney } from '../lib/format'
@@ -219,6 +221,39 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
 
 /* ========================== manage accounts ============================ */
 
+/** Account rename field with an EXPLICIT Save button (shown once the name is
+ *  edited) — Enter and blur still commit, but the button makes it obvious. */
+function AccountNameField({ name, onSave }: { name: string; onSave: (v: string) => void }): React.JSX.Element {
+  const [value, setValue] = useState(name)
+  const dirty = value.trim() !== name && value.trim().length > 0
+  const commit = (): void => {
+    if (dirty) onSave(value.trim())
+  }
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') setValue(name)
+        }}
+        className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-edge focus:border-accent"
+      />
+      {dirty && (
+        <button
+          onMouseDown={(e) => e.preventDefault() /* keep focus so click fires before blur */}
+          onClick={commit}
+          className="flex shrink-0 items-center gap-1 rounded-lg bg-accent px-2 py-1 text-xs font-semibold text-accent-ink hover:opacity-90"
+        >
+          <Check size={12} /> Save
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function ManageAccountsModal({ onClose }: { onClose: () => void }): React.JSX.Element {
   const accounts = useTrades((s) => s.accounts)
   const create = useTrades((s) => s.createAccount)
@@ -273,17 +308,7 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
         <div className="min-h-0 flex-1 overflow-y-auto">
           {accounts.map((a) => (
             <div key={a.id} className="flex items-center gap-2 border-b border-edge/50 px-4 py-2.5 last:border-b-0">
-              <input
-                defaultValue={a.name}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  if (v && v !== a.name) void rename(a.id, v)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-                className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none hover:border-edge focus:border-accent"
-              />
+              <AccountNameField key={`${a.id}:${a.name}`} name={a.name} onSave={(v) => void rename(a.id, v)} />
               <label
                 className="flex shrink-0 items-center gap-1 rounded-lg border border-edge/60 bg-raised/40 px-1.5 py-0.5"
                 title="Cost per contract/share, per fill (entry and exit are each charged). Files with NO cost data (NinjaTrader Orders grid) get this as their full cost; files with commission but no exchange/reg fees (NinjaTrader Executions grid) get it ADDED on top. Leave 0 for commission-free brokers or files that already include the complete cost (Trade Performance, Schwab)."
@@ -537,7 +562,8 @@ function StatGroup({ title, children }: { title: string; children: React.ReactNo
   return (
     <div>
       <h3 className="mb-2.5 text-sm font-semibold text-ink">{title}</h3>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
+      {/* auto-fit: cards grow to fill however wide the window is (ultrawide included) */}
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))]">{children}</div>
     </div>
   )
 }
@@ -549,7 +575,7 @@ export function StatsTab(): React.JSX.Element {
   const t = (tone: number): 'ok' | 'danger' => (tone >= 0 ? 'ok' : 'danger')
   const hasFees = m.totalFees > 0.005
   return (
-    <div className="mx-auto max-w-6xl space-y-7 p-5">
+    <div className="w-full space-y-7 p-5 2xl:px-8">
       <StatGroup title="Totals">
         <StatCell label="Total P&L (realized, net)" value={sm(m.totalPnl)} tone={t(m.totalPnl)} sub={hasFees ? `after ${money(m.totalFees)} costs` : undefined} />
         <StatCell
@@ -1006,6 +1032,154 @@ export function CalendarTab(): React.JSX.Element {
               </div>
             )
           })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ========================= account summary export ========================= */
+
+const EXPORT_PRESETS: { id: SummaryExportReq['preset']; label: string; hint?: string }[] = [
+  { id: 'lifetime', label: 'Lifetime', hint: 'everything' },
+  { id: '1d', label: 'Daily', hint: 'latest trading day' },
+  { id: '7d', label: 'Weekly', hint: 'last 7 days' },
+  { id: '14d', label: '2 weeks' },
+  { id: '30d', label: '1 month' },
+  { id: '90d', label: '90 days' },
+  { id: '180d', label: '180 days' },
+  { id: '365d', label: '365 days' },
+  { id: 'custom', label: 'Custom…', hint: 'pick start & end' }
+]
+
+/**
+ * "Export Account Summary": pick the account + timeframe, then main builds a
+ * two-page PDF (equity curve, hourly P&L candles, win/loss pie, fees, streaks,
+ * weekday edge, one-paragraph AI verdict) and asks where to save it.
+ */
+export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const accounts = useTrades((s) => s.accounts)
+  const selected = useTrades((s) => s.selectedAccounts)
+  const exportSummary = useTrades((s) => s.exportSummary)
+  const busy = useTrades((s) => s.exportingSummary)
+  const hasAiKey = useTrades((s) => s.hasAiKey)
+
+  const [account, setAccount] = useState(selected.length === 1 ? selected[0] : 'all')
+  const [preset, setPreset] = useState<SummaryExportReq['preset']>('30d')
+  const todayYmd = etParts(Date.now()).ymd
+  const thirteenBack = ((): string => {
+    const [y, m, d] = todayYmd.split('-').map(Number)
+    const t = new Date(Date.UTC(y, m - 1, d - 13))
+    return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
+  })()
+  const [startYmd, setStartYmd] = useState(thirteenBack)
+  const [endYmd, setEndYmd] = useState(todayYmd)
+
+  const run = async (): Promise<void> => {
+    const ok = await exportSummary({ account, preset, startYmd, endYmd })
+    if (ok) onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-xl border border-edge bg-surface"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <FileDown size={15} className="text-accent" />
+          <span className="text-sm font-semibold">Export Account Summary</span>
+          <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted">Account</span>
+            <select
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+              className="w-full rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm outline-none focus:border-accent"
+            >
+              <option value="all">All accounts (combined)</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-muted">Timeframe</span>
+            <div className="grid grid-cols-3 gap-1.5">
+              {EXPORT_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPreset(p.id)}
+                  title={p.hint}
+                  className={`rounded-lg border px-2 py-2 text-xs font-medium ${
+                    preset === p.id
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-edge bg-raised text-muted hover:text-ink'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted">
+              Rolling ranges end at your most recent trade, so “Daily” is your latest trading day.
+            </p>
+          </div>
+
+          {preset === 'custom' && (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted">Start date</span>
+                <input
+                  type="date"
+                  value={startYmd}
+                  max={endYmd}
+                  onChange={(e) => setStartYmd(e.target.value)}
+                  className="w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted">End date</span>
+                <input
+                  type="date"
+                  value={endYmd}
+                  min={startYmd}
+                  onChange={(e) => setEndYmd(e.target.value)}
+                  className="w-full rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
+                />
+              </label>
+            </div>
+          )}
+
+          <div className="flex items-start gap-2 rounded-lg border border-edge bg-raised/40 px-3 py-2 text-[11px] text-muted">
+            <Sparkles size={13} className="mt-0.5 shrink-0 text-accent" />
+            <span>
+              Two-page PDF: equity curve, hourly P&L (8a–5p), win/loss pie, commissions, streaks, weekday edge — and a
+              one-paragraph AI verdict{hasAiKey ? '' : ' (needs an AI key in Settings → API Keys; exports without it otherwise)'}.
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-edge px-4 py-3">
+          <button onClick={onClose} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
+            Cancel
+          </button>
+          <button
+            onClick={() => void run()}
+            disabled={busy || (preset === 'custom' && (!startYmd || !endYmd))}
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+            {busy ? 'Building PDF…' : 'Export PDF'}
+          </button>
         </div>
       </div>
     </div>

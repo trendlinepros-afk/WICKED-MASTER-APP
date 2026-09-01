@@ -15,6 +15,17 @@ export interface Account {
   executions: number
   /** commission+fee applied per contract/share per fill ($); 0 = none */
   feePerContract: number
+  /** the trader's own strategy description — grounds the AI coach's analysis */
+  strategy: string
+}
+
+/** "Export Account Summary" request (PDF; built in main via printHtmlToPdf). */
+export interface SummaryExportReq {
+  /** account id, or 'all' for the combined view */
+  account: string
+  preset: 'lifetime' | '1d' | '7d' | '14d' | '30d' | '90d' | '180d' | '365d' | 'custom'
+  startYmd?: string
+  endYmd?: string
 }
 
 interface ImportSummary {
@@ -61,8 +72,10 @@ type Res = Ok | Err
 const invoke = <T = Res>(channel: string, ...args: unknown[]): Promise<T> =>
   window.wicked.invoke(`${ID}:${channel}`, ...args) as Promise<T>
 
-/** Build the compact digest the AI coach analyzes. */
-export function buildAiPrompt(stats: Stats, trades: Trade[]): string {
+/** Build the compact digest the AI coach analyzes. `strategies` = the trader's
+ *  own per-account strategy notes, included so the coach reasons from their
+ *  stated intent instead of guessing it from the numbers. */
+export function buildAiPrompt(stats: Stats, trades: Trade[], strategies: { name: string; strategy: string }[] = []): string {
   const top = stats.bySymbol.slice(0, 8).map((s) => `${s.symbol}: ${money(s.realizedPnl)} (${s.trades} trades, ${s.wins}W/${s.losses}L)`)
   const worst = [...stats.bySymbol].reverse().slice(0, 6).map((s) => `${s.symbol}: ${money(s.realizedPnl)}`)
   const dow = stats.byDayOfWeek.map((b) => `${b.label} ${money(b.pnl)}`).join(', ')
@@ -71,11 +84,20 @@ export function buildAiPrompt(stats: Stats, trades: Trade[]): string {
     .filter((t) => t.isOpen)
     .map((t) => `${t.symbol} ${t.direction} ${t.openQty}sh @ ${t.avgEntry.toFixed(2)}`)
     .join('; ')
+  const withNotes = strategies.filter((s) => s.strategy.trim())
+  const strategyBlock =
+    withNotes.length > 0
+      ? 'THE TRADER\'S OWN STRATEGY DESCRIPTION — treat as ground truth about their intent, and evaluate whether ' +
+        'the stats show them actually FOLLOWING it:\n' +
+        withNotes.map((s) => (withNotes.length > 1 ? `[${s.name}] ${s.strategy.trim()}` : s.strategy.trim())).join('\n') +
+        '\n\n'
+      : ''
   return [
-    'You are a professional trading coach analyzing a retail trader\'s executed-trade statistics ',
-    '(day/swing/trendline trading on Webull). Give sharp, specific, actionable feedback — strengths, ',
+    'You are a professional trading coach analyzing a retail trader\'s executed-trade statistics. ',
+    'Give sharp, specific, actionable feedback — strengths, ',
     'weaknesses, risk issues, and 3-5 concrete things to change. Be direct and concise. Use the numbers. ',
     'Do NOT give financial/investment advice or tell them what to buy; focus on their PROCESS and stats.\n\n',
+    strategyBlock,
     `Realized P&L: ${money(stats.totalRealized)} over ${stats.closedTrades} closed trades\n`,
     `Win rate: ${pct(stats.winRate)} (${stats.wins}W / ${stats.losses}L / ${stats.breakeven}BE)\n`,
     `Avg win ${money(stats.avgWin)}, avg loss ${money(stats.avgLoss)}, profit factor ${stats.profitFactor.toFixed(2)}, expectancy ${money(stats.expectancy)}/trade\n`,
@@ -129,7 +151,11 @@ interface State {
   aiBusy: boolean
   aiText: string
   aiProvider: string
+  aiModel: string
   aiError: string
+
+  // account-summary PDF export
+  exportingSummary: boolean
 
   setTab: (t: Tab) => void
   setSectorFocus: (sector: string | null) => void
@@ -146,6 +172,8 @@ interface State {
   createAccount: (name: string) => Promise<string | null>
   renameAccount: (id: string, name: string) => Promise<void>
   setAccountFee: (id: string, feePerContract: number) => Promise<void>
+  setAccountStrategy: (id: string, strategy: string) => Promise<void>
+  exportSummary: (req: SummaryExportReq) => Promise<boolean>
   deleteAccount: (id: string) => Promise<void>
   importDialog: (account?: string) => Promise<void>
   importPaths: (paths: string[]) => Promise<void>
@@ -242,6 +270,8 @@ export const useTrades = create<State>((set, get) => {
     aiBusy: false,
     aiText: '',
     aiProvider: '',
+    aiModel: '',
+    exportingSummary: false,
     aiError: '',
 
     setTab: (t) => set({ tab: t, sectorFocus: null }),
@@ -311,6 +341,30 @@ export const useTrades = create<State>((set, get) => {
       const res = (await invoke('accounts-rename', { id, name })) as Res & { accounts?: Account[] }
       if (res.ok === true) set({ accounts: res.accounts ?? get().accounts })
       else set({ error: (res as Err).error ?? 'Could not rename account.' })
+    },
+
+    setAccountStrategy: async (id, strategy) => {
+      const res = (await invoke('accounts-set-strategy', { id, strategy })) as Res & { accounts?: Account[] }
+      if (res.ok === true) set({ accounts: res.accounts ?? get().accounts })
+      else set({ error: (res as Err).error ?? 'Could not save the strategy.' })
+    },
+
+    exportSummary: async (req) => {
+      if (get().exportingSummary) return false
+      set({ exportingSummary: true, error: '' })
+      try {
+        const res = (await invoke('export-summary', req)) as Res & { file?: string; aiIncluded?: boolean; aiNote?: string }
+        if (res.ok === true) {
+          const ai = res.aiIncluded ? ' (with AI summary)' : res.aiNote ? ' — AI summary skipped: ' + res.aiNote : ''
+          set({ status: `Account summary exported${ai}.` })
+          return true
+        }
+        if (!(res as Err).cancelled && !(res as Err).canceled)
+          set({ error: (res as Err).error ?? 'Could not export the summary.' })
+        return false
+      } finally {
+        set({ exportingSummary: false })
+      }
     },
 
     setAccountFee: async (id, feePerContract) => {
@@ -459,17 +513,22 @@ export const useTrades = create<State>((set, get) => {
         set({ aiError: 'No AI key set. Add an Anthropic, OpenAI, Gemini or DeepSeek key in Settings → API Keys.' })
         return
       }
-      set({ aiBusy: true, aiError: '', aiText: '', aiProvider: '' })
+      set({ aiBusy: true, aiError: '', aiText: '', aiProvider: '', aiModel: '' })
       try {
-        const res = (await invoke('ai-analyze', { prompt: buildAiPrompt(stats, trades) })) as Res & {
+        // ground the analysis in the strategy notes of the accounts being viewed
+        const { accounts, selectedAccounts } = get()
+        const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
+        const strategies = viewed.map((a) => ({ name: a.name, strategy: a.strategy || '' }))
+        const res = (await invoke('ai-analyze', { prompt: buildAiPrompt(stats, trades, strategies) })) as Res & {
           text?: string
           provider?: string
+          model?: string
         }
         if (res.ok !== true) {
           set({ aiError: (res as Err).error ?? 'AI analysis failed.' })
           return
         }
-        set({ aiText: String(res.text ?? ''), aiProvider: String(res.provider ?? '') })
+        set({ aiText: String(res.text ?? ''), aiProvider: String(res.provider ?? ''), aiModel: String(res.model ?? '') })
       } finally {
         set({ aiBusy: false })
       }

@@ -30,7 +30,7 @@ import type { Trade } from './lib/analytics'
 import { etInputToEpoch, etInputValue } from './lib/et'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
-import { AccountsBar, BreakdownTab, CalendarTab, ImportModal, ManageAccountsModal, SectorCard, SectorDetail, StatsTab } from './components/panels'
+import { AccountsBar, BreakdownTab, CalendarTab, ExportSummaryModal, ImportModal, ManageAccountsModal, SectorCard, SectorDetail, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
 
@@ -662,6 +662,82 @@ function TimingTab(): React.JSX.Element {
 
 /* -------------------------------- AI coach ------------------------------- */
 
+/** Per-account "my strategy" notes — the coach treats them as ground truth
+ *  about intent, so the analysis critiques execution of YOUR plan instead of
+ *  guessing what the plan was. */
+function StrategyCard(): React.JSX.Element {
+  const accounts = useTrades((s) => s.accounts)
+  const selected = useTrades((s) => s.selectedAccounts)
+  const save = useTrades((s) => s.setAccountStrategy)
+  const [accountId, setAccountId] = useState(selected.length === 1 ? selected[0] : accounts[0]?.id ?? 'default')
+  const account = accounts.find((a) => a.id === accountId) ?? accounts[0]
+  const [text, setText] = useState(account?.strategy ?? '')
+  const [savedTick, setSavedTick] = useState(false)
+  const [open, setOpen] = useState(!(account?.strategy ?? '').trim())
+
+  // switching accounts loads that account's saved strategy
+  const pick = (id: string): void => {
+    setAccountId(id)
+    setText(accounts.find((a) => a.id === id)?.strategy ?? '')
+  }
+  const dirty = text !== (account?.strategy ?? '')
+
+  return (
+    <div className="rounded-xl border border-edge bg-surface">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-sm font-semibold text-ink"
+      >
+        <Pencil size={13} className="text-accent" />
+        My strategy
+        <span className="font-normal text-muted">
+          — tell the coach how you actually trade so its analysis is based on your plan
+        </span>
+        <span className="ml-auto text-xs text-muted">{open ? 'Hide' : account?.strategy?.trim() ? 'Edit' : 'Add'}</span>
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-edge px-3.5 py-3">
+          {accounts.length > 1 && (
+            <select
+              value={accountId}
+              onChange={(e) => pick(e.target.value)}
+              className="rounded-lg border border-edge bg-raised px-2 py-1.5 text-xs outline-none focus:border-accent"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={4}
+            maxLength={4000}
+            placeholder="Example: I scalp MES futures off 5-minute trendline breaks between 9:30–11:00 ET, risking a fixed $50/trade with a 2:1 target. I never hold through lunch and never add to losers…"
+            className="w-full resize-y rounded-lg border border-edge bg-raised px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-muted/50 focus:border-accent"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                void save(accountId, text)
+                setSavedTick(true)
+                setTimeout(() => setSavedTick(false), 1600)
+              }}
+              disabled={!dirty}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-ink hover:opacity-90 disabled:opacity-40"
+            >
+              Save strategy
+            </button>
+            {savedTick && <span className="text-xs text-ok">Saved — the next analysis will use it.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AiTab(): React.JSX.Element {
   const s = useTrades()
   const [exporting, setExporting] = useState(false)
@@ -716,13 +792,19 @@ function AiTab(): React.JSX.Element {
           {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
           Export PDF
         </button>
-        {s.aiProvider && <span className="text-xs text-muted">via {s.aiProvider}</span>}
+        {s.aiProvider && (
+          <span className="text-xs text-muted">
+            via {s.aiProvider}
+            {s.aiModel ? ` · ${s.aiModel}` : ''}
+          </span>
+        )}
         {s.aiBusy && (
           <button onClick={() => void s.cancelAi()} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
             Cancel
           </button>
         )}
       </div>
+      <StrategyCard />
       {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
       {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
       {s.aiText ? (
@@ -783,6 +865,7 @@ export default function TradeAnalytics(): React.JSX.Element {
 
   const [manageOpen, setManageOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
 
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
@@ -827,6 +910,17 @@ export default function TradeAnalytics(): React.JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {s.executions.length > 0 && (
+            <button
+              onClick={() => setExportOpen(true)}
+              disabled={s.exportingSummary}
+              title="Two-page PDF summary of an account over a chosen timeframe"
+              className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+            >
+              {s.exportingSummary ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+              Export Account Summary
+            </button>
+          )}
           <button
             onClick={() => setImportOpen(true)}
             disabled={s.importing}
@@ -955,6 +1049,7 @@ export default function TradeAnalytics(): React.JSX.Element {
 
       {manageOpen && <ManageAccountsModal onClose={() => setManageOpen(false)} />}
       {importOpen && <ImportModal onClose={() => setImportOpen(false)} />}
+      {exportOpen && <ExportSummaryModal onClose={() => setExportOpen(false)} />}
 
       {/* status bar */}
       <footer className="flex items-center gap-2 border-t border-edge px-5 py-1.5 text-xs text-muted">
