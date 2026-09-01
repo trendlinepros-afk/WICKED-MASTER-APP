@@ -202,10 +202,13 @@ export function BarChart({
 
 export function ColumnChart({
   columns,
-  height = 180
+  height = 180,
+  maxColWidth = 130
 }: {
   columns: { label: string; value: number }[]
   height?: number
+  /** cap per-bar width so a few bars on a wide window read as columns, not slabs */
+  maxColWidth?: number
 }): React.JSX.Element {
   if (columns.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxAbs = Math.max(1, ...columns.map((c) => Math.abs(c.value)))
@@ -217,12 +220,17 @@ export function ColumnChart({
   const valueH = showValues ? 16 : 0
   const barArea = Math.max(24, height - labelH - valueH)
   return (
-    <div className="flex items-stretch gap-1.5" style={{ height: barArea + labelH + valueH }}>
+    <div className="flex items-stretch justify-center gap-1.5" style={{ height: barArea + labelH + valueH }}>
       {columns.map((c) => {
         const px = Math.round((Math.abs(c.value) / maxAbs) * barArea)
         const pos = c.value >= 0
         return (
-          <div key={c.label} className="flex min-w-0 flex-1 flex-col" title={`${c.label}: ${pos ? '+' : '-'}$${Math.abs(c.value).toFixed(2)}`}>
+          <div
+            key={c.label}
+            className="flex min-w-0 flex-1 flex-col"
+            style={{ maxWidth: maxColWidth }}
+            title={`${c.label}: ${pos ? '+' : '-'}$${Math.abs(c.value).toFixed(2)}`}
+          >
             <div className="flex w-full flex-col items-center justify-end" style={{ height: barArea + valueH }}>
               {showValues && (
                 <div className={`w-full truncate text-center text-[11px] font-medium tabular-nums ${pos ? 'text-ok' : 'text-danger'}`}>

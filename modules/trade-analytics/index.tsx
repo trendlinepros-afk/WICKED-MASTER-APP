@@ -645,15 +645,15 @@ function TimingTab(): React.JSX.Element {
     <div className="space-y-4 p-4">
       <div className="rounded-xl border border-edge bg-surface p-4">
         <h3 className="mb-3 text-sm font-semibold">P&L by day of week</h3>
-        <ColumnChart columns={stats.byDayOfWeek.map((b) => ({ label: b.label, value: b.pnl }))} />
+        <ColumnChart columns={stats.byDayOfWeek.map((b) => ({ label: b.label, value: b.pnl }))} height={320} maxColWidth={170} />
       </div>
       <div className="rounded-xl border border-edge bg-surface p-4">
         <h3 className="mb-3 text-sm font-semibold">P&L by hour of day (close time, ET)</h3>
-        <ColumnChart columns={stats.byHour.map((b) => ({ label: b.label.replace(':00', ''), value: b.pnl }))} />
+        <ColumnChart columns={stats.byHour.map((b) => ({ label: b.label.replace(':00', ''), value: b.pnl }))} height={320} maxColWidth={150} />
       </div>
       <div className="rounded-xl border border-edge bg-surface p-4">
         <h3 className="mb-3 text-sm font-semibold">Daily P&L</h3>
-        <ColumnChart columns={stats.byDay.slice(-30).map((b) => ({ label: b.label.slice(5), value: b.pnl }))} height={140} />
+        <ColumnChart columns={stats.byDay.slice(-30).map((b) => ({ label: b.label.slice(5), value: b.pnl }))} height={300} maxColWidth={110} />
         <p className="mt-2 text-xs text-muted">Last {Math.min(30, stats.byDay.length)} trading days shown.</p>
       </div>
     </div>
