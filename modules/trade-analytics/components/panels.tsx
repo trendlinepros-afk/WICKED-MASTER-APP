@@ -795,11 +795,14 @@ function HighlightPanel({ hi }: { hi: BucketHighlights }): React.JSX.Element {
 
 function ChartCard({
   title,
+  desc,
   m,
   buckets,
   hi
 }: {
   title: string
+  /** one-line plain-English explanation of what the metric means */
+  desc?: string
   m: TradeMetrics
   buckets: MetricBucket[]
   hi?: BucketHighlights
@@ -809,9 +812,12 @@ function ChartCard({
   const cols = toCols(buckets)
   return (
     <div className="rounded-xl border border-edge bg-surface p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <div className="flex overflow-hidden rounded-lg border border-edge text-xs">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {desc && <p className="mt-0.5 text-xs text-muted">{desc}</p>}
+        </div>
+        <div className="flex shrink-0 overflow-hidden rounded-lg border border-edge text-xs">
           <button onClick={() => setMode('pnl')} className={`px-2 py-1 ${mode === 'pnl' ? 'bg-accent text-accent-ink' : 'text-muted hover:text-ink'}`}>
             Agg P&L
           </button>
@@ -844,33 +850,42 @@ export function BreakdownTab(): React.JSX.Element {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-edge bg-surface p-4">
-          <h3 className="mb-3 text-sm font-semibold">P&L distribution (per trade)</h3>
+          <h3 className="text-sm font-semibold">P&L distribution (per trade)</h3>
+          <p className="mb-3 mt-0.5 text-xs text-muted">
+            How many trades landed in each profit/loss bucket — healthy trading keeps the red side capped while the green side stretches right.
+          </p>
           <DistributionChart buckets={m.pnlDistribution} />
         </div>
         <div className="rounded-xl border border-edge bg-surface p-4">
-          <h3 className="mb-3 text-sm font-semibold">Weekday × hour heatmap (ET close time)</h3>
+          <h3 className="text-sm font-semibold">Weekday × hour heatmap (ET close time)</h3>
+          <p className="mb-3 mt-0.5 text-xs text-muted">
+            P&L for every weekday + hour combination — green cells are when to trade, red cells are when to sit out.
+          </p>
           <HeatmapCard pnl={m.weekdayHourPnl} n={m.weekdayHourN} />
         </div>
       </div>
 
-      <ChartCard title="P&L vs price range" m={m} buckets={m.byPriceRange} hi={m.priceHi} />
-      <ChartCard title="P&L vs volume (share size)" m={m} buckets={m.byVolumeRange} hi={m.volumeHi} />
-      <ChartCard title="P&L vs time of day (ET)" m={m} buckets={m.byTimeOfDay} hi={m.timeHi} />
-      <ChartCard title="P&L vs hold duration" m={m} buckets={m.byDurationRange} hi={m.durationHi} />
+      <ChartCard title="P&L vs price range" desc="Profit by the price of what you traded — do cheap tickers or expensive ones treat you better? (Agg P&L = total dollars; Win/Loss = trade counts.)" m={m} buckets={m.byPriceRange} hi={m.priceHi} />
+      <ChartCard title="P&L vs volume (share size)" desc="Profit by position size (shares/contracts per trade) — shows whether sizing up helps or hurts you." m={m} buckets={m.byVolumeRange} hi={m.volumeHi} />
+      <ChartCard title="P&L vs time of day (ET)" desc="Profit by 30-minute window of when trades closed — your best and worst times to be trading." m={m} buckets={m.byTimeOfDay} hi={m.timeHi} />
+      <ChartCard title="P&L vs hold duration" desc="Profit by how long you held each trade — tells you if your edge is in quick scalps or letting trades breathe." m={m} buckets={m.byDurationRange} hi={m.durationHi} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <ChartCard title="P&L vs day of week" m={m} buckets={m.byDayOfWeek} />
-        <ChartCard title="P&L vs month" m={m} buckets={m.byMonth} />
-        <ChartCard title="P&L vs year" m={m} buckets={m.byYear} />
+        <ChartCard title="P&L vs day of week" desc="Which weekdays make you money and which drain it." m={m} buckets={m.byDayOfWeek} />
+        <ChartCard title="P&L vs month" desc="Profit by calendar month — seasonality in your results." m={m} buckets={m.byMonth} />
+        <ChartCard title="P&L vs year" desc="Profit by year — your long-term trajectory." m={m} buckets={m.byYear} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="P&L vs position" m={m} buckets={m.byPosition} />
-        <ChartCard title="P&L vs asset type" m={m} buckets={m.byAssetType} />
+        <ChartCard title="P&L vs position" desc="Long trades vs short trades — which direction you actually make money in." m={m} buckets={m.byPosition} />
+        <ChartCard title="P&L vs asset type" desc="Profit split by instrument type (stocks, futures…)." m={m} buckets={m.byAssetType} />
       </div>
 
       <div className="rounded-xl border border-edge bg-surface p-4">
-        <h3 className="mb-3 text-sm font-semibold">Daily drawdown (peak-to-trough of cumulative P&L)</h3>
+        <h3 className="text-sm font-semibold">Daily drawdown (peak-to-trough of cumulative P&L)</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">
+          How far below your equity high-water mark you sat each day — the depth and length of your losing stretches. 0 means at a new peak.
+        </p>
         <DrawdownArea points={m.drawdown} />
       </div>
     </div>
@@ -889,15 +904,20 @@ function DistributionChart({ buckets }: { buckets: MetricBucket[] }): React.JSX.
     <div className="w-full overflow-x-auto">
       <div className="flex min-w-full items-end gap-1" style={{ height: 180 }}>
         {buckets.map((b) => (
-          <div key={b.label} className="group flex min-w-[28px] flex-1 flex-col items-center justify-end gap-1" title={`${b.label}: ${b.trades} trade(s)`}>
-            <span className="text-[9px] tabular-nums text-muted opacity-0 group-hover:opacity-100">{b.trades || ''}</span>
+          <div
+            key={b.label}
+            className="group flex min-w-[28px] flex-1 flex-col items-center justify-end gap-1"
+            style={{ maxWidth: 120 }}
+            title={`${b.label}: ${b.trades} trade(s)`}
+          >
+            <span className="text-[10px] tabular-nums text-muted">{b.trades || ''}</span>
             <div className="flex h-full w-full items-end justify-center">
               <div
                 className="w-full rounded-t"
                 style={{ height: `${(b.trades / maxN) * 100}%`, background: isLoss(b.label) ? 'rgb(var(--wk-danger))' : 'rgb(var(--wk-ok))', opacity: 0.85, minHeight: b.trades ? 2 : 0 }}
               />
             </div>
-            <div className="h-9 origin-top-left -rotate-45 whitespace-nowrap text-[9px] leading-tight text-muted">{b.label}</div>
+            <div className="w-full truncate text-center text-[9.5px] leading-tight text-muted">{b.label}</div>
           </div>
         ))}
       </div>

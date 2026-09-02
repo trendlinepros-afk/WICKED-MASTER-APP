@@ -319,19 +319,27 @@ export interface MetricCol {
 /** Vertical +/- columns with a zero baseline, rotated labels, hover tooltip. */
 export function AggPnlColumns({
   cols,
-  height = 200
+  height = 230,
+  maxColWidth = 150
 }: {
   cols: MetricCol[]
   height?: number
+  maxColWidth?: number
 }): React.JSX.Element {
   if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxAbs = Math.max(1, ...cols.map((c) => Math.abs(c.pnl)))
   // Pixel-based bar heights (see ColumnChart) — % chains collapse to 0 here.
-  const labelH = 38
-  const halfH = Math.max(20, Math.floor((height - labelH - 1) / 2))
+  // Labels live in their OWN horizontal strip below the negative half — never
+  // rotated into the bar area, so a tall red bar can't cover them.
+  const showValues = cols.length <= 14
+  const labelH = 18
+  const valueH = showValues ? 15 : 0
+  const halfH = Math.max(20, Math.floor((height - labelH - 1 - valueH * 2) / 2))
+  const fmtV = (v: number): string =>
+    `${v >= 0 ? '+' : '-'}$${Math.abs(v) >= 1000 ? `${(Math.abs(v) / 1000).toFixed(1)}k` : Math.abs(v).toFixed(0)}`
   return (
     <div className="w-full overflow-x-auto">
-      <div className="flex min-w-full items-stretch gap-1" style={{ height: halfH * 2 + 1 + labelH }}>
+      <div className="flex min-w-full items-stretch justify-center gap-1" style={{ height: halfH * 2 + 1 + labelH + valueH * 2 }}>
         {cols.map((c) => {
           const px = Math.round((Math.abs(c.pnl) / maxAbs) * halfH)
           const pos = c.pnl >= 0
@@ -339,8 +347,14 @@ export function AggPnlColumns({
             <div
               key={c.label}
               className="group relative flex min-w-[26px] flex-1 flex-col"
+              style={{ maxWidth: maxColWidth }}
               title={`${c.label}\n${pos ? '+' : '-'}$${Math.abs(c.pnl).toFixed(2)} · ${c.trades} trade(s) · ${c.wins}W/${c.losses}L`}
             >
+              {showValues && (
+                <div className={`w-full truncate text-center text-[10px] font-medium tabular-nums text-ok ${pos ? '' : 'invisible'}`} style={{ height: valueH }}>
+                  {fmtV(c.pnl)}
+                </div>
+              )}
               <div className="flex w-full flex-col justify-end" style={{ height: halfH }}>
                 {pos && <div className="w-full rounded-t" style={{ height: px, background: OK, opacity: 0.88, minHeight: c.pnl !== 0 ? 3 : 0 }} />}
               </div>
@@ -348,7 +362,14 @@ export function AggPnlColumns({
               <div className="flex w-full flex-col justify-start" style={{ height: halfH }}>
                 {!pos && <div className="w-full rounded-b" style={{ height: px, background: DANGER, opacity: 0.88, minHeight: c.pnl !== 0 ? 3 : 0 }} />}
               </div>
-              <div className="mt-1 origin-top-left -rotate-45 whitespace-nowrap text-[10px] leading-tight text-muted">{c.label}</div>
+              {showValues && (
+                <div className={`w-full truncate text-center text-[10px] font-medium tabular-nums text-danger ${pos ? 'invisible' : ''}`} style={{ height: valueH }}>
+                  {fmtV(c.pnl)}
+                </div>
+              )}
+              <div className="w-full truncate text-center text-[10px] text-muted" style={{ height: labelH, lineHeight: `${labelH}px` }}>
+                {c.label}
+              </div>
             </div>
           )
         })}
@@ -360,30 +381,36 @@ export function AggPnlColumns({
 /** Side-by-side win vs loss COUNT columns per bucket. */
 export function WinLossColumns({
   cols,
-  height = 180
+  height = 230,
+  maxColWidth = 150
 }: {
   cols: MetricCol[]
   height?: number
+  maxColWidth?: number
 }): React.JSX.Element {
   if (cols.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No data.</div>
   const maxN = Math.max(1, ...cols.map((c) => Math.max(c.wins, c.losses)))
   // Pixel-based bar heights (see ColumnChart) — % chains collapse to 0 here.
-  const labelH = 38
+  // Horizontal labels in a reserved strip (rotated labels collided with bars).
+  const labelH = 18
   const barArea = Math.max(24, height - labelH)
   return (
     <div className="w-full overflow-x-auto">
-      <div className="flex min-w-full items-stretch gap-1.5" style={{ height: barArea + labelH }}>
+      <div className="flex min-w-full items-stretch justify-center gap-1.5" style={{ height: barArea + labelH }}>
         {cols.map((c) => (
           <div
             key={c.label}
             className="group flex min-w-[26px] flex-1 flex-col"
+            style={{ maxWidth: maxColWidth }}
             title={`${c.label}\n${c.wins} win(s) / ${c.losses} loss(es)`}
           >
             <div className="flex w-full items-end justify-center gap-0.5" style={{ height: barArea }}>
               <div className="w-1/2 rounded-t" style={{ height: Math.round((c.wins / maxN) * barArea), background: OK, opacity: 0.88, minHeight: c.wins ? 3 : 0 }} />
               <div className="w-1/2 rounded-t" style={{ height: Math.round((c.losses / maxN) * barArea), background: DANGER, opacity: 0.88, minHeight: c.losses ? 3 : 0 }} />
             </div>
-            <div className="mt-1 origin-top-left -rotate-45 whitespace-nowrap text-[10px] leading-tight text-muted">{c.label}</div>
+            <div className="w-full truncate text-center text-[10px] text-muted" style={{ height: labelH, lineHeight: `${labelH}px` }}>
+              {c.label}
+            </div>
           </div>
         ))}
       </div>

@@ -644,15 +644,18 @@ function TimingTab(): React.JSX.Element {
   return (
     <div className="space-y-4 p-4">
       <div className="rounded-xl border border-edge bg-surface p-4">
-        <h3 className="mb-3 text-sm font-semibold">P&L by day of week</h3>
+        <h3 className="text-sm font-semibold">P&L by day of week</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">Total realized P&L per weekday (by trade close time) — which days of the week you should press and which to avoid.</p>
         <ColumnChart columns={stats.byDayOfWeek.map((b) => ({ label: b.label, value: b.pnl }))} height={320} maxColWidth={170} />
       </div>
       <div className="rounded-xl border border-edge bg-surface p-4">
-        <h3 className="mb-3 text-sm font-semibold">P&L by hour of day (close time, ET)</h3>
+        <h3 className="text-sm font-semibold">P&L by hour of day (close time, ET)</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">Total realized P&L per hour — your statistically best and worst hours to be in a trade.</p>
         <ColumnChart columns={stats.byHour.map((b) => ({ label: b.label.replace(':00', ''), value: b.pnl }))} height={320} maxColWidth={150} />
       </div>
       <div className="rounded-xl border border-edge bg-surface p-4">
-        <h3 className="mb-3 text-sm font-semibold">Daily P&L</h3>
+        <h3 className="text-sm font-semibold">Daily P&L</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">Realized P&L for each trading day — the day-by-day rhythm behind your equity curve.</p>
         <ColumnChart columns={stats.byDay.slice(-30).map((b) => ({ label: b.label.slice(5), value: b.pnl }))} height={300} maxColWidth={110} />
         <p className="mt-2 text-xs text-muted">Last {Math.min(30, stats.byDay.length)} trading days shown.</p>
       </div>
