@@ -1123,10 +1123,12 @@ export function CalendarTab(): React.JSX.Element {
         </div>
         <div className="flex min-h-0 flex-1 flex-col">
           {weeks.map((week, wi) => {
+            // Week P&L covers EVERY visible day in the row — including the
+            // padded days from the neighboring month — so a week that starts
+            // with a traded Aug 31 Monday shows the true weekly total.
             let weekPnl = 0
             let weekHasData = false
             for (const d of week) {
-              if (d < rangeStart || d > rangeEnd) continue
               const c = byDate.get(d)
               if (c) {
                 weekPnl += c.pnl
@@ -1137,18 +1139,21 @@ export function CalendarTab(): React.JSX.Element {
               <div key={wi} className="grid min-h-[84px] flex-1 grid-cols-[repeat(7,1fr)_92px] border-b border-edge/50 last:border-b-0">
                 {week.map((d) => {
                   const inRange = d >= rangeStart && d <= rangeEnd
-                  const c = inRange ? byDate.get(d) : undefined
+                  // out-of-range days still show their trades, just dimmed, so
+                  // month boundaries stay legible without hiding real activity
+                  const c = byDate.get(d)
                   const dayNum = Number(d.slice(8))
                   const label = dayNum === 1 || d === days[0] ? `${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]} ${dayNum}` : String(dayNum)
+                  const alpha = c ? Math.min(0.22, 0.06 + Math.abs(c.pnl) / 3000) * (inRange ? 1 : 0.5) : 0
                   return (
                     <div
                       key={d}
                       className="relative border-r border-edge/40 p-1.5"
-                      style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${Math.min(0.22, 0.06 + Math.abs(c.pnl) / 3000).toFixed(2)})` : 'transparent' }}
+                      style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${alpha.toFixed(3)})` : 'transparent' }}
                     >
-                      <div className={`text-[11px] font-medium ${inRange ? 'text-muted' : 'text-muted/30'}`}>{label}</div>
+                      <div className={`text-[11px] font-medium ${inRange ? 'text-muted' : c ? 'text-muted/60' : 'text-muted/30'}`}>{label}</div>
                       {c && (
-                        <div className="mt-1">
+                        <div className={`mt-1 ${inRange ? '' : 'opacity-60'}`}>
                           <div className={`text-sm font-bold tabular-nums ${pos(c.pnl)}`}>{signedMoney(c.pnl)}</div>
                           <div className="text-[11px] text-muted">{c.trades} trade{c.trades === 1 ? '' : 's'}</div>
                         </div>
