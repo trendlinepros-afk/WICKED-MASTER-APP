@@ -1160,11 +1160,11 @@ export function CalendarTab(): React.JSX.Element {
                       style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${alpha.toFixed(3)})` : undefined }}
                     >
                       <div className="flex items-center justify-between gap-1">
-                        <span className={`text-[11px] font-medium ${inRange ? 'text-muted' : c ? 'text-muted/60' : 'text-muted/30'}`}>{label}</span>
+                        <span className={`text-[22px] font-semibold leading-none ${inRange ? 'text-muted' : c ? 'text-muted/60' : 'text-muted/30'}`}>{label}</span>
                         {note ? (
-                          <StickyNote size={12} className="shrink-0 text-warn" />
+                          <StickyNote size={15} className="shrink-0 text-warn" />
                         ) : (
-                          <StickyNote size={12} className="shrink-0 text-muted/40 opacity-0 group-hover:opacity-100" />
+                          <StickyNote size={15} className="shrink-0 text-muted/40 opacity-0 group-hover:opacity-100" />
                         )}
                       </div>
                       {c && (
@@ -1174,7 +1174,7 @@ export function CalendarTab(): React.JSX.Element {
                         </div>
                       )}
                       {note && (
-                        <div className="mt-1 line-clamp-2 text-[10px] leading-tight text-ink/70">{note}</div>
+                        <div className="mt-1 line-clamp-2 text-[15px] font-medium leading-snug text-ink/80">{note}</div>
                       )}
                     </button>
                   )
