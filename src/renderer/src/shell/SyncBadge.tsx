@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Cloud, DownloadCloud, Loader2 } from 'lucide-react'
+import { AlertTriangle, Cloud, DownloadCloud, Loader2, RefreshCw } from 'lucide-react'
 import { SHELL_IPC, type SyncStatus } from '@shared/types'
 
 /** "2m ago" style relative time; '' if the timestamp is empty/unparseable. */
@@ -89,17 +89,39 @@ export default function SyncBadge({ expanded }: { expanded: boolean }): React.JS
       ? `Cloud is v${st.remote?.version} from ${st.remote?.device || 'another device'} — open Settings to Pull`
       : `Cloud Sync${st.lastPushUtc ? ` · pushed ${rel(st.lastPushUtc)}` : ''}${st.lastPullUtc ? ` · pulled ${rel(st.lastPullUtc)}` : ''}`
 
+  // "Sync Now": pull when the cloud is ahead (prompts + relaunches in main),
+  // otherwise push this device's state up. Fire-and-forget — the resulting
+  // broadcast updates this badge (busy spinner, then new timestamp).
+  const syncNow = (): void => {
+    if (st.busy) return
+    const channel = compare === 'remote-newer' ? SHELL_IPC.syncPullNow : SHELL_IPC.syncPushNow
+    window.wicked.invoke(channel).catch(() => undefined)
+  }
+  const syncNowLabel = compare === 'remote-newer' ? 'Pull cloud updates now' : 'Sync now (push this device)'
+
   return (
-    <button
-      onClick={() => navigate('/settings')}
-      title={title}
-      className={`relative flex h-9 items-center rounded-lg text-muted transition-colors hover:bg-raised/70 hover:text-ink ${
-        expanded ? 'w-full gap-3 px-3' : 'w-10 justify-center'
-      }`}
-    >
-      <Icon size={18} strokeWidth={1.8} className={`shrink-0 ${tone} ${spin ? 'animate-spin' : ''}`} />
-      {expanded && <span className={`min-w-0 flex-1 truncate text-left text-xs ${tone}`}>{label}</span>}
-      {!expanded && dot && <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full ${dot}`} />}
-    </button>
+    <div className={`flex items-center ${expanded ? 'w-full gap-1' : 'flex-col gap-1'}`}>
+      <button
+        onClick={() => navigate('/settings')}
+        title={title}
+        className={`relative flex h-9 items-center rounded-lg text-muted transition-colors hover:bg-raised/70 hover:text-ink ${
+          expanded ? 'min-w-0 flex-1 gap-3 px-3' : 'w-10 justify-center'
+        }`}
+      >
+        <Icon size={18} strokeWidth={1.8} className={`shrink-0 ${tone} ${spin ? 'animate-spin' : ''}`} />
+        {expanded && <span className={`min-w-0 flex-1 truncate text-left text-xs ${tone}`}>{label}</span>}
+        {!expanded && dot && <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full ${dot}`} />}
+      </button>
+      <button
+        onClick={syncNow}
+        disabled={st.busy}
+        title={syncNowLabel}
+        className={`flex h-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised/70 hover:text-ink disabled:opacity-50 ${
+          expanded ? 'w-9' : 'w-10'
+        }`}
+      >
+        <RefreshCw size={16} strokeWidth={1.8} className={`shrink-0 ${compare === 'remote-newer' ? 'text-accent' : ''} ${st.busy ? 'animate-spin' : ''}`} />
+      </button>
+    </div>
   )
 }

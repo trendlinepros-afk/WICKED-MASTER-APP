@@ -146,6 +146,9 @@ interface State {
   /** resolved display label, e.g. "1 month · Aug 3 – Sep 1, 2026" */
   rangeLabel: string
 
+  // per-day journal notes (Calendar view), keyed by YYYY-MM-DD, global
+  dayNotes: Record<string, string>
+
   // sectors (symbol → broad sector)
   sectors: Record<string, string>
   /** manual per-symbol sector overrides (symbol → sector); these win over auto */
@@ -176,6 +179,8 @@ interface State {
   toggleAccount: (id: string) => void
   selectAllAccounts: () => void
   setRange: (preset: RangePreset, startYmd?: string, endYmd?: string) => void
+  loadNotes: () => Promise<void>
+  setDayNote: (date: string, text: string) => Promise<void>
 
   load: () => Promise<void>
   refreshAccounts: () => Promise<void>
@@ -283,6 +288,8 @@ export const useTrades = create<State>((set, get) => {
     rangeEndYmd: '',
     rangeLabel: 'Lifetime',
 
+    dayNotes: {},
+
     sectors: {},
     sectorOverrides: {},
     sectorsBusy: false,
@@ -331,10 +338,29 @@ export const useTrades = create<State>((set, get) => {
       recompute(get().allExecutions)
     },
 
+    loadNotes: async () => {
+      const res = (await invoke('notes-list')) as Res & { notes?: Record<string, string> }
+      if (res.ok === true) set({ dayNotes: res.notes ?? {} })
+    },
+
+    setDayNote: async (date, text) => {
+      // optimistic: reflect immediately, then persist
+      const next = { ...get().dayNotes }
+      if (text.trim()) next[date] = text
+      else delete next[date]
+      set({ dayNotes: next })
+      const res = (await invoke('notes-set', { date, text })) as Res
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? 'Could not save the note.' })
+        void get().loadNotes() // resync from disk on failure
+      }
+    },
+
     load: async () => {
       const res = await invoke('executions')
       if (res.ok === true) recompute((res.executions as Execution[]) ?? [], [])
       await get().refreshAccounts()
+      void get().loadNotes()
       void get().loadSectors()
       void get().auditDuplicates()
       set({ loaded: true })

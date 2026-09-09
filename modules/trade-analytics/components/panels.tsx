@@ -12,6 +12,7 @@ import {
   Pencil,
   Plus,
   Sparkles,
+  StickyNote,
   Trash2,
   Upload,
   Wallet,
@@ -984,6 +985,7 @@ function HeatmapCard({ pnl, n }: { pnl: number[][]; n: number[][] }): React.JSX.
 
 export function CalendarTab(): React.JSX.Element {
   const m = useTrades((s) => s.metrics)
+  const dayNotes = useTrades((s) => s.dayNotes)
   const byDate = new Map((m?.daily ?? []).map((d) => [d.date, d]))
 
   type RangeMode = 'this-week' | 'last-2-weeks' | 'this-month' | 'last-month' | 'last-90' | 'custom'
@@ -992,6 +994,8 @@ export function CalendarTab(): React.JSX.Element {
   const [monthOffset, setMonthOffset] = useState(0)
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
+  // the day whose note is being viewed/edited ('' = none)
+  const [noteDate, setNoteDate] = useState('')
 
   if (!m || m.closedTrades === 0) return <div className="p-8 text-sm text-muted">No closed trades yet.</div>
 
@@ -1145,20 +1149,34 @@ export function CalendarTab(): React.JSX.Element {
                   const dayNum = Number(d.slice(8))
                   const label = dayNum === 1 || d === days[0] ? `${MONTHS_SHORT[Number(d.slice(5, 7)) - 1]} ${dayNum}` : String(dayNum)
                   const alpha = c ? Math.min(0.22, 0.06 + Math.abs(c.pnl) / 3000) * (inRange ? 1 : 0.5) : 0
+                  const note = dayNotes[d]
                   return (
-                    <div
+                    <button
                       key={d}
-                      className="relative border-r border-edge/40 p-1.5"
-                      style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${alpha.toFixed(3)})` : 'transparent' }}
+                      type="button"
+                      onClick={() => setNoteDate(d)}
+                      title={note ? note : 'Click to add a note'}
+                      className="group relative border-r border-edge/40 p-1.5 text-left transition-colors hover:bg-ink/5"
+                      style={{ background: c ? `rgb(var(--wk-${c.pnl >= 0 ? 'ok' : 'danger'}) / ${alpha.toFixed(3)})` : undefined }}
                     >
-                      <div className={`text-[11px] font-medium ${inRange ? 'text-muted' : c ? 'text-muted/60' : 'text-muted/30'}`}>{label}</div>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className={`text-[11px] font-medium ${inRange ? 'text-muted' : c ? 'text-muted/60' : 'text-muted/30'}`}>{label}</span>
+                        {note ? (
+                          <StickyNote size={12} className="shrink-0 text-warn" />
+                        ) : (
+                          <StickyNote size={12} className="shrink-0 text-muted/40 opacity-0 group-hover:opacity-100" />
+                        )}
+                      </div>
                       {c && (
                         <div className={`mt-1 ${inRange ? '' : 'opacity-60'}`}>
                           <div className={`text-sm font-bold tabular-nums ${pos(c.pnl)}`}>{signedMoney(c.pnl)}</div>
                           <div className="text-[11px] text-muted">{c.trades} trade{c.trades === 1 ? '' : 's'}</div>
                         </div>
                       )}
-                    </div>
+                      {note && (
+                        <div className="mt-1 line-clamp-2 text-[10px] leading-tight text-ink/70">{note}</div>
+                      )}
+                    </button>
                   )
                 })}
                 <div className="flex flex-col items-end justify-center border-l border-edge/60 px-2">
@@ -1171,6 +1189,86 @@ export function CalendarTab(): React.JSX.Element {
               </div>
             )
           })}
+        </div>
+      </div>
+
+      {noteDate && <DayNoteModal date={noteDate} onClose={() => setNoteDate('')} />}
+    </div>
+  )
+}
+
+/** Per-day journal note editor (opened by clicking a calendar day). */
+function DayNoteModal({ date, onClose }: { date: string; onClose: () => void }): React.JSX.Element {
+  const dayNotes = useTrades((s) => s.dayNotes)
+  const save = useTrades((s) => s.setDayNote)
+  const cell = useTrades((s) => s.metrics?.daily.find((x) => x.date === date))
+  const [text, setText] = useState(dayNotes[date] ?? '')
+  const pretty = ((): string => {
+    const [y, mo, d] = date.split('-').map(Number)
+    return new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('en-US', {
+      timeZone: 'UTC',
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric'
+    })
+  })()
+
+  const commit = (): void => {
+    void save(date, text)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
+          <StickyNote size={15} className="text-warn" />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">{pretty}</div>
+            {cell && (
+              <div className="text-xs text-muted">
+                <span className={pos(cell.pnl)}>{signedMoney(cell.pnl)}</span> · {cell.trades} trade{cell.trades === 1 ? '' : 's'}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="space-y-3 p-4">
+          <textarea
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit()
+              if (e.key === 'Escape') onClose()
+            }}
+            rows={6}
+            maxLength={8000}
+            placeholder="What happened this day? Setups, mistakes, mindset, news…"
+            className="w-full resize-y rounded-lg border border-edge bg-raised px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-muted/50 focus:border-accent"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted">⌘/Ctrl+Enter to save · notes ride along with Backup &amp; Sync</span>
+            <div className="flex items-center gap-2">
+              {dayNotes[date] && (
+                <button
+                  onClick={() => {
+                    void save(date, '')
+                    onClose()
+                  }}
+                  className="rounded-lg px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
+                >
+                  Delete
+                </button>
+              )}
+              <button onClick={commit} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90">
+                Save
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
