@@ -99,6 +99,23 @@ destination account) or **drag the file** onto the window. The parser
   CME/CBOT/NYMEX/COMEX/ICE roots. A bare stock ticker is never treated as a
   future (CL the stock is Colgate; only `CL 09-26` is crude), and an unknown
   root stays at 1×.
+- **Forex (spot FX).** A currency pair — `EURUSD` or `EUR/USD`, where BOTH
+  halves are fiat ISO codes — is priced in **lots**: one standard lot is 100,000
+  units of the base currency, so P&L = Δprice × 100,000 × lots. Without this a
+  EURUSD trade (price ~1.16) would book pennies instead of real dollars. This is
+  **exact for USD-quoted pairs** (EURUSD, GBPUSD, AUDUSD, NZDUSD…); for
+  JPY-quoted or cross pairs the flat 100k lot size is the right magnitude but can
+  drift a little from the broker's exact figure. Metals (`XAUUSD`) and crypto
+  (`BTCUSD`) are deliberately **not** treated as 100k FX (their contract sizes
+  differ) and stay at 1×. Forex symbols classify structurally as **Currencies**
+  (no equity-fundamentals lookup). **TradingView order history** (as exported
+  from **EightCap** and other TradingView-connected brokers) is recognized by
+  name: its `Update Time`, `Avg Fill Price`, `Position ID` and `Commission`
+  columns import natively, and P&L reconciles to the export's own
+  `Net Closed P&L` total to the cent. Note: the journal groups fills into
+  round-trips by **FIFO** (a position held continuously across two broker
+  Position IDs is one round-trip), so the *trade count* can differ from the
+  broker's position list while every dollar total matches.
 - Multiple files — even from different brokers — can be imported at once.
 
 ## Market sectors

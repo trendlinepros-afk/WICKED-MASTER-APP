@@ -303,6 +303,46 @@ export function futuresMultiplier(symbol: string): number {
   return root ? FUTURES_POINT_VALUE[root] ?? 1 : 1
 }
 
+/* --------------------------------- forex ---------------------------------- */
+
+/**
+ * Spot-FX quantities are in LOTS, and one standard lot is 100,000 units of the
+ * base currency — so P&L for a pair is (Δprice × 100,000 × lots). Without this,
+ * a EURUSD trade (price ~1.16) would book pennies instead of the real dollars.
+ *
+ * Only pairs whose BOTH halves are fiat ISO codes qualify, so a stock ticker
+ * can't accidentally match, and metals (XAUUSD) / crypto (BTCUSD) are excluded
+ * (their contract sizes are 100 oz / 1 coin, not 100k — left at 1×).
+ */
+const FIAT_CODES = new Set([
+  'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'NZD', 'CAD', 'CHF', 'CNH', 'CNY', 'HKD', 'SGD',
+  'SEK', 'NOK', 'DKK', 'PLN', 'MXN', 'ZAR', 'TRY', 'HUF', 'CZK', 'ILS', 'THB', 'INR', 'RUB'
+])
+
+/** Standard-lot contract size (100,000) for a spot FX pair, else 0. Accepts
+ *  "EURUSD" and "EUR/USD" / "EUR-USD" forms. */
+function forexContractSize(symbol: string): number {
+  const s = symbol.toUpperCase().replace(/[/_\-.]/g, '')
+  if (!/^[A-Z]{6}$/.test(s)) return 0
+  return FIAT_CODES.has(s.slice(0, 3)) && FIAT_CODES.has(s.slice(3)) ? 100000 : 0
+}
+
+/** True when the symbol is a recognizable spot forex pair (EURUSD, EUR/USD…). */
+export function isForexInstrument(symbol: string): boolean {
+  return forexContractSize(symbol) > 0
+}
+
+/**
+ * Dollars per 1.0 price move per 1.0 unit for ANY instrument: FX lot size for
+ * currency pairs (exact for USD-quoted majors like EURUSD), futures point value
+ * for contracts, and 1 for equities/crypto. This is what P&L, cost basis and
+ * volume are scaled by.
+ */
+export function instrumentMultiplier(symbol: string): number {
+  const fx = forexContractSize(symbol)
+  return fx > 0 ? fx : futuresMultiplier(symbol)
+}
+
 /* -------------------------------- headers ---------------------------------- */
 
 /** Aliases are in PRIORITY order — the first alias found in the header wins. */
@@ -324,6 +364,9 @@ const HEADER_ALIASES: Record<string, string[]> = {
     'filled time(edt)',
     'executed time',
     'execution time',
+    'update time', // TradingView / EightCap order history (fill/cancel time)
+    'closing time',
+    'close time',
     'date/time',
     'datetime',
     'trade time',
@@ -372,6 +415,9 @@ function buildColMap(header: string[]): Record<string, number> {
 
 function guessBroker(headerLower: string[]): string {
   const has = (...names: string[]): boolean => names.every((n) => headerLower.includes(n))
+  // TradingView order history (as exported from EightCap and other TV brokers):
+  // distinctive Avg Fill Price + Position ID (+ its own Closed P&L columns).
+  if (has('avg fill price') && has('position id')) return 'TradingView / EightCap'
   if (has('placed time') || (has('filled') && has('side') && has('avg price'))) return 'Webull'
   if (has('entry price', 'exit price')) return has('instrument') || has('market pos.') ? 'NinjaTrader (trades)' : 'Trade list'
   if (has('instrument') && (has('e/x') || has('order id') || has('oco') || has('state'))) return 'NinjaTrader'
@@ -538,7 +584,7 @@ export function parseBrokerCsv(text: string): ParseResult {
         addError(line, `${symbol}: trade row without a usable quantity/entry price — skipped.`)
         continue
       }
-      const multiplier = futuresMultiplier(symbol)
+      const multiplier = instrumentMultiplier(symbol)
       const hasExit = exitPrice > 0 && !!exitTime.trim()
 
       // Authoritative net P&L for this trade, if the report provides it.
@@ -677,7 +723,7 @@ export function parseBrokerCsv(text: string): ParseResult {
       limitPrice,
       fees,
       commission,
-      multiplier: futuresMultiplier(symbol),
+      multiplier: instrumentMultiplier(symbol),
       timeInForce: get('tif'),
       placedText,
       filledText,
