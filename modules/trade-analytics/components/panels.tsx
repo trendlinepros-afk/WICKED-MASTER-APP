@@ -1201,8 +1201,11 @@ export function CalendarTab(): React.JSX.Element {
 function DayNoteModal({ date, onClose }: { date: string; onClose: () => void }): React.JSX.Element {
   const dayNotes = useTrades((s) => s.dayNotes)
   const save = useTrades((s) => s.setDayNote)
+  const notesAccount = useTrades((s) => s.notesAccount)
+  const accountName = useTrades((s) => s.accounts.find((a) => a.id === s.notesAccount)?.name ?? '')
   const cell = useTrades((s) => s.metrics?.daily.find((x) => x.date === date))
   const [text, setText] = useState(dayNotes[date] ?? '')
+  const editable = notesAccount != null
   const pretty = ((): string => {
     const [y, mo, d] = date.split('-').map(Number)
     return new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString('en-US', {
@@ -1226,49 +1229,64 @@ function DayNoteModal({ date, onClose }: { date: string; onClose: () => void }):
           <StickyNote size={15} className="text-warn" />
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">{pretty}</div>
-            {cell && (
-              <div className="text-xs text-muted">
-                <span className={pos(cell.pnl)}>{signedMoney(cell.pnl)}</span> · {cell.trades} trade{cell.trades === 1 ? '' : 's'}
-              </div>
-            )}
+            <div className="truncate text-xs text-muted">
+              {editable && accountName ? <span className="text-accent">{accountName}</span> : null}
+              {cell && (
+                <>
+                  {editable && accountName ? ' · ' : ''}
+                  <span className={pos(cell.pnl)}>{signedMoney(cell.pnl)}</span> · {cell.trades} trade{cell.trades === 1 ? '' : 's'}
+                </>
+              )}
+            </div>
           </div>
           <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
             <X size={15} />
           </button>
         </div>
         <div className="space-y-3 p-4">
+          {!editable && (
+            <div className="rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+              You&apos;re viewing multiple accounts. Notes are saved per account — pick a single account in the
+              <strong> Viewing</strong> filter to add or edit one.
+            </div>
+          )}
           <textarea
-            autoFocus
+            autoFocus={editable}
+            readOnly={!editable}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit()
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && editable) commit()
               if (e.key === 'Escape') onClose()
             }}
             rows={6}
             maxLength={8000}
-            placeholder="What happened this day? Setups, mistakes, mindset, news…"
-            className="w-full resize-y rounded-lg border border-edge bg-raised px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-muted/50 focus:border-accent"
+            placeholder={editable ? 'What happened this day? Setups, mistakes, mindset, news…' : 'No note for the selected accounts.'}
+            className={`w-full resize-y rounded-lg border border-edge bg-raised px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-muted/50 focus:border-accent ${
+              editable ? '' : 'opacity-70'
+            }`}
           />
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted">⌘/Ctrl+Enter to save · notes ride along with Backup &amp; Sync</span>
-            <div className="flex items-center gap-2">
-              {dayNotes[date] && (
-                <button
-                  onClick={() => {
-                    void save(date, '')
-                    onClose()
-                  }}
-                  className="rounded-lg px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
-                >
-                  Delete
+          {editable && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted">⌘/Ctrl+Enter to save · notes ride along with Backup &amp; Sync</span>
+              <div className="flex items-center gap-2">
+                {dayNotes[date] && (
+                  <button
+                    onClick={() => {
+                      void save(date, '')
+                      onClose()
+                    }}
+                    className="rounded-lg px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
+                  >
+                    Delete
+                  </button>
+                )}
+                <button onClick={commit} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90">
+                  Save
                 </button>
-              )}
-              <button onClick={commit} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-medium text-accent-ink hover:opacity-90">
-                Save
-              </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

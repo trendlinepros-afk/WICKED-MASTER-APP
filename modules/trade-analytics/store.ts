@@ -146,8 +146,13 @@ interface State {
   /** resolved display label, e.g. "1 month · Aug 3 – Sep 1, 2026" */
   rangeLabel: string
 
-  // per-day journal notes (Calendar view), keyed by YYYY-MM-DD, global
+  // per-day journal notes (Calendar view), scoped PER ACCOUNT.
+  // allDayNotes: account → date → text (everything). dayNotes: the derived view
+  // for the accounts currently selected. notesAccount: the single account new
+  // notes write to (null when All/multiple are in view → notes are read-only).
+  allDayNotes: Record<string, Record<string, string>>
   dayNotes: Record<string, string>
+  notesAccount: string | null
 
   // sectors (symbol → broad sector)
   sectors: Record<string, string>
@@ -224,6 +229,26 @@ export const useTrades = create<State>((set, get) => {
     set({ allExecutions: all, executions: filtered, trades, stats, metrics, rangeLabel: range.label })
   }
 
+  /** Derive the calendar's note view + editable target from the current account
+   *  selection. A single account in view → its notes, editable. All/multiple →
+   *  the union of their notes, read-only (ambiguous which account to write to). */
+  const recomputeNotesView = (): void => {
+    const { allDayNotes, selectedAccounts, accounts } = get()
+    const ids = selectedAccounts.length > 0 ? selectedAccounts : accounts.map((a) => a.id)
+    const single =
+      selectedAccounts.length === 1
+        ? selectedAccounts[0]
+        : selectedAccounts.length === 0 && accounts.length === 1
+          ? accounts[0].id
+          : null
+    const merged: Record<string, string> = {}
+    for (const id of ids) {
+      const m = allDayNotes[id]
+      if (m) for (const [d, t] of Object.entries(m)) if (!merged[d]) merged[d] = t
+    }
+    set({ dayNotes: merged, notesAccount: single })
+  }
+
   const handleImport = async (res: Res): Promise<void> => {
     if (res.ok !== true) {
       if (!(res as Err).canceled) set({ error: (res as Err).error ?? 'Import failed.', status: 'Import failed.' })
@@ -288,7 +313,9 @@ export const useTrades = create<State>((set, get) => {
     rangeEndYmd: '',
     rangeLabel: 'Lifetime',
 
+    allDayNotes: {},
     dayNotes: {},
+    notesAccount: null,
 
     sectors: {},
     sectorOverrides: {},
@@ -327,10 +354,12 @@ export const useTrades = create<State>((set, get) => {
       const next = has ? cur.filter((x) => x !== id) : [...cur, id]
       set({ selectedAccounts: next })
       recompute(get().allExecutions, next)
+      recomputeNotesView()
     },
     selectAllAccounts: () => {
       set({ selectedAccounts: [] })
       recompute(get().allExecutions, [])
+      recomputeNotesView()
     },
 
     setRange: (preset, startYmd, endYmd) => {
@@ -339,17 +368,26 @@ export const useTrades = create<State>((set, get) => {
     },
 
     loadNotes: async () => {
-      const res = (await invoke('notes-list')) as Res & { notes?: Record<string, string> }
-      if (res.ok === true) set({ dayNotes: res.notes ?? {} })
+      const res = (await invoke('notes-list')) as Res & { notes?: Record<string, Record<string, string>> }
+      if (res.ok === true) {
+        set({ allDayNotes: res.notes ?? {} })
+        recomputeNotesView()
+      }
     },
 
     setDayNote: async (date, text) => {
+      const account = get().notesAccount
+      if (!account) {
+        set({ error: 'Select a single account (in the Viewing filter) to add or edit a note.' })
+        return
+      }
       // optimistic: reflect immediately, then persist
-      const next = { ...get().dayNotes }
-      if (text.trim()) next[date] = text
-      else delete next[date]
-      set({ dayNotes: next })
-      const res = (await invoke('notes-set', { date, text })) as Res
+      const all = { ...get().allDayNotes, [account]: { ...(get().allDayNotes[account] ?? {}) } }
+      if (text.trim()) all[account][date] = text
+      else delete all[account][date]
+      set({ allDayNotes: all })
+      recomputeNotesView()
+      const res = (await invoke('notes-set', { account, date, text })) as Res
       if (res.ok !== true) {
         set({ error: (res as Err).error ?? 'Could not save the note.' })
         void get().loadNotes() // resync from disk on failure
@@ -378,6 +416,7 @@ export const useTrades = create<State>((set, get) => {
         const validSel = get().selectedAccounts.filter((id) => accounts.some((a) => a.id === id))
         set({ accounts, importAccount, selectedAccounts: validSel })
         if (validSel.length !== get().selectedAccounts.length) recompute(get().allExecutions, validSel)
+        recomputeNotesView() // account set/selection may have changed
       }
     },
 
