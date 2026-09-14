@@ -108,14 +108,26 @@ destination account) or **drag the file** onto the window. The parser
   drift a little from the broker's exact figure. Metals (`XAUUSD`) and crypto
   (`BTCUSD`) are deliberately **not** treated as 100k FX (their contract sizes
   differ) and stay at 1×. Forex symbols classify structurally as **Currencies**
-  (no equity-fundamentals lookup). **TradingView order history** (as exported
-  from **EightCap** and other TradingView-connected brokers) is recognized by
-  name: its `Update Time`, `Avg Fill Price`, `Position ID` and `Commission`
-  columns import natively, and P&L reconciles to the export's own
-  `Net Closed P&L` total to the cent. Note: the journal groups fills into
-  round-trips by **FIFO** (a position held continuously across two broker
-  Position IDs is one round-trip), so the *trade count* can differ from the
-  broker's position list while every dollar total matches.
+  (no equity-fundamentals lookup).
+  - **TradingView order history** (as exported from **EightCap** and other
+    TradingView-connected brokers) is recognized by name: its `Update Time`,
+    `Avg Fill Price`, `Position ID` and `Commission` columns import natively,
+    quantities are **lots** (×100,000), and P&L reconciles to the export's own
+    `Net Closed P&L` total to the cent.
+  - **OANDA** transaction-history CSV is recognized too. It's a full ledger, so
+    only `ORDER_FILL` rows are imported (order placements, `ORDER_CANCEL`,
+    stop/take-profit edits, `TRANSFER_FUNDS`, account config are skipped);
+    quantities are raw **UNITS** (×1, not lots); `FINANCING` (swap) and
+    `CONVERSION FEE` are captured as costs; the `TICKET` is the de-dup key; and
+    numeric time offsets (`… -12`, `… -0400`, `… +5:30`) parse to the right
+    instant. Realized P&L matches the file's `PL` column / balance change to the
+    cent. `EUR/USD` (slash) and `EURUSD` are both recognized.
+
+  Note: the journal groups fills into round-trips by **FIFO** (a position held
+  continuously across two broker order/position IDs is one round-trip), so the
+  *trade count* can differ from the broker's position list while every dollar
+  total matches. As with all FX, USD-quoted pairs are exact; JPY-quoted/cross
+  pairs are the right magnitude but may drift slightly.
 - Multiple files — even from different brokers — can be imported at once.
 
 ## Market sectors

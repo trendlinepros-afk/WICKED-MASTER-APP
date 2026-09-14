@@ -141,6 +141,15 @@ function wallToEpoch(y: string, mo: string, d: string, hh: number, mm: string, s
 export function parseBrokerTime(text: string): number | null {
   const s = (text || '').trim()
   if (!s) return null
+  // Numeric UTC offset (OANDA: "2026-09-14 03:27:36 -12", also "-0400", "+5:30").
+  // Honored as an absolute instant; the alphabetic-zone/wall-clock paths below
+  // handle everything else.
+  const numOff = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,7})?)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$/)
+  if (numOff) {
+    const [, y, mo, d, hh, mm, ss, sign, offH, offM] = numOff
+    const t = Date.parse(`${y}-${p2(mo)}-${p2(d)}T${p2(hh)}:${mm}:${ss ?? '00'}${sign}${p2(offH)}:${offM ?? '00'}`)
+    if (!Number.isNaN(t)) return t
+  }
   const mdy = s.match(
     /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d{1,7})?)?(?:\s*([AaPp][Mm]))?(?:\s+([A-Za-z]{1,4}))?)?$/
   )
@@ -333,14 +342,16 @@ export function isForexInstrument(symbol: string): boolean {
 }
 
 /**
- * Dollars per 1.0 price move per 1.0 unit for ANY instrument: FX lot size for
- * currency pairs (exact for USD-quoted majors like EURUSD), futures point value
- * for contracts, and 1 for equities/crypto. This is what P&L, cost basis and
- * volume are scaled by.
+ * Dollars per 1.0 price move per 1.0 quantity for ANY instrument: FX contract
+ * size for currency pairs, futures point value for contracts, 1 for
+ * equities/crypto. `fxLotSize` is the FX scale to use — 100,000 when the file
+ * quantity is in LOTS (TradingView/EightCap: qty 0.86), but 1 when it is in raw
+ * UNITS (OANDA: qty 43,324), since there the price move already multiplies the
+ * unit count into account currency.
  */
-export function instrumentMultiplier(symbol: string): number {
+export function instrumentMultiplier(symbol: string, fxLotSize = 100000): number {
   const fx = forexContractSize(symbol)
-  return fx > 0 ? fx : futuresMultiplier(symbol)
+  return fx > 0 ? fxLotSize : futuresMultiplier(symbol)
 }
 
 /* -------------------------------- headers ---------------------------------- */
@@ -349,14 +360,20 @@ export function instrumentMultiplier(symbol: string): number {
 const HEADER_ALIASES: Record<string, string[]> = {
   name: ['name', 'security description', 'description', 'company'],
   symbol: ['symbol', 'ticker', 'instrument'],
-  side: ['side', 'action', 'trans code', 'transaction code', 'buy/sell', 'b/s', 'order action', 'transaction type', 'transactiontype'],
+  side: ['side', 'direction', 'action', 'trans code', 'transaction code', 'buy/sell', 'b/s', 'order action', 'transaction type', 'transactiontype'],
+  // Ledger row type (OANDA): only ORDER_FILL rows are real executions; the rest
+  // (order placements, cancels, SL/TP tweaks, transfers) are filtered out.
+  txnType: ['transaction type', 'transactiontype', 'activity type'],
   status: ['status', 'order status', 'state'],
   filled: ['filled', 'filled qty', 'filledqty', 'filled quantity', 'executed qty', 'exec qty'],
-  totalQty: ['total qty', 'totalqty', 'quantity', 'qty', 'shares', 'number of shares', 'no. of shares'],
+  totalQty: ['total qty', 'totalqty', 'quantity', 'qty', 'units', 'shares', 'number of shares', 'no. of shares'],
   price: ['price', 't. price', 'trade price', 'price ($)', 'execution price', 'fill price', 'price per share', 'limit price', 'limit'],
   avgPrice: ['avg price', 'avg. price', 'avgprice', 'average price', 'avg fill price', 'avg. fill price', 'average fill price'],
   commission: ['commission', 'commissions', 'commission ($)', 'comm/fee', 'fees & comm', 'commissions & fees', 'comm'],
   fees: ['fees', 'fee', 'fees ($)', 'reg fee', 'regulatory fees', 'other fees'],
+  // extra cost columns that also reduce P&L (OANDA: overnight swap + FX conversion)
+  financing: ['financing', 'swap', 'rollover', 'interest charged'],
+  conversionFee: ['conversion fee', 'conversion fees'],
   tif: ['time-in-force', 'time in force', 'tif'],
   placed: ['placed time', 'placed', 'placed time(edt)', 'order time', 'order date'],
   filledTime: [
@@ -382,7 +399,7 @@ const HEADER_ALIASES: Record<string, string[]> = {
   // A REAL per-row id (NinjaTrader executions/orders "ID", tastytrade
   // "Order #") — when present and non-empty it becomes the de-dup identity.
   // Deliberately excludes sequential counters like "Trade number".
-  orderId: ['id', 'order id', 'orderid', 'exec id', 'execution id', 'order #', 'order number'],
+  orderId: ['id', 'order id', 'orderid', 'exec id', 'execution id', 'order #', 'order number', 'ticket'],
   // Round-trip "trade list" layouts (NinjaTrader Trade Performance grid):
   // one row = entry + exit, split into two executions.
   entryPrice: ['entry price'],
@@ -415,6 +432,8 @@ function buildColMap(header: string[]): Record<string, number> {
 
 function guessBroker(headerLower: string[]): string {
   const has = (...names: string[]): boolean => names.every((n) => headerLower.includes(n))
+  // OANDA transaction ledger: TICKET + TRANSACTION TYPE + raw UNITS + INSTRUMENT.
+  if (has('ticket') && has('transaction type') && has('units') && has('instrument')) return 'OANDA'
   // TradingView order history (as exported from EightCap and other TV brokers):
   // distinctive Avg Fill Price + Position ID (+ its own Closed P&L columns).
   if (has('avg fill price') && has('position id')) return 'TradingView / EightCap'
@@ -654,6 +673,12 @@ export function parseBrokerCsv(text: string): ParseResult {
   const idHeaderName = col.orderId !== undefined ? header[col.orderId].toLowerCase().trim() : ''
   const idTrusted = col.orderId !== undefined && (idHeaderName !== 'id' || broker === 'NinjaTrader')
 
+  // OANDA reports raw UNITS (not lots) → FX scale is 1; other FX exports use lots
+  // → 100,000. Also, OANDA is a mixed ledger where only ORDER_FILL rows are real
+  // executions (everything else is orders/cancels/transfers/SL-TP tweaks).
+  const isOanda = broker === 'OANDA'
+  const fxLot = isOanda ? 1 : 100000
+
   for (const row of pre) {
     const { line, f } = row
     if (acceptDisc && !acceptDisc(row.disc)) {
@@ -662,6 +687,12 @@ export function parseBrokerCsv(text: string): ParseResult {
     }
     const get = (k: string): string => (col[k] !== undefined ? (f[col[k]] ?? '') : '')
     if (f.every((v) => !v)) continue
+
+    // Ledger filter: on OANDA, keep only actual fills.
+    if (isOanda && col.txnType !== undefined && get('txnType').trim().toUpperCase() !== 'ORDER_FILL') {
+      ignored++
+      continue
+    }
 
     const symbol = cleanSymbol(get('symbol'))
     if (!symbol || symbol === 'SYMBOL') {
@@ -705,7 +736,10 @@ export function parseBrokerCsv(text: string): ParseResult {
     }
 
     const commission = Math.abs(num(get('commission')))
-    const fees = commission + Math.abs(num(get('fees')))
+    // total cost that reduces P&L: commission + any reg/other fees + FX swap
+    // (financing) + FX conversion fee (OANDA); absent columns contribute 0.
+    const fees =
+      commission + Math.abs(num(get('fees'))) + Math.abs(num(get('financing'))) + Math.abs(num(get('conversionFee')))
     const placedText = get('placed')
     const filledText = get('filledTime')
     const e: Execution = {
@@ -723,7 +757,7 @@ export function parseBrokerCsv(text: string): ParseResult {
       limitPrice,
       fees,
       commission,
-      multiplier: instrumentMultiplier(symbol),
+      multiplier: instrumentMultiplier(symbol, fxLot),
       timeInForce: get('tif'),
       placedText,
       filledText,
