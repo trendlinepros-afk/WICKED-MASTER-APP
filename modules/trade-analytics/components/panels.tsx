@@ -23,7 +23,7 @@ import { RANGE_PRESETS, type RangePreset } from '../lib/range'
 import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
 import { duration, money, num, pct, signedMoney } from '../lib/format'
-import { AggPnlColumns, DrawdownArea, WinLossColumns, type MetricCol } from './charts'
+import { AggPnlColumns, DrawdownArea, PnlFeesPie, WinLossColumns, type MetricCol } from './charts'
 import { etParts } from '../lib/et'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
@@ -683,6 +683,75 @@ function StatGroup({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
+/** One colored-dot legend line: swatch · label · dollar value · % of gross. */
+function PieLegendRow({
+  tone,
+  label,
+  value,
+  pct
+}: {
+  tone: 'ok' | 'danger'
+  label: string
+  value: string
+  pct: number
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className={`h-3 w-3 shrink-0 rounded-sm ${tone === 'ok' ? 'bg-ok' : 'bg-danger'}`} />
+      <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+      <span className={`shrink-0 text-sm font-semibold tabular-nums ${tone === 'ok' ? 'text-ok' : 'text-danger'}`}>{value}</span>
+      <span className="w-11 shrink-0 text-right text-xs tabular-nums text-muted">{pct.toFixed(0)}%</span>
+    </div>
+  )
+}
+
+/**
+ * Visualizes where gross trading profit went: the green slice is net P&L kept,
+ * the red slice is commissions & fees. The whole pie is gross P&L (net + fees).
+ * Shown only when there's fee data (the fee number is what makes it meaningful).
+ */
+function PnlFeesCard({ m }: { m: TradeMetrics }): React.JSX.Element {
+  const net = m.totalPnl
+  const fees = m.totalFees
+  const gross = net + fees
+  const feePct = gross > 0 ? Math.min(100, (fees / gross) * 100) : 0
+  const keptPct = Math.max(0, 100 - feePct)
+  return (
+    <div>
+      <h3 className="mb-2.5 text-sm font-semibold text-ink">P&L vs. commissions &amp; fees</h3>
+      <div className="rounded-xl border border-edge bg-surface p-4">
+        <p className="mb-3 text-xs text-muted">
+          Where your gross trading profit went — the green slice is what you kept (net P&L), the red slice is what
+          you paid in commissions &amp; fees. The whole pie is your gross P&L before costs.
+        </p>
+        {gross > 0 ? (
+          <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-center sm:gap-8">
+            <PnlFeesPie net={net} fees={fees} size={180} />
+            <div className="w-full max-w-sm space-y-2.5">
+              <div className="rounded-lg border border-edge bg-raised/40 p-3">
+                <div className="text-[11px] font-medium text-muted">Gross P&L (before costs)</div>
+                <div className={`text-2xl font-bold tabular-nums ${pos(gross)}`}>{signedMoney(gross)}</div>
+              </div>
+              <PieLegendRow tone="ok" label="Net P&L kept" value={signedMoney(net)} pct={keptPct} />
+              <PieLegendRow tone="danger" label="Commissions &amp; fees" value={money(fees)} pct={feePct} />
+              <p className="pt-1 text-[11px] text-muted">
+                {feePct >= 0.5
+                  ? `${feePct.toFixed(1)}% of your gross profit went to costs.`
+                  : 'Costs were a negligible share of your gross profit.'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="rounded-lg bg-raised/40 p-3 text-sm text-muted">
+            No gross profit in this period to split — your trading was a net loss before costs. You still paid{' '}
+            <span className="font-semibold text-danger">{money(fees)}</span> in commissions &amp; fees.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function StatsTab(): React.JSX.Element {
   const m = useTrades((s) => s.metrics)
   if (!m || m.closedTrades === 0) return <div className="p-8 text-sm text-muted">No closed trades yet.</div>
@@ -711,6 +780,8 @@ export function StatsTab(): React.JSX.Element {
           <StatCell label="Cost per day" value={money(m.feesPerDay)} sub={`avg over ${num(m.tradingDays)} trading day(s)`} />
         </StatGroup>
       )}
+
+      {hasFees && <PnlFeesCard m={m} />}
 
       <StatGroup title="Extremes">
         <StatCell label="Best trade" value={sm(m.bestTrade)} tone="ok" />

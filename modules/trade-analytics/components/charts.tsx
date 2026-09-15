@@ -306,6 +306,93 @@ export function WinLossDonut({
   )
 }
 
+/* --------------------------- P&L vs fees pie ----------------------------- */
+
+/**
+ * A two-slice pie showing how your GROSS trading profit was split: the green
+ * wedge is the net P&L you kept, the red wedge is what went to commissions &
+ * fees. Together the wedges are the gross profit (net + fees).
+ *
+ * Fractions are of gross. When fees meet or exceed gross profit the pie goes
+ * fully red (you kept nothing). Callers should only render this when gross > 0;
+ * for gross ≤ 0 there's no positive pie to draw.
+ */
+export function PnlFeesPie({
+  net,
+  fees,
+  size = 160
+}: {
+  net: number
+  fees: number
+  size?: number
+}): React.JSX.Element {
+  const gross = net + fees
+  const feesFrac = gross > 0 ? Math.min(1, fees / gross) : 1
+  const keptFrac = Math.max(0, 1 - feesFrac)
+  const R = 56
+  const CX = 60
+  const CY = 60
+  const TAU = Math.PI * 2
+  const START = -Math.PI / 2 // 12 o'clock, wedges sweep clockwise
+  const SURFACE = 'rgb(var(--wk-surface))'
+
+  const wedge = (frac: number, offset: number, color: string): React.JSX.Element | null => {
+    if (frac <= 0) return null
+    const a0 = START + offset * TAU
+    const a1 = START + (offset + frac) * TAU
+    const large = frac > 0.5 ? 1 : 0
+    const x0 = CX + R * Math.cos(a0)
+    const y0 = CY + R * Math.sin(a0)
+    const x1 = CX + R * Math.cos(a1)
+    const y1 = CY + R * Math.sin(a1)
+    return (
+      <path
+        d={`M${CX},${CY} L${x0.toFixed(2)},${y0.toFixed(2)} A${R} ${R} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)} Z`}
+        fill={color}
+        stroke={SURFACE}
+        strokeWidth="1.5"
+      />
+    )
+  }
+  const label = (frac: number, offset: number, text: string): React.JSX.Element | null => {
+    if (frac < 0.07) return null // too thin a slice to hold a legible number
+    const a = START + (offset + frac / 2) * TAU
+    const lx = CX + R * 0.6 * Math.cos(a)
+    const ly = CY + R * 0.6 * Math.sin(a)
+    return (
+      <text x={lx} y={ly} textAnchor="middle" dominantBaseline="central" fontSize="13" fontWeight="700" fill="#fff">
+        {text}
+      </text>
+    )
+  }
+
+  const keptPctStr = `${Math.round(keptFrac * 100)}%`
+  const feesPctStr = `${Math.round(feesFrac * 100)}%`
+  // an SVG arc can't draw a full 360° sweep — render a solid circle instead
+  const full = keptFrac >= 0.9999 || feesFrac >= 0.9999
+
+  return (
+    <svg viewBox="0 0 120 120" style={{ width: size, height: size }} role="img" aria-label="Net P&L vs commissions and fees">
+      {full ? (
+        <>
+          <circle cx={CX} cy={CY} r={R} fill={keptFrac >= 0.9999 ? OK : DANGER} />
+          <text x={CX} y={CY} textAnchor="middle" dominantBaseline="central" fontSize="16" fontWeight="700" fill="#fff">
+            {keptFrac >= 0.9999 ? keptPctStr : feesPctStr}
+          </text>
+        </>
+      ) : (
+        <>
+          {wedge(keptFrac, 0, OK)}
+          {wedge(feesFrac, keptFrac, DANGER)}
+          {label(keptFrac, 0, keptPctStr)}
+          {label(feesFrac, keptFrac, feesPctStr)}
+        </>
+      )}
+      <circle cx={CX} cy={CY} r={R} fill="none" stroke={EDGE} strokeWidth="1" />
+    </svg>
+  )
+}
+
 /* --------------------- labelled aggregate-PnL columns -------------------- */
 
 export interface MetricCol {
