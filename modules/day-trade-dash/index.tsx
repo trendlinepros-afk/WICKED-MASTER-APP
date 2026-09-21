@@ -7,9 +7,18 @@ import {
   type ISeriesApi,
   type UTCTimestamp
 } from 'lightweight-charts'
-import { LayoutDashboard, Newspaper, RefreshCw, Settings, TrendingDown, TrendingUp, Tv, X } from 'lucide-react'
+import { ExternalLink, LayoutDashboard, Loader2, Newspaper, RefreshCw, Settings, TrendingDown, TrendingUp, Tv, X } from 'lucide-react'
 import { ModuleTitle } from '@/shell/moduleContext'
-import { CHART_TFS, DEFAULT_TV_URL, defaultState, type ChartTf, type DashQuote, type DashState, type SessionInfo } from './types'
+import {
+  CHART_TFS,
+  DEFAULT_TV_URL,
+  TV_SOURCES,
+  defaultState,
+  type ChartTf,
+  type DashQuote,
+  type DashState,
+  type SessionInfo
+} from './types'
 
 /**
  * DAY TRADE DASH — renderer.
@@ -315,6 +324,189 @@ interface Mover {
   changePct: number
 }
 
+interface TvStatusSource {
+  id: string
+  label: string
+  handle: string | null
+  /** embeddable /embed/live_stream URL, or null while a handle is still resolving */
+  url: string | null
+  live: boolean
+}
+
+/** LIVE / offline / checking badge shown on the right of each source button. */
+function TvBadge({ state }: { state: 'live' | 'off' | 'unknown' | 'always' }): React.JSX.Element {
+  if (state === 'live')
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-[11px] font-bold text-danger">
+        <span className="h-2 w-2 rounded-full bg-danger animate-pulse" /> LIVE
+      </span>
+    )
+  if (state === 'always') return <span className="shrink-0 text-[11px] font-medium text-muted">24/7</span>
+  if (state === 'off') return <span className="shrink-0 text-[11px] text-muted">offline</span>
+  return <Loader2 size={11} className="shrink-0 animate-spin text-muted" />
+}
+
+/**
+ * Live TV — a source switcher over one `<webview>`. A Bloomberg button on top,
+ * then the trader streams the user follows; each shows a LIVE/offline dot polled
+ * from main. Picking a source loads its evergreen live embed; an offline trader
+ * shows a tidy card (with "open on YouTube" + a "show player anyway" escape)
+ * instead of YouTube's raw error, and flips to the stream the moment they go live.
+ */
+function LiveTvPanel({
+  loaded,
+  dash,
+  onPick
+}: {
+  loaded: boolean
+  dash: DashState
+  onPick: (id: string) => void
+}): React.JSX.Element {
+  const [sources, setSources] = useState<TvStatusSource[]>([])
+  const [statusLoaded, setStatusLoaded] = useState(false)
+  const [playAnyway, setPlayAnyway] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const load = async (): Promise<void> => {
+      const res = (await invoke('tv-status')) as { ok?: boolean; sources?: TvStatusSource[] }
+      if (!alive) return
+      if (res.ok && res.sources) {
+        setSources(res.sources)
+        setStatusLoaded(true)
+      }
+    }
+    void load()
+    const timer = setInterval(() => void load(), 75_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  // a freshly-picked source shouldn't inherit the previous one's "play anyway"
+  useEffect(() => {
+    setPlayAnyway(null)
+  }, [dash.tvSource])
+
+  const active = dash.tvSource || 'bloomberg'
+  const isCustom = active === 'custom'
+  const isBloomberg = active === 'bloomberg'
+  const st = sources.find((s) => s.id === active)
+  const activeUrl = isCustom ? dash.tvUrl : st?.url ?? (isBloomberg ? DEFAULT_TV_URL : null)
+  const activeLive = isBloomberg || isCustom ? true : !!st?.live
+  const showPlayer = !!activeUrl && (activeLive || playAnyway === active)
+  const activeLabel = isCustom ? 'Custom stream' : TV_SOURCES.find((s) => s.id === active)?.label ?? 'Live TV'
+  const channelHref = st?.handle ? `https://www.youtube.com/@${st.handle}` : null
+
+  const badgeState = (id: string): 'live' | 'off' | 'unknown' | 'always' => {
+    if (id === 'bloomberg') return 'always'
+    const s = sources.find((x) => x.id === id)
+    if (!statusLoaded || !s) return 'unknown'
+    return s.live ? 'live' : 'off'
+  }
+
+  return (
+    <section className="flex w-[360px] shrink-0 flex-col rounded-xl border border-edge bg-surface p-2 xl:w-[400px]">
+      <div className="flex items-center gap-1.5 pb-1.5">
+        <Tv size={13} className="text-accent" />
+        <span className="text-sm font-semibold">Live TV</span>
+        {active !== 'custom' && <span className="ml-auto truncate text-xs text-muted">{activeLabel}</span>}
+      </div>
+
+      {/* source buttons: Bloomberg on top, the trader streams below */}
+      <div className="space-y-1 pb-1.5">
+        {TV_SOURCES.map((src) => {
+          const on = active === src.id
+          return (
+            <button
+              key={src.id}
+              onClick={() => onPick(src.id)}
+              title={
+                src.handle
+                  ? `@${src.handle}${badgeState(src.id) === 'live' ? ' — live now' : badgeState(src.id) === 'off' ? ' — offline' : ''}`
+                  : src.label
+              }
+              className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-sm ${
+                on ? 'border-accent bg-accent/10 font-semibold text-accent' : 'border-edge hover:bg-raised'
+              }`}
+            >
+              <Tv size={13} className={on ? 'shrink-0 text-accent' : 'shrink-0 text-muted'} />
+              <span className="min-w-0 flex-1 truncate">{src.label}</span>
+              <TvBadge state={badgeState(src.id)} />
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black/40">
+        {loaded && showPlayer && activeUrl && (
+          /* httpreferrer is REQUIRED: YouTube's embed player refuses
+             referer-less requests with "configuration error 153" */
+          /* eslint-disable-next-line react/no-unknown-property */
+          <webview key={activeUrl} src={activeUrl} httpreferrer="https://wicked-suite.app/" className="h-full w-full" />
+        )}
+        {loaded && !showPlayer && (
+          <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+            {!statusLoaded && !activeUrl ? (
+              <>
+                <Loader2 size={20} className="animate-spin text-muted" />
+                <p className="text-sm text-muted">Checking {activeLabel}…</p>
+              </>
+            ) : !activeUrl ? (
+              <>
+                <Tv size={22} className="text-muted" />
+                <p className="text-sm text-muted">Couldn’t load {activeLabel}.</p>
+                {channelHref && (
+                  <a
+                    href={channelHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-accent hover:underline"
+                  >
+                    Open channel <ExternalLink size={12} />
+                  </a>
+                )}
+              </>
+            ) : (
+              <>
+                <Tv size={22} className="text-muted" />
+                <p className="text-sm font-medium">{activeLabel} isn’t live right now.</p>
+                <p className="text-xs text-muted">The stream appears here automatically when they go live.</p>
+                <div className="mt-1 flex items-center gap-2">
+                  {channelHref && (
+                    <a
+                      href={channelHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-md border border-edge px-2 py-1 text-xs text-muted hover:border-accent/60 hover:text-ink"
+                    >
+                      Open channel <ExternalLink size={11} />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setPlayAnyway(active)}
+                    className="rounded-md border border-edge px-2 py-1 text-xs text-muted hover:border-accent/60 hover:text-ink"
+                  >
+                    Show player anyway
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <p className="pt-1 text-xs text-muted">
+        {isBloomberg
+          ? 'Bloomberg Television — hit play when you want it.'
+          : isCustom
+            ? 'Custom stream — change it in Settings.'
+            : 'Live traders — the player starts when they’re on air.'}
+      </p>
+    </section>
+  )
+}
+
 export default function DayTradeDash(): React.JSX.Element {
   const [dash, setDash] = useState<DashState>(defaultState())
   const [loaded, setLoaded] = useState(false)
@@ -482,7 +674,7 @@ export default function DayTradeDash(): React.JSX.Element {
         </button>
         <button
           onClick={() => {
-            setTvUrlInput(dash.tvUrl)
+            setTvUrlInput(dash.tvSource === 'custom' ? dash.tvUrl : '')
             setShowSettings(true)
           }}
           className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-sm font-medium text-muted hover:border-accent/60 hover:text-ink"
@@ -674,22 +866,8 @@ export default function DayTradeDash(): React.JSX.Element {
             </div>
           </section>
 
-          {/* live TV — always mounted, plays on demand */}
-          <section className="flex w-[360px] shrink-0 flex-col rounded-xl border border-edge bg-surface p-2 xl:w-[400px]">
-            <div className="flex items-center gap-1.5 pb-1.5">
-              <Tv size={13} className="text-accent" />
-              <span className="text-sm font-semibold">Live TV — Bloomberg</span>
-            </div>
-            <div className="min-h-0 flex-1 overflow-hidden rounded-lg bg-black/40">
-              {loaded && (
-                /* httpreferrer is REQUIRED: YouTube's embed player refuses
-                   referer-less requests with "configuration error 153" */
-                /* eslint-disable-next-line react/no-unknown-property */
-                <webview key={dash.tvUrl} src={dash.tvUrl} httpreferrer="https://wicked-suite.app/" className="h-full w-full" />
-              )}
-            </div>
-            <p className="pt-1 text-xs text-muted">Hit play when you want it. Stream URL in Settings.</p>
-          </section>
+          {/* live TV — Bloomberg + the trader streams, switchable */}
+          <LiveTvPanel loaded={loaded} dash={dash} onPick={(id) => void patch({ tvSource: id })} />
         </div>
 
         {/* bottom: the tape */}
@@ -766,30 +944,34 @@ export default function DayTradeDash(): React.JSX.Element {
               />
             </div>
 
-            <p className="mt-4 text-sm font-medium">Live TV stream (YouTube embed URL)</p>
-            <div className="mt-1 flex gap-1.5">
+            <p className="mt-4 text-sm font-medium">Custom Live TV stream (optional)</p>
+            <p className="text-xs text-muted">
+              Bloomberg and the trader streams (Trades by Matt, Topstep, Riley Coleman) are the buttons on the Live TV
+              panel. Paste any https://www.youtube.com/embed/… URL here to add your own — a specific live video, or
+              another channel’s <span className="font-mono">live_stream</span> embed — and pick the “Custom” source.
+            </p>
+            <div className="mt-1.5 flex gap-1.5">
               <input
                 value={tvUrlInput}
                 onChange={(e) => setTvUrlInput(e.target.value)}
+                placeholder="https://www.youtube.com/embed/…"
                 spellCheck={false}
                 className="min-w-0 flex-1 rounded-md border border-edge bg-raised px-2 py-1.5 text-sm outline-none focus:border-accent"
               />
               <button
-                onClick={() => setTvUrlInput(DEFAULT_TV_URL)}
+                onClick={() => setTvUrlInput('')}
                 className="shrink-0 rounded-md border border-edge px-2 py-1.5 text-sm text-muted hover:border-accent/60 hover:text-ink"
               >
-                Bloomberg
+                Clear
               </button>
             </div>
-            <p className="mt-1 text-xs text-muted">
-              Default is Bloomberg Television's 24/7 live stream. Any https://www.youtube.com/embed/… URL works (CNBC-style channels, a specific
-              live video, …).
-            </p>
 
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => {
-                  void patch({ tvUrl: tvUrlInput.trim() || DEFAULT_TV_URL })
+                  const u = tvUrlInput.trim()
+                  // a URL → make it the Custom source; cleared → fall back to Bloomberg
+                  void patch(u ? { tvUrl: u, tvSource: 'custom' } : { tvSource: 'bloomberg' })
                   setShowSettings(false)
                 }}
                 className="rounded-lg bg-accent px-4 py-2 text-base font-semibold text-accent-ink hover:opacity-90"

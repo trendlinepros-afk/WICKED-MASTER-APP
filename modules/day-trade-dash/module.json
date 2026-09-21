@@ -2,7 +2,7 @@
   "id": "day-trade-dash",
   "name": "Day Trade Dash",
   "icon": "LayoutDashboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "All-day trading dashboard — three live charts, watchlist with click-to-chart, hourly market news, a Wall-Street ticker tape and Bloomberg TV",
   "status": "beta",
   "group": {

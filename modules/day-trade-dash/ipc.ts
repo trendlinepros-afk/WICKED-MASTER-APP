@@ -8,13 +8,16 @@ import {
   CHART_TFS,
   DEFAULT_TV_URL,
   LEGACY_TV_URL,
+  TV_SOURCES,
   defaultState,
+  liveEmbedUrl,
   type ChartTf,
   type DashQuote,
   type DashState,
   type SessionInfo,
   type WatchEntry
 } from './types'
+import { channelIsLive, resolveHandle } from './ipc/youtube'
 
 /* ------------------------------------------------------------------------ *
  *  DAY TRADE DASH — main process.
@@ -89,6 +92,18 @@ function sanitize(raw: unknown): DashState {
   const watch = 'watch' in r ? cleanWatch(r.watch) : d.watch
   let tvUrl = typeof r.tvUrl === 'string' && /^https:\/\//i.test(r.tvUrl.trim()) ? r.tvUrl.trim().slice(0, 500) : d.tvUrl
   if (tvUrl === LEGACY_TV_URL) tvUrl = DEFAULT_TV_URL // pre-always-on default (muted autoplay) → play-on-demand
+  // Selected Live TV source: a built-in id or 'custom'. Migrate older layouts
+  // (no tvSource) to 'custom' if they had carried a non-default tvUrl, else
+  // 'bloomberg'.
+  const TV_IDS = new Set<string>([...TV_SOURCES.map((s) => s.id), 'custom'])
+  const tvSource =
+    typeof r.tvSource === 'string' && TV_IDS.has(r.tvSource)
+      ? r.tvSource
+      : typeof r.tvSource === 'string'
+        ? 'bloomberg' // an unknown id → safe default
+        : tvUrl && tvUrl !== DEFAULT_TV_URL
+          ? 'custom' // legacy layout with a hand-set URL
+          : 'bloomberg'
   // selected may be ANY symbol (a watchlist row or a clicked top-mover)
   const selected = cleanSym(r.selected) || watch[0]?.symbol || ''
   return {
@@ -97,6 +112,7 @@ function sanitize(raw: unknown): DashState {
     selected,
     selectedTf: cleanTf(r.selectedTf, d.selectedTf),
     tape: 'tape' in r ? cleanSyms(r.tape, MAX_TAPE) : d.tape,
+    tvSource,
     tvUrl,
     tvOn: r.tvOn === true
   }
@@ -280,6 +296,57 @@ export default function register(ctx: ModuleIpcContext): void {
         nextLabel
       }
     }
+  })
+
+  /* -------------------------------- live TV ------------------------------- */
+
+  /**
+   * Resolve every Live TV source to an embeddable URL + a "live right now" flag.
+   * Resolved UC ids are persisted (a handle→id lookup rarely needs redoing and
+   * rides Backup/Sync); the live flag is cached briefly so the renderer's poll
+   * doesn't hammer YouTube. All lookups are fail-soft (see ipc/youtube.ts).
+   */
+  const CH_KEY = `${ID}.tvChannels`
+  const LIVE_TTL = 45_000
+  const liveCache = new Map<string, { live: boolean; url: string | null; at: number }>()
+
+  ctx.ipcMain.handle(`${ID}:tv-status`, async () => {
+    const stored = asRecord(ctx.storeGet<unknown>(CH_KEY, {}))
+    let storeDirty = false
+    const now = Date.now()
+
+    const sources = await Promise.all(
+      TV_SOURCES.map(async (src) => {
+        const cached = liveCache.get(src.id)
+        if (cached && now - cached.at < LIVE_TTL) {
+          return { id: src.id, label: src.label, handle: src.handle ?? null, url: cached.url, live: cached.live }
+        }
+        // Known id → use it; otherwise the id we resolved & stored earlier.
+        let channelId = src.channelId ?? (typeof stored[src.id] === 'string' ? (stored[src.id] as string) : undefined)
+        let live = false
+        try {
+          if (!channelId && src.handle) {
+            const r = await resolveHandle(src.handle) // one fetch → id + live
+            if (r.channelId) {
+              channelId = r.channelId
+              stored[src.id] = channelId
+              storeDirty = true
+            }
+            live = r.live
+          } else if (channelId) {
+            // Bloomberg is a 24/7 desk — skip the check and treat it as always on.
+            live = src.id === 'bloomberg' ? true : await channelIsLive(channelId)
+          }
+        } catch {
+          /* fail-soft: keep live=false and whatever URL the id gives us */
+        }
+        const url = channelId ? liveEmbedUrl(channelId) : null
+        liveCache.set(src.id, { live, url, at: now })
+        return { id: src.id, label: src.label, handle: src.handle ?? null, url, live }
+      })
+    )
+    if (storeDirty) ctx.storeSet(CH_KEY, stored)
+    return { ok: true, sources }
   })
 
   ctx.ipcMain.handle(`${ID}:data-paths`, (): ModuleDataPath[] => {

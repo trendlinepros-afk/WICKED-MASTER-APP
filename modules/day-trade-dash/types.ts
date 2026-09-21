@@ -29,10 +29,52 @@ export interface DashState {
   selectedTf: ChartTf
   /** symbols on the rotating bottom tape */
   tape: string[]
-  /** YouTube /embed URL for the live TV panel */
+  /**
+   * Selected Live TV source: a built-in id from TV_SOURCES ('bloomberg',
+   * 'tradesbymatt', …) or 'custom' when the user pasted their own URL below.
+   */
+  tvSource: string
+  /** YouTube /embed URL for the live TV panel — used when tvSource === 'custom' */
   tvUrl: string
   /** legacy toggle from v0.2.45-47 — the TV card is now always shown */
   tvOn: boolean
+}
+
+/**
+ * A Live TV source shown as a button in the panel. Bloomberg (and any channel
+ * whose UC id we already know) embeds instantly; a handle-only source is
+ * resolved to its UC id at runtime in main (see ipc/youtube.ts). `handle` is
+ * kept even when `channelId` is known, because it also drives the LIVE check.
+ */
+export interface TvSource {
+  id: string
+  label: string
+  /** YouTube channel UC… id, when known ahead of time */
+  channelId?: string
+  /** YouTube @handle (without the @) — resolved to a channelId at runtime */
+  handle?: string
+}
+
+/**
+ * Built-in Live TV sources: Bloomberg's 24/7 desk plus the trader streams the
+ * user follows. Order here is the button order in the panel. Trades by Matt's
+ * UC id is known (so it embeds without a lookup); Topstep and Riley Coleman are
+ * resolved from their handles on the user's machine the first time they're used.
+ */
+export const TV_SOURCES: TvSource[] = [
+  { id: 'bloomberg', label: 'Bloomberg', channelId: 'UCIALMKvObZNtJ6AmdCLP7Lg' },
+  { id: 'tradesbymatt', label: 'Trades by Matt', handle: 'TradesbyMatt', channelId: 'UCAiadqtIuxMOBbzMHGk_aYQ' },
+  { id: 'topstep', label: 'Topstep', handle: 'TopstepOfficial' },
+  { id: 'rileycoleman', label: 'Riley Coleman', handle: 'RileyColeman' }
+]
+
+/**
+ * The evergreen "current live broadcast" embed for a channel id — always
+ * resolves to whatever that channel is streaming right now (or YouTube's own
+ * offline card when it isn't live), so the URL never rots across streams.
+ */
+export function liveEmbedUrl(channelId: string): string {
+  return `https://www.youtube.com/embed/live_stream?channel=${channelId}`
 }
 
 /**
@@ -62,6 +104,7 @@ export function defaultState(): DashState {
     // index/futures proxies day traders actually watch (ES→SPY, NQ→QQQ,
     // YM→DIA, RTY→IWM, CL→USO, GC→GLD, ZB→TLT, VIX→UVXY)
     tape: ['SPY', 'QQQ', 'DIA', 'IWM', 'SMH', 'TLT', 'GLD', 'USO', 'UVXY'],
+    tvSource: 'bloomberg',
     tvUrl: DEFAULT_TV_URL,
     tvOn: false
   }

@@ -38,13 +38,26 @@ The all-day trading cockpit: everything a day trader glances at, on one screen.
 - **Header — session clock.** Pre-market / Market open / After hours / Closed
   with a countdown to the next bell, in ET (reuses stock-planner's session
   math).
-- **Live TV.** An always-visible panel embedding Bloomberg Television's 24/7
-  YouTube live stream in a `<webview>` (the `live_stream?channel=` embed always
-  resolves to the channel's current broadcast, so the link doesn't rot). No
-  autoplay — hit play when wanted, which also satisfies the autoplay policy so
+- **Live TV.** A source switcher over one `<webview>`. A **Bloomberg** button
+  on top (24/7 desk), then the trader streams the user follows — **Trades by
+  Matt**, **Topstep**, **Riley Coleman** — each with a live **LIVE / offline**
+  dot polled from main. Picking a source loads that channel's evergreen
+  `live_stream?channel=<UCID>` embed (always resolves to whatever it's
+  streaming right now, so the URL never rots across streams). An offline trader
+  shows a tidy card ("isn't live right now" + *Open channel* + *Show player
+  anyway*) instead of YouTube's raw error, and flips to the stream the moment
+  they go live. No autoplay — hitting play also satisfies the autoplay policy so
   sound works immediately. The webview sets `httpreferrer` because YouTube's
   embed player refuses referer-less requests with "configuration error 153".
-  The URL is configurable in Settings, so any YouTube `/embed/...` stream works.
+  Settings takes a **custom** `/embed/...` URL as a fourth source.
+  - **Handle → channel-id resolution.** The embed needs a channel's `UC…` id,
+    but the user gives an `@handle`. `ipc/youtube.ts` fetches the channel's
+    `/@handle/live` page in main (on the user's machine, which can reach
+    YouTube), scrapes the `UC…` id AND the current live flag from it in one
+    request, and caches the id in the store (`day-trade-dash.tvChannels`) so the
+    lookup happens once and rides Backup/Sync. Everything is fail-soft: a
+    lookup that fails just leaves the button with no player and an *Open on
+    YouTube* link. Bloomberg and Trades by Matt ship with their ids known.
 
 ## Data & quirks
 
