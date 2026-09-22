@@ -54,7 +54,9 @@ export const ExecChart = forwardRef<SVGSVGElement, {
   bars: ChartBar[]
   fills: ChartFill[]
   trips: ChartTrip[]
-}>(function ExecChart({ bars, fills, trips }, ref) {
+  /** backend explanation shown when there are no bars (e.g. futures contracts) */
+  note?: string
+}>(function ExecChart({ bars, fills, trips, note }, ref) {
   const localRef = useRef<SVGSVGElement | null>(null)
   const [range, setRange] = useState<[number, number] | null>(null) // bar index range
   const rangeRef = useRef<[number, number] | null>(null)
@@ -156,8 +158,8 @@ export const ExecChart = forwardRef<SVGSVGElement, {
 
   if (bars.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-xl border border-edge bg-surface text-sm text-muted">
-        No 1-minute candle data — add your Massive key in Settings → API Keys, or the market was closed.
+      <div className="flex h-64 items-center justify-center rounded-xl border border-edge bg-surface px-6 text-center text-sm text-muted">
+        {note || 'No 1-minute candle data — add your Massive key in Settings → API Keys, or the market was closed.'}
       </div>
     )
   }

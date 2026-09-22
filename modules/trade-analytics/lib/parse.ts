@@ -437,6 +437,10 @@ function guessBroker(headerLower: string[]): string {
   // TradingView order history (as exported from EightCap and other TV brokers):
   // distinctive Avg Fill Price + Position ID (+ its own Closed P&L columns).
   if (has('avg fill price') && has('position id')) return 'TradingView / EightCap'
+  // Tradovate orders export: Avg Fill Price + a "Remaining Qty" column (unique
+  // to Tradovate) + Order ID. A futures orders report — only Filled rows are
+  // fills, and the futures point-value drives P&L (no P&L column in the export).
+  if (has('avg fill price') && has('remaining qty')) return 'Tradovate'
   if (has('placed time') || (has('filled') && has('side') && has('avg price'))) return 'Webull'
   if (has('entry price', 'exit price')) return has('instrument') || has('market pos.') ? 'NinjaTrader (trades)' : 'Trade list'
   if (has('instrument') && (has('e/x') || has('order id') || has('oco') || has('state'))) return 'NinjaTrader'

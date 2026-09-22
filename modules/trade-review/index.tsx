@@ -200,7 +200,7 @@ export default function TradeReview(): React.JSX.Element {
                 <Loader2 size={20} className="animate-spin text-accent" />
               </div>
             ) : (
-              <ExecChart ref={svgRef} bars={s.bars} fills={symbolFills} trips={symbolTrips} />
+              <ExecChart ref={svgRef} bars={s.bars} fills={symbolFills} trips={symbolTrips} note={s.barsNote} />
             )}
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">

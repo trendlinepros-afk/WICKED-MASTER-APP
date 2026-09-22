@@ -2,7 +2,7 @@
   "id": "trade-review",
   "name": "Trade Review",
   "icon": "ScanSearch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Post-trade analysis: fills on a 1-minute chart with round-trip P&L, and an AI coach graded against your swing strategy",
   "status": "stable",
   "group": {

@@ -9,7 +9,7 @@ import { getDayMinuteBars } from '../stock-planner/ipc/market/massive'
 import { getTickerData } from '../stock-planner/ipc/market/tickerdata'
 import { callAi, type AiMessage } from '../stock-planner/ipc/ai'
 import { parseReportSpec } from '../stock-planner/ipc/report'
-import { execHash, parseWebullTime, type Execution, type Side } from '../trade-analytics/lib/parse'
+import { execHash, isFuturesInstrument, parseWebullTime, type Execution, type Side } from '../trade-analytics/lib/parse'
 import { matchStockFolder } from './ipc/folders'
 
 /* ------------------------------------------------------------------------ *
@@ -68,7 +68,9 @@ export default function register(ctx: ModuleIpcContext): void {
         bars,
         ...(bars.length === 0
           ? {
-              note: `No intraday minute bars for ${symbol} on ${ymd}. Polygon may not have the current session yet, or your market-data plan may exclude intraday aggregates — try a prior trading day.`
+              note: isFuturesInstrument(symbol)
+                ? `${symbol} is a futures contract — its intraday price chart needs a futures data feed the stock-data plan doesn't include, so the chart stays empty. Your round-trip P&L, stats and the AI coach are computed directly from the fills and are fully accurate.`
+                : `No intraday minute bars for ${symbol} on ${ymd}. Polygon may not have the current session yet, or your market-data plan may exclude intraday aggregates — try a prior trading day.`
             }
           : {})
       }

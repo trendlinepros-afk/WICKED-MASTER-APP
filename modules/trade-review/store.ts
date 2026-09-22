@@ -71,6 +71,8 @@ interface State {
   symbols: string[]
   symbol: string
   bars: { t: number; o: number; h: number; l: number; c: number; v: number }[]
+  /** backend note when bars come back empty (futures have no intraday feed) */
+  barsNote: string
   barsBusy: boolean
   report: ReportSpec | null
   reviewBusy: boolean
@@ -115,6 +117,7 @@ export const useTradeReview = create<State>((set, get) => {
     symbols: [],
     symbol: '',
     bars: [],
+    barsNote: '',
     barsBusy: false,
     report: null,
     reviewBusy: false,
@@ -132,7 +135,7 @@ export const useTradeReview = create<State>((set, get) => {
     setExporting: (v) => set({ exporting: v }),
 
     setSymbol: (s) => {
-      set({ symbol: s, bars: [] })
+      set({ symbol: s, bars: [], barsNote: '' })
       void get().loadBars()
     },
 
@@ -174,6 +177,7 @@ export const useTradeReview = create<State>((set, get) => {
         symbols: [],
         symbol: '',
         bars: [],
+        barsNote: '',
         report: null,
         coach: [],
         statusMsg: 'Session cleared.'
@@ -188,12 +192,12 @@ export const useTradeReview = create<State>((set, get) => {
       if (!first?.filledAt) return
       set({ barsBusy: true })
       try {
-        const res = await invoke<Res & { bars?: State['bars'] }>('candles', {
+        const res = await invoke<Res & { bars?: State['bars']; note?: string }>('candles', {
           symbol,
           ymd: etYmdOf(first.filledAt)
         })
-        if (res.ok) set({ bars: res.bars ?? [] })
-        else set({ bars: [], error: (res as Err).error ?? '' })
+        if (res.ok) set({ bars: res.bars ?? [], barsNote: res.note ?? '' })
+        else set({ bars: [], barsNote: '', error: (res as Err).error ?? '' })
       } finally {
         set({ barsBusy: false })
       }

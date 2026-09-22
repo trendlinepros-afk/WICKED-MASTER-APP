@@ -93,12 +93,25 @@ destination account) or **drag the file** onto the window. The parser
   can't be imported; WICKED will tell you to switch to Trades/Executions.
   Import Trades **or** Executions **or** Orders for a given period into one
   account — not more than one — or the same trades would count twice.
-- **Futures point values.** An instrument in NinjaTrader's `ROOT MM-YY` form
-  (`ES 09-26`, `MNQ 12-25`…) gets its contract multiplier applied to P&L and
-  cost basis — ES $50/pt, NQ $20, MES $5, CL $1000, GC $100, and ~60 other
-  CME/CBOT/NYMEX/COMEX/ICE roots. A bare stock ticker is never treated as a
-  future (CL the stock is Colgate; only `CL 09-26` is crude), and an unknown
-  root stays at 1×.
+- **Futures point values.** A futures instrument — NinjaTrader's `ROOT MM-YY`
+  form (`ES 09-26`, `MNQ 12-25`…) **or** the compact exchange code
+  (`MYMZ6`, `ESZ25`, `MNQZ6` = root + month letter + year) when the root is a
+  known futures root — gets its contract multiplier applied to P&L and cost
+  basis: ES $50/pt, NQ $20, MES $5, MNQ $2, YM $5, MYM $0.50, RTY $50, M2K $5,
+  CL $1000, GC $100, and ~60 other CME/CBOT/NYMEX/COMEX/ICE roots. A bare stock
+  ticker is never treated as a future (CL the stock is Colgate; only `CL 09-26`
+  is crude), and an unknown root stays at 1×.
+- **Tradovate (futures).** Tradovate's **Orders** export imports natively — only
+  `Filled` rows become fills (all the working/cancelled bracket legs are kept but
+  excluded from P&L), quantity comes from `Filled Qty`, price from `Avg Fill
+  Price`, and the `Order ID` is the de-dup key. Because the orders report carries
+  **no P&L column**, realized P&L is computed by FIFO × the contract point value
+  above — so `MYMZ6`/`MNQZ6` reconcile exactly ($0.50 and $2.00 per point). The
+  export has no fees, so leave the account fee rate at **$0** (Tradovate
+  commissions aren't in an orders CSV). Times carry no zone and are read as
+  Eastern wall-clock; if your Tradovate display timezone isn't ET the *P&L is
+  unaffected* but the hour-of-day/calendar grouping shifts — set Tradovate to ET
+  to match.
 - **Forex (spot FX).** A currency pair — `EURUSD` or `EUR/USD`, where BOTH
   halves are fiat ISO codes — is priced in **lots**: one standard lot is 100,000
   units of the base currency, so P&L = Δprice × 100,000 × lots. Without this a
