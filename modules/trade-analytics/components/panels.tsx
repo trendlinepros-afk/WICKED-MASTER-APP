@@ -310,7 +310,10 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
             <p className="mt-1.5 text-[11px] text-muted">
               Any broker&apos;s CSV export works (Webull, Robinhood, Schwab, Fidelity, IBKR, E*TRADE,
               tastytrade, NinjaTrader, Tradovate, OANDA…). Futures contracts use the right point value
-              (MES $5, MNQ $2, MYM $0.50, ES $50…) so P&amp;L is exact. Trades import only into this account and never mix with others.
+              (MES $5, MNQ $2, MYM $0.50, ES $50…) so <strong className="text-ink">gross</strong> P&amp;L is exact.
+              A futures <em>orders</em> export has no commissions — to match a prop firm&apos;s net, set this account&apos;s{' '}
+              <strong className="text-ink">$/ct·side</strong> (Manage Accounts) to your broker&apos;s per-side rate
+              (e.g. MyFundedFutures/Tradovate micros ≈ $0.95/side). Trades import only into this account and never mix with others.
               Re-importing skips duplicates and updates orders that filled since the last export.
             </p>
             <p className="mt-1.5 rounded-lg bg-accent/10 px-2.5 py-1.5 text-[11px] text-muted">
@@ -485,9 +488,12 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
           account also deletes its imported trades.
           <br />
           <strong className="text-ink">$/ct·side</strong> is a cost per contract (or share) charged on <em>every</em>{' '}
-          fill — a round trip pays it twice. Files with <em>no</em> cost data (NinjaTrader Orders grid) get it as
-          their full cost; files with commission but missing exchange/reg fees (NinjaTrader Executions grid) get it{' '}
-          <em>added on top</em>. Leave 0 for files that already carry the complete cost (Trade Performance, Schwab).
+          fill — a round trip pays it twice. Files with <em>no</em> cost data (NinjaTrader Orders grid,{' '}
+          <strong className="text-ink">Tradovate/futures orders</strong>) get it as their full cost; files with
+          commission but missing exchange/reg fees (NinjaTrader Executions grid) get it <em>added on top</em>. Leave 0
+          for files that already carry the complete cost (Trade Performance, Schwab). Futures orders exports show{' '}
+          <em>gross</em> P&amp;L until you set this — for a MyFundedFutures/Tradovate micro account use ≈{' '}
+          <strong className="text-ink">$0.95/side</strong> ($1.90 round-turn) so the journal&apos;s net matches the firm.
         </p>
       </div>
     </div>

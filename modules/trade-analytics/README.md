@@ -106,12 +106,17 @@ destination account) or **drag the file** onto the window. The parser
   excluded from P&L), quantity comes from `Filled Qty`, price from `Avg Fill
   Price`, and the `Order ID` is the de-dup key. Because the orders report carries
   **no P&L column**, realized P&L is computed by FIFO × the contract point value
-  above — so `MYMZ6`/`MNQZ6` reconcile exactly ($0.50 and $2.00 per point). The
-  export has no fees, so leave the account fee rate at **$0** (Tradovate
-  commissions aren't in an orders CSV). Times carry no zone and are read as
-  Eastern wall-clock; if your Tradovate display timezone isn't ET the *P&L is
-  unaffected* but the hour-of-day/calendar grouping shifts — set Tradovate to ET
-  to match.
+  above — so `MYMZ6`/`MNQZ6` reconcile exactly ($0.50 and $2.00 per point), which
+  is the **gross** (price-only) P&L. An orders export carries **no commissions**
+  (no fee column, just as it has no P&L column), so to match a prop firm's *net*
+  figure set the account's **$/ct·side** to your broker's per-side commission —
+  it's charged on every fill (a round trip pays it twice). Example: a
+  MyFundedFutures/Tradovate micro account showing net +$334.60 on +$403.00 gross
+  paid $68.40 over 72 contract-sides → **$0.95/side** ($1.90 per round-turn
+  micro); enter 0.95 and the journal's net matches the firm to the cent. Times
+  carry no zone and are read as Eastern wall-clock; if your Tradovate display
+  timezone isn't ET the *P&L is unaffected* but the hour-of-day/calendar grouping
+  shifts — set Tradovate to ET to match.
 - **Forex (spot FX).** A currency pair — `EURUSD` or `EUR/USD`, where BOTH
   halves are fiat ISO codes — is priced in **lots**: one standard lot is 100,000
   units of the base currency, so P&L = Δprice × 100,000 × lots. Without this a
