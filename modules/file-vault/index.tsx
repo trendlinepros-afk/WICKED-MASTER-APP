@@ -369,15 +369,13 @@ function FileRow({ f }: { f: VaultFile }): React.JSX.Element {
       <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">{f.isFolder ? '' : fmtBytes(f.size)}</span>
       <span className="hidden w-24 shrink-0 text-right text-xs text-muted sm:block">{fmtDate(f.modifiedTime)}</span>
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        {f.isFolder ? (
-          <button className={iconBtn} title="Open folder" onClick={() => s.openFolder(f)}>
-            <FolderOpen size={15} />
-          </button>
-        ) : (
-          <button className={iconBtn} title="Download" onClick={() => void s.download(f.id, f.name)}>
-            <ArrowDownToLine size={15} />
-          </button>
-        )}
+        <button
+          className={iconBtn}
+          title={f.isFolder ? 'Download this folder and everything in it' : 'Download'}
+          onClick={() => (f.isFolder ? void s.downloadFolder(f.id, f.name) : void s.download(f.id, f.name))}
+        >
+          <ArrowDownToLine size={15} />
+        </button>
         <button className={iconBtn} title="Open in Google Drive" onClick={() => s.openDrive(f.id, f.isFolder)}>
           <ExternalLink size={15} />
         </button>

@@ -423,6 +423,36 @@ export default function register(ctx: ModuleIpcContext): void {
     return t
   }
 
+  /**
+   * Recursively queue a whole vault folder for download into `localBase`,
+   * mirroring the Drive tree on disk (sub-folders created, empty ones kept).
+   * Google-native docs (Docs/Sheets — no binary content) are skipped. Returns
+   * the number of files queued.
+   */
+  async function enqueueFolderDownload(folderId: string, localBase: string, errors: string[]): Promise<number> {
+    mkdirSync(localBase, { recursive: true }) // create even empty folders
+    let entries: DriveFileRaw[]
+    try {
+      entries = await listFolder(await getToken(), folderId)
+    } catch (err) {
+      errors.push(`Couldn't read folder "${basename(localBase)}": ${errMsg(err)}`)
+      return 0
+    }
+    let n = 0
+    for (const e of entries) {
+      if (e.mimeType === FOLDER_MIME) {
+        n += await enqueueFolderDownload(e.id, join(localBase, e.name), errors)
+      } else if (e.mimeType.startsWith('application/vnd.google-apps.')) {
+        // native Google docs/shortcuts have no binary to download — skip
+        continue
+      } else {
+        queueDownload(toVaultFile(e), join(localBase, e.name))
+        n++
+      }
+    }
+    return n
+  }
+
   /* -------------------------------- handlers ------------------------------- */
 
   const downloadDir = (): string => ctx.storeGet(`${ID}.downloadDir`, '') || ctx.app.getPath('downloads')
@@ -587,6 +617,37 @@ export default function register(ctx: ModuleIpcContext): void {
       queueDownload(file, r.filePath)
       pump()
       return { ok: true }
+    } catch (err) {
+      return { error: errMsg(err) }
+    }
+  })
+
+  // Download a whole vault folder (recursively) into a chosen local directory —
+  // the tree is recreated as <chosen>/<folderName>/… ; existing same-named local
+  // files are replaced (verified downloads land atomically).
+  ctx.ipcMain.handle(`${ID}:download-folder`, async (_e, args: { fileId?: string; name?: string; dir?: string }) => {
+    try {
+      const fileId = String(args?.fileId ?? '')
+      if (!fileId) return { error: 'No folder given.' }
+      const folderName = (String(args?.name ?? '').trim() || 'folder').replace(/[\\/:*?"<>|]/g, '_')
+      let parentDir = String(args?.dir ?? '')
+      if (!parentDir) {
+        const win = ctx.getMainWindow()
+        if (!win) return { error: 'No window' }
+        const r = await ctx.dialog.showOpenDialog(win, {
+          title: `Download "${folderName}" into…`,
+          defaultPath: downloadDir(),
+          properties: ['openDirectory', 'createDirectory']
+        })
+        if (r.canceled || r.filePaths.length === 0) return { canceled: true }
+        parentDir = r.filePaths[0]
+      }
+      const localBase = join(parentDir, folderName)
+      const errors: string[] = []
+      const queued = await enqueueFolderDownload(fileId, localBase, errors)
+      pump()
+      if (queued === 0 && errors.length > 0) return { error: errors.join('; ') }
+      return { ok: true, queued, dest: localBase, errors }
     } catch (err) {
       return { error: errMsg(err) }
     }

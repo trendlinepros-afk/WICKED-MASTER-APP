@@ -8,8 +8,10 @@ drive.google.com, your phone, and any other PC.
 **Folders are supported** — the vault is browsable, not flat. Upload a whole
 folder (button or drag-drop) and its structure is mirrored into Drive
 (sub-folders created, empty ones kept); click a folder to open it, with a
-breadcrumb back to the root. Sub-folders you create directly in Drive show up in
-the app too. Uploads land in the folder you're currently viewing.
+breadcrumb back to the root. **Download a folder** (its download button) and the
+whole tree is recreated locally under a folder you pick. Sub-folders you create
+directly in Drive show up in the app too. Uploads land in the folder you're
+currently viewing.
 
 **Why Drive:** the Drive API has no usage billing (only rate quotas a personal
 vault never approaches) and the user already pays for TBs of Business storage —
@@ -51,6 +53,11 @@ into WICKED → Connect (browser sign-in).
 - **Downloads**: streamed to a `.wkdownload` temp file with Range-resume across
   retries, renamed into place only after verification. Drive's "abusive file"
   gate on executables is acknowledged automatically (owner's own file).
+- **Folder downloads**: `enqueueFolderDownload` walks the Drive folder
+  recursively (main), recreates the tree under a chosen `<dest>/<folderName>`
+  (empty folders included, dirnames auto-created by the download step), and
+  queues each file through the normal verified-download path. Google-native docs
+  (no binary content) are skipped.
 - **Verification**: every completed transfer's **MD5 is compared with Drive's
   server-side checksum** — a mismatch is a hard error, which matters when the
   files are executables that will be run.

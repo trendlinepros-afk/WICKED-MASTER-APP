@@ -35,6 +35,7 @@ interface VaultState {
   pickUploadFolder: () => Promise<void>
   uploadPaths: (paths: string[]) => Promise<void>
   download: (fileId: string, name: string) => Promise<void>
+  downloadFolder: (fileId: string, name: string) => Promise<void>
   openFolder: (f: VaultFile) => void
   /** navigate to a breadcrumb entry; index -1 = the vault root */
   goToCrumb: (index: number) => void
@@ -136,6 +137,12 @@ export const useVault = create<VaultState>((set, get) => ({
   download: async (fileId, name) => {
     const r = (await inv('download', { fileId, name })) as Res
     if (r.error) set({ error: r.error })
+  },
+
+  downloadFolder: async (fileId, name) => {
+    const r = (await inv('download-folder', { fileId, name })) as Res
+    if (r.error) set({ error: r.error })
+    else if (r.errors && r.errors.length > 0) set({ error: r.errors.join('; ') })
   },
 
   openFolder: (f) => {
