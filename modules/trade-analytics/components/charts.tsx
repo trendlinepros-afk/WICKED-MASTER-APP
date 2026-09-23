@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react'
+import type { Trade } from '../lib/analytics'
 
 /**
  * Lightweight, dependency-free, theme-aware SVG charts. Colors come from the
@@ -540,6 +541,154 @@ export function DrawdownArea({
       <path d={area} fill={`url(#dd-${gid})`} />
       <path d={line} fill="none" stroke={DANGER} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
     </svg>
+  )
+}
+
+/* ------------------------------- trade chart ----------------------------- */
+
+const fmtMoney2 = (v: number): string =>
+  `${v >= 0 ? '+' : '-'}$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const fmtPct1 = (v: number): string => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
+
+/**
+ * Badge sub-line under the dollar P&L: the favorable price move in POINTS for
+ * futures/FX (multiplier ≠ 1), where % of the huge notional rounds to ~0.0% and
+ * says nothing; the % return for equities.
+ */
+function tradeMove(t: Trade): string {
+  const move = t.direction === 'long' ? t.avgExit - t.avgEntry : t.avgEntry - t.avgExit
+  if (t.multiplier !== 1) {
+    const dec = t.avgEntry > 0 && t.avgEntry < 20 ? 4 : 2
+    return `${move >= 0 ? '+' : ''}${move.toFixed(dec)} pts`
+  }
+  return fmtPct1(t.realizedPct)
+}
+
+/**
+ * A single round-trip's execution map, drawn from the trade's OWN fills — no
+ * market-data feed needed, so it works for futures/forex/stocks alike. Price on
+ * Y, time on X; every fill is a dot on the chronological path; dashed lines mark
+ * the average entry and exit with the profit/loss band shaded between them; and
+ * the realized P&L sits in a badge in the top-right corner.
+ */
+export function TradeChart({ trade, height = 340 }: { trade: Trade; height?: number }): React.JSX.Element {
+  const W = 820
+  const H = height
+  const padL = 10
+  const padR = 86
+  const padT = 16
+  const padB = 30
+
+  const isEntryFill = (side: string): boolean =>
+    trade.direction === 'long' ? side === 'buy' : side === 'sell' || side === 'short'
+
+  // chronological fills; positioned by time, or evenly by index when times are
+  // missing or all identical (date-only imports).
+  const pts = trade.fills
+    .map((f, i) => ({ price: f.price, entry: isEntryFill(f.side), at: f.at, i }))
+    .filter((p) => p.price > 0)
+    .sort((a, b) => (a.at ?? 0) - (b.at ?? 0) || a.i - b.i)
+
+  if (pts.length === 0) {
+    return (
+      <div className="flex items-center justify-center rounded-lg bg-black/20 text-sm text-muted" style={{ height }}>
+        No fill detail to chart for this trade.
+      </div>
+    )
+  }
+
+  const times = pts.map((p) => p.at).filter((t): t is number => t != null)
+  const tMin = times.length ? Math.min(...times) : 0
+  const tMax = times.length ? Math.max(...times) : 0
+  const tSpan = tMax - tMin
+  const N = pts.length
+  const inner = W - padL - padR
+  const xOf = (at: number | null, idx: number): number =>
+    tSpan > 0 && at != null ? padL + ((at - tMin) / tSpan) * inner : padL + (N <= 1 ? 0.5 : idx / (N - 1)) * inner
+
+  const yVals = [...pts.map((p) => p.price), trade.avgEntry, trade.isOpen ? trade.avgEntry : trade.avgExit].filter((v) => v > 0)
+  let pMin = Math.min(...yVals)
+  let pMax = Math.max(...yVals)
+  const spanY = pMax - pMin
+  const padY = spanY > 0 ? spanY * 0.28 : Math.max(0.5, pMax * 0.001)
+  pMin -= padY
+  pMax += padY
+  const yOf = (price: number): number => padT + (1 - (price - pMin) / (pMax - pMin || 1)) * (H - padT - padB)
+
+  const profit = trade.realizedPnl >= 0
+  const zone = profit ? OK : DANGER
+  const yEntry = yOf(trade.avgEntry)
+  const yExit = trade.isOpen ? yEntry : yOf(trade.avgExit)
+  const path = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'}${xOf(p.at, idx).toFixed(1)},${yOf(p.price).toFixed(1)}`).join(' ')
+
+  const fmtTime = (t: number | null): string => {
+    if (t == null) return ''
+    const d = new Date(t)
+    return Number.isNaN(d.getTime())
+      ? ''
+      : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+
+  return (
+    <div className="relative w-full select-none">
+      <svg viewBox={`0 0 ${W} ${H}`} className="block w-full" preserveAspectRatio="none" role="img" aria-label={`${trade.symbol} entry and exit`}>
+        {/* profit / loss band between avg entry and avg exit */}
+        {!trade.isOpen && (
+          <rect x={padL} y={Math.min(yEntry, yExit)} width={inner} height={Math.max(1, Math.abs(yExit - yEntry))} fill={zone} opacity="0.14" />
+        )}
+        {/* avg entry / exit reference lines */}
+        <line x1={padL} x2={W - padR} y1={yEntry} y2={yEntry} stroke={MUTED} strokeWidth="1" strokeDasharray="5 4" opacity="0.75" />
+        {!trade.isOpen && <line x1={padL} x2={W - padR} y1={yExit} y2={yExit} stroke={zone} strokeWidth="1.5" strokeDasharray="5 4" />}
+        {/* chronological execution path */}
+        <path d={path} fill="none" stroke={zone} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity="0.5" />
+        {/* fill markers: entry = accent, exit = P/L color */}
+        {pts.map((p, idx) => (
+          <circle
+            key={idx}
+            cx={xOf(p.at, idx)}
+            cy={yOf(p.price)}
+            r="4.5"
+            fill={p.entry ? ACCENT : zone}
+            stroke="rgb(var(--wk-surface))"
+            strokeWidth="1.5"
+          />
+        ))}
+        {/* right-gutter price labels (right-anchored so long futures prices don't clip) */}
+        <text x={W - 4} y={yEntry} textAnchor="end" dominantBaseline="middle" fontSize="11" fill={MUTED}>
+          in {trade.avgEntry.toFixed(2)}
+        </text>
+        {!trade.isOpen && (
+          <text x={W - 4} y={yExit} textAnchor="end" dominantBaseline="middle" fontSize="11" fontWeight="700" fill={zone}>
+            out {trade.avgExit.toFixed(2)}
+          </text>
+        )}
+        {/* time-axis ends */}
+        {times.length > 0 && (
+          <>
+            <text x={padL} y={H - 8} fontSize="10.5" fill={MUTED}>
+              {fmtTime(tMin)}
+            </text>
+            {tSpan > 0 && (
+              <text x={W - padR} y={H - 8} fontSize="10.5" textAnchor="end" fill={MUTED}>
+                {fmtTime(tMax)}
+              </text>
+            )}
+          </>
+        )}
+      </svg>
+      {/* P/L badge — top-right corner */}
+      <div className={`absolute right-2 top-2 rounded-lg border px-3 py-1.5 text-right shadow-lg ${profit ? 'border-ok/40 bg-ok/10' : 'border-danger/40 bg-danger/10'}`}>
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{trade.isOpen ? 'Position' : 'Trade P&L'}</div>
+        {trade.isOpen ? (
+          <div className="text-lg font-bold tabular-nums text-accent">OPEN</div>
+        ) : (
+          <>
+            <div className={`text-xl font-bold tabular-nums ${profit ? 'text-ok' : 'text-danger'}`}>{fmtMoney2(trade.realizedPnl)}</div>
+            <div className={`text-xs tabular-nums ${profit ? 'text-ok' : 'text-danger'}`}>{tradeMove(trade)}</div>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 

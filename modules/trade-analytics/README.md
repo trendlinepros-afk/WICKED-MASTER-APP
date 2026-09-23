@@ -200,6 +200,12 @@ cross-checked by hand).
   symbol. Filter the account bar to see one account's cost; realized P&L is
   always shown net of commissions & fees.
 - **Trades** — every round-trip trade (open ones flagged), entry/exit/hold/P&L.
+  **Click a row to chart it**: a modal draws the trade's execution map from its
+  own fills (dots = executions on a price/time axis, dashed lines = average
+  entry and exit, a shaded profit/loss band between them) with the realized
+  **P&L in a badge in the top-right corner**, plus a per-fill list. It's built
+  from the fills alone — **no market-data feed** — so it works for futures too
+  (the badge shows the point move rather than a meaningless %-of-notional).
   Hover a row to **edit** or **delete** it, or use **Add trade** to enter one by
   hand (symbol, direction, qty, entry/exit price + ET time, optional partial
   exit and account). Editing/deleting acts on the underlying executions — the
