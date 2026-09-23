@@ -243,18 +243,25 @@ function q(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
 
-export async function findOrCreateFolder(token: string, name: string): Promise<string> {
+/** Find (or create) a folder by name directly under `parentId` ('root' for My
+ *  Drive). Used both for the top-level vault folder and for mirroring an
+ *  uploaded folder tree into subfolders of the vault. */
+export async function findOrCreateSubfolder(token: string, name: string, parentId: string): Promise<string> {
   const query = encodeURIComponent(
-    `name = '${q(name)}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false`
+    `name = '${q(name)}' and mimeType = 'application/vnd.google-apps.folder' and '${q(parentId)}' in parents and trashed = false`
   )
   const res = await driveJson<{ files: { id: string }[] }>(token, 'GET', `/files?q=${query}&fields=files(id)&pageSize=1`)
   if (res.files.length > 0) return res.files[0].id
   const created = await driveJson<{ id: string }>(token, 'POST', '/files?fields=id', {
     name,
     mimeType: 'application/vnd.google-apps.folder',
-    parents: ['root']
+    parents: [parentId]
   })
   return created.id
+}
+
+export function findOrCreateFolder(token: string, name: string): Promise<string> {
+  return findOrCreateSubfolder(token, name, 'root')
 }
 
 export async function listFolder(token: string, folderId: string): Promise<DriveFileRaw[]> {

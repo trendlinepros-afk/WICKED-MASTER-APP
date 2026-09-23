@@ -3,11 +3,13 @@
  * only — this file is compiled under BOTH tsconfig projects.
  */
 
-/** One file stored in the "WICKED Vault" folder on the user's Google Drive. */
+/** One file OR subfolder stored in the "WICKED Vault" folder tree on Drive. */
 export interface VaultFile {
   id: string
   name: string
-  /** bytes (0 for Google-native docs, which have no binary size) */
+  /** true when this entry is a folder (browse into it), not a file */
+  isFolder: boolean
+  /** bytes (0 for folders and Google-native docs, which have no binary size) */
   size: number
   mimeType: string
   /** Drive's server-side MD5 of the content — used to verify every transfer */
@@ -28,6 +30,8 @@ export interface Transfer {
   name: string
   /** local file being read (upload) or written (download) */
   localPath: string
+  /** target Drive folder id for an upload (a vault subfolder, or the root) */
+  folderId?: string
   /** Drive file id (set after an upload completes; set from the start for downloads) */
   fileId?: string
   /** total bytes (0 until known) */

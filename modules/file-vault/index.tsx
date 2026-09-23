@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Cloud,
   ExternalLink,
   File as FileIcon,
@@ -13,7 +14,10 @@ import {
   FileImage,
   FileText,
   FileVideo,
+  Folder,
   FolderOpen,
+  FolderUp,
+  Home,
   Loader2,
   Package,
   Pencil,
@@ -315,11 +319,11 @@ function FileRow({ f }: { f: VaultFile }): React.JSX.Element {
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(f.name)
   const [confirmDel, setConfirmDel] = useState(false)
-  const Icon = iconFor(f.name)
+  const Icon = f.isFolder ? Folder : iconFor(f.name)
 
   return (
     <div className="group flex items-center gap-3 border-b border-edge/60 px-4 py-2.5 hover:bg-raised/40">
-      <Icon size={18} className="shrink-0 text-muted" />
+      <Icon size={18} className={f.isFolder ? 'shrink-0 text-accent' : 'shrink-0 text-muted'} />
       <div className="min-w-0 flex-1">
         {renaming ? (
           <input
@@ -343,6 +347,14 @@ function FileRow({ f }: { f: VaultFile }): React.JSX.Element {
               setName(f.name)
             }}
           />
+        ) : f.isFolder ? (
+          <button
+            className="flex min-w-0 items-center gap-2 text-left"
+            title="Open folder"
+            onClick={() => s.openFolder(f)}
+          >
+            <span className="min-w-0 truncate text-sm font-medium text-ink group-hover:text-accent">{f.name}</span>
+          </button>
         ) : (
           <div className="flex items-center gap-2">
             <span className="min-w-0 truncate text-sm text-ink">{f.name}</span>
@@ -354,13 +366,19 @@ function FileRow({ f }: { f: VaultFile }): React.JSX.Element {
           </div>
         )}
       </div>
-      <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">{fmtBytes(f.size)}</span>
+      <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted">{f.isFolder ? '' : fmtBytes(f.size)}</span>
       <span className="hidden w-24 shrink-0 text-right text-xs text-muted sm:block">{fmtDate(f.modifiedTime)}</span>
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        <button className={iconBtn} title="Download" onClick={() => void s.download(f.id, f.name)}>
-          <ArrowDownToLine size={15} />
-        </button>
-        <button className={iconBtn} title="Open in Google Drive" onClick={() => s.openDrive(f.id)}>
+        {f.isFolder ? (
+          <button className={iconBtn} title="Open folder" onClick={() => s.openFolder(f)}>
+            <FolderOpen size={15} />
+          </button>
+        ) : (
+          <button className={iconBtn} title="Download" onClick={() => void s.download(f.id, f.name)}>
+            <ArrowDownToLine size={15} />
+          </button>
+        )}
+        <button className={iconBtn} title="Open in Google Drive" onClick={() => s.openDrive(f.id, f.isFolder)}>
           <ExternalLink size={15} />
         </button>
         <button
@@ -391,6 +409,38 @@ function FileRow({ f }: { f: VaultFile }): React.JSX.Element {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Folder path from the vault root to the folder being viewed. */
+function Breadcrumb(): React.JSX.Element {
+  const path = useVault((v) => v.path)
+  const goToCrumb = useVault((v) => v.goToCrumb)
+  return (
+    <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-edge px-4 py-2 text-sm">
+      <button
+        className={`flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 ${path.length ? 'text-muted hover:bg-raised hover:text-ink' : 'font-medium text-ink'}`}
+        onClick={() => goToCrumb(-1)}
+        disabled={path.length === 0}
+      >
+        <Home size={14} /> WICKED Vault
+      </button>
+      {path.map((c, i) => (
+        <span key={c.id} className="flex shrink-0 items-center gap-1">
+          <ChevronRight size={13} className="text-muted/60" />
+          <button
+            className={`max-w-[16rem] truncate rounded-md px-1.5 py-0.5 ${
+              i === path.length - 1 ? 'font-medium text-ink' : 'text-muted hover:bg-raised hover:text-ink'
+            }`}
+            onClick={() => goToCrumb(i)}
+            disabled={i === path.length - 1}
+            title={c.name}
+          >
+            {c.name}
+          </button>
+        </span>
+      ))}
     </div>
   )
 }
@@ -447,7 +497,7 @@ function VaultScreen(): React.JSX.Element {
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-accent bg-accent/10">
           <div className="rounded-xl bg-surface px-6 py-4 text-center shadow-xl">
             <Upload size={24} className="mx-auto mb-2 text-accent" />
-            <p className="text-sm font-medium text-ink">Drop to upload to your Drive vault</p>
+            <p className="text-sm font-medium text-ink">Drop files or folders to upload here</p>
           </div>
         </div>
       )}
@@ -470,7 +520,11 @@ function VaultScreen(): React.JSX.Element {
               <div>
                 {fmtBytes(s.quota.usage)} of {s.quota.limit > 0 ? fmtBytes(s.quota.limit) : '∞'} used
               </div>
-              <div>{s.files.length} files in vault · {fmtBytes(totalBytes)}</div>
+              <div>
+                {s.files.filter((f) => !f.isFolder).length} files
+                {s.files.some((f) => f.isFolder) ? ` · ${s.files.filter((f) => f.isFolder).length} folders` : ''} here ·{' '}
+                {fmtBytes(totalBytes)}
+              </div>
             </div>
             {quotaPct != null && (
               <div className="relative h-8 w-1.5 overflow-hidden rounded-full bg-raised">
@@ -482,6 +536,10 @@ function VaultScreen(): React.JSX.Element {
         <button className={btnAccent} onClick={() => void s.pickUpload()}>
           <Upload size={15} />
           Upload files
+        </button>
+        <button className={btn} title="Upload a whole folder (its structure is kept)" onClick={() => void s.pickUploadFolder()}>
+          <FolderUp size={15} />
+          Upload folder
         </button>
         <button className={btn} title="Open the WICKED Vault folder on drive.google.com" onClick={() => s.openDrive()}>
           <ExternalLink size={15} />
@@ -503,6 +561,9 @@ function VaultScreen(): React.JSX.Element {
           </button>
         </div>
       )}
+
+      {/* folder breadcrumb */}
+      <Breadcrumb />
 
       {/* search */}
       <div className="flex shrink-0 items-center gap-2 border-b border-edge px-4 py-2">
@@ -533,7 +594,9 @@ function VaultScreen(): React.JSX.Element {
             <p className="text-sm text-muted">
               {s.search
                 ? 'Nothing matches your search.'
-                : 'The vault is empty — click Upload files or drag anything onto this window. Any size, no limits beyond your Drive plan.'}
+                : s.path.length > 0
+                  ? 'This folder is empty — drop files or a folder here, or use Upload.'
+                  : 'The vault is empty — click Upload files / Upload folder, or drag anything onto this window (files or whole folders). Any size, no limits beyond your Drive plan.'}
             </p>
           </div>
         ) : (

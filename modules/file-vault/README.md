@@ -1,9 +1,15 @@
 # File Vault
 
 Personal cloud file storage on **your own Google Drive** — built for installers,
-executables and other big files. Everything lives in one Drive folder
+executables and other big files. Everything lives under one Drive folder
 (**"WICKED Vault"** at the root of My Drive), so it's also visible on
 drive.google.com, your phone, and any other PC.
+
+**Folders are supported** — the vault is browsable, not flat. Upload a whole
+folder (button or drag-drop) and its structure is mirrored into Drive
+(sub-folders created, empty ones kept); click a folder to open it, with a
+breadcrumb back to the root. Sub-folders you create directly in Drive show up in
+the app too. Uploads land in the folder you're currently viewing.
 
 **Why Drive:** the Drive API has no usage billing (only rate quotas a personal
 vault never approaches) and the user already pays for TBs of Business storage —
@@ -33,8 +39,15 @@ into WICKED → Connect (browser sign-in).
   to the renderer.
 - **Uploads**: chunked **resumable** uploads (16 MB chunks), exponential-backoff
   retries with a `bytes */total` offset probe, session restart on expiry.
-  A same-named vault file is **replaced in place** (Drive keeps the previous
-  version ~30 days) instead of creating "name (1)" duplicates.
+  A same-named vault file (same name in the same folder) is **replaced in place**
+  (Drive keeps the previous version ~30 days) instead of creating "name (1)"
+  duplicates.
+- **Folder uploads**: a dropped/picked folder is walked recursively in main;
+  each sub-folder is created with `findOrCreateSubfolder` (existing ones reused)
+  and every file is queued into its matching Drive folder, so the tree is
+  preserved (empty folders included). Windows can't combine file+folder in one
+  native dialog, hence the separate **Upload folder** button; drag-drop handles
+  both at once. Each queued transfer carries its target `folderId`.
 - **Downloads**: streamed to a `.wkdownload` temp file with Range-resume across
   retries, renamed into place only after verification. Drive's "abusive file"
   gate on executables is acknowledged automatically (owner's own file).
@@ -49,8 +62,12 @@ into WICKED → Connect (browser sign-in).
 
 ## Quirks
 
-- The vault folder id is cached in the shared store; if the user deletes the
-  Drive folder, a 404 triggers re-create + retry automatically.
+- The vault ROOT folder id is cached in the shared store; if the user deletes it
+  in Drive, a 404 triggers re-create + retry automatically. A 404 on a *sub*-folder
+  (genuinely deleted) surfaces as an error rather than silently recreating.
+- Listing returns folders too (folders first, then files, each A→Z); navigating
+  passes the current folder id to `list`, and stale responses after a fast
+  navigation are dropped.
 - Google-native docs (Docs/Sheets) in the folder list with size 0 and no MD5 —
   they can't be meaningfully stored/verified here, but they're shown.
 - If Google doesn't return a refresh token (re-consent on an already-authorized

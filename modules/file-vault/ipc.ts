@@ -1,5 +1,5 @@
 import { safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { basename, dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
@@ -12,6 +12,7 @@ import {
   downloadToFile,
   findByName,
   findOrCreateFolder,
+  findOrCreateSubfolder,
   getFileMeta,
   listFolder,
   md5File,
@@ -147,30 +148,41 @@ export default function register(ctx: ModuleIpcContext): void {
     return fid
   }
 
+  const FOLDER_MIME = 'application/vnd.google-apps.folder'
   const toVaultFile = (f: DriveFileRaw): VaultFile => ({
     id: f.id,
     name: f.name,
+    isFolder: f.mimeType === FOLDER_MIME,
     size: Number(f.size ?? 0),
     mimeType: f.mimeType,
     md5: f.md5Checksum ?? '',
     modifiedTime: f.modifiedTime ?? '',
     createdTime: f.createdTime ?? '',
-    webViewLink: f.webViewLink ?? `https://drive.google.com/file/d/${f.id}/view`
+    webViewLink:
+      f.webViewLink ??
+      (f.mimeType === FOLDER_MIME
+        ? `https://drive.google.com/drive/folders/${f.id}`
+        : `https://drive.google.com/file/d/${f.id}/view`)
   })
 
-  async function listVault(): Promise<VaultFile[]> {
+  // Folders first, then files; each group A→Z. Folders ARE returned now, so the
+  // vault is browsable (and folders the user made in Drive directly show up).
+  const sortEntries = (a: VaultFile, b: VaultFile): number =>
+    Number(b.isFolder) - Number(a.isFolder) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+
+  async function listVault(folderId?: string): Promise<VaultFile[]> {
     const token = await getToken()
+    // Only the ROOT id can be transparently re-created on a 404; a sub-folder id
+    // that 404s is a genuinely gone folder, so let that error surface.
+    const atRoot = !folderId
     try {
-      const fid = await ensureVault(token)
-      const raw = await listFolder(token, fid)
-      return raw.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder').map(toVaultFile)
+      const fid = folderId || (await ensureVault(token))
+      return (await listFolder(token, fid)).map(toVaultFile).sort(sortEntries)
     } catch (err) {
-      if (err instanceof DriveApiError && err.status === 404) {
-        // cached folder id points at a deleted folder — re-create and retry
+      if (atRoot && err instanceof DriveApiError && err.status === 404) {
         ctx.storeSet(`${ID}.folderId`, '')
         const fid = await ensureVault(token)
-        const raw = await listFolder(token, fid)
-        return raw.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder').map(toVaultFile)
+        return (await listFolder(token, fid)).map(toVaultFile).sort(sortEntries)
       }
       throw err
     }
@@ -222,13 +234,15 @@ export default function register(ctx: ModuleIpcContext): void {
 
   async function runUpload(t: Transfer, signal: AbortSignal): Promise<void> {
     const token = await getToken()
-    const folderId = await ensureVault(token)
-    const existing = await findByName(token, folderId, t.name)
+    const folderId = t.folderId || (await ensureVault(token))
+    // de-dup / replace by the actual file name in its target folder (t.name may
+    // be a "folder/child" display label for a folder upload)
+    const existing = await findByName(token, folderId, basename(t.localPath))
     t.replaced = !!existing
     const file = await resumableUpload({
       localPath: t.localPath,
       size: t.size,
-      name: t.name,
+      name: basename(t.localPath),
       folderId,
       existingFileId: existing?.id,
       getToken,
@@ -311,7 +325,8 @@ export default function register(ctx: ModuleIpcContext): void {
     pump() // fill the second slot if there is more queued work
   }
 
-  function queueUpload(path: string): string | null {
+  /** Queue ONE file (never a folder — callers pre-resolve directories). */
+  function queueUpload(path: string, folderId: string, label: string): string | null {
     let st: ReturnType<typeof statSync>
     try {
       st = statSync(path)
@@ -326,8 +341,9 @@ export default function register(ctx: ModuleIpcContext): void {
     transfers.push({
       id: randomBytes(8).toString('hex'),
       kind: 'upload',
-      name: basename(path),
+      name: label || basename(path),
       localPath: path,
+      folderId,
       size: st.size,
       done: 0,
       status: 'queued',
@@ -335,6 +351,59 @@ export default function register(ctx: ModuleIpcContext): void {
       bps: 0
     })
     return null
+  }
+
+  /**
+   * Queue a file OR a whole folder for upload into `parentFolderId`. A folder is
+   * mirrored into Drive: a matching sub-folder is created (existing one reused),
+   * then its contents are walked recursively and each file queued into the right
+   * sub-folder — so the structure is preserved and empty folders still appear.
+   * `rel` is the display path (e.g. "Tools/bin/app.exe") shown in the transfers
+   * panel. Returns the number of files queued; pushes any problems to `errors`.
+   */
+  async function enqueuePath(path: string, parentFolderId: string, rel: string, errors: string[]): Promise<number> {
+    let st: ReturnType<typeof statSync>
+    try {
+      st = statSync(path)
+    } catch {
+      errors.push(`Not found: ${path}`)
+      return 0
+    }
+    if (st.isFile()) {
+      const e = queueUpload(path, parentFolderId, rel)
+      if (e) {
+        errors.push(e)
+        return 0
+      }
+      return 1
+    }
+    if (st.isDirectory()) {
+      let subId: string
+      try {
+        subId = await findOrCreateSubfolder(await getToken(), basename(path), parentFolderId)
+      } catch (err) {
+        errors.push(`Couldn't create folder "${basename(path)}": ${errMsg(err)}`)
+        return 0
+      }
+      let entries: string[]
+      try {
+        entries = readdirSync(path)
+      } catch {
+        errors.push(`Couldn't read folder: ${path}`)
+        return 0
+      }
+      let n = 0
+      for (const child of entries) n += await enqueuePath(join(path, child), subId, `${rel}/${child}`, errors)
+      return n
+    }
+    errors.push(`Skipped (not a file or folder): ${path}`)
+    return 0
+  }
+
+  /** Resolve a folder id from the renderer (empty/absent → vault root). */
+  async function targetFolder(folderId?: unknown): Promise<string> {
+    const fid = typeof folderId === 'string' ? folderId.trim() : ''
+    return fid || (await ensureVault(await getToken()))
   }
 
   function queueDownload(file: VaultFile, dest: string): Transfer {
@@ -431,43 +500,78 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:list`, async () => {
+  ctx.ipcMain.handle(`${ID}:list`, async (_e, folderId?: unknown) => {
     try {
-      return { files: await listVault() }
+      const fid = typeof folderId === 'string' && folderId.trim() ? folderId.trim() : undefined
+      return { files: await listVault(fid) }
     } catch (err) {
       return { error: errMsg(err) }
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:pick-upload`, async () => {
+  ctx.ipcMain.handle(`${ID}:pick-upload`, async (_e, folderId?: unknown) => {
     const win = ctx.getMainWindow()
     if (!win) return { error: 'No window' }
     const r = await ctx.dialog.showOpenDialog(win, {
-      title: 'Upload to your Drive vault',
+      title: 'Upload files to your Drive vault',
       properties: ['openFile', 'multiSelections']
     })
     if (r.canceled || r.filePaths.length === 0) return { canceled: true }
-    const errors: string[] = []
-    for (const p of r.filePaths) {
-      const e = queueUpload(p)
-      if (e) errors.push(e)
+    try {
+      const parent = await targetFolder(folderId)
+      const errors: string[] = []
+      let queued = 0
+      for (const p of r.filePaths) queued += await enqueuePath(p, parent, basename(p), errors)
+      pump()
+      return { ok: true, queued, errors }
+    } catch (err) {
+      return { error: errMsg(err) }
     }
-    pump()
-    return { ok: true, queued: r.filePaths.length - errors.length, errors }
   })
 
-  ctx.ipcMain.handle(`${ID}:upload-paths`, (_e, paths: string[]) => {
-    if (!Array.isArray(paths) || paths.length === 0) return { error: 'No files given.' }
-    const errors: string[] = []
-    let queued = 0
-    for (const p of paths.map(String)) {
-      const e = queueUpload(p)
-      if (e) errors.push(e)
-      else queued++
+  // Windows can't combine openFile + openDirectory in one dialog, so folder
+  // upload gets its own picker (drag-drop handles both together).
+  ctx.ipcMain.handle(`${ID}:pick-upload-folder`, async (_e, folderId?: unknown) => {
+    const win = ctx.getMainWindow()
+    if (!win) return { error: 'No window' }
+    const r = await ctx.dialog.showOpenDialog(win, {
+      title: 'Upload a folder to your Drive vault',
+      properties: ['openDirectory', 'multiSelections']
+    })
+    if (r.canceled || r.filePaths.length === 0) return { canceled: true }
+    try {
+      const parent = await targetFolder(folderId)
+      const errors: string[] = []
+      let queued = 0
+      for (const p of r.filePaths) queued += await enqueuePath(p, parent, basename(p), errors)
+      pump()
+      return { ok: true, queued, errors }
+    } catch (err) {
+      return { error: errMsg(err) }
     }
-    pump()
-    if (queued === 0 && errors.length > 0) return { error: errors.join('; ') }
-    return { ok: true, queued, errors }
+  })
+
+  ctx.ipcMain.handle(`${ID}:upload-paths`, async (_e, arg: unknown) => {
+    // Back-compat: a bare string[] uploads to the vault root; the UI now sends
+    // { paths, folderId } so drops land in the folder you're viewing.
+    const paths = Array.isArray(arg)
+      ? arg.map(String)
+      : Array.isArray((arg as { paths?: unknown })?.paths)
+        ? ((arg as { paths: unknown[] }).paths.map(String))
+        : []
+    const folderId = Array.isArray(arg) ? undefined : (arg as { folderId?: unknown })?.folderId
+    if (paths.length === 0) return { error: 'No files given.' }
+    try {
+      const parent = await targetFolder(folderId)
+      const errors: string[] = []
+      let queued = 0
+      for (const p of paths) queued += await enqueuePath(p, parent, basename(p), errors)
+      pump()
+      if (queued === 0 && errors.length > 0) return { error: errors.join('; ') }
+      return { ok: true, queued, errors }
+    } catch (err) {
+      return { error: errMsg(err) }
+    }
   })
 
   ctx.ipcMain.handle(`${ID}:download`, async (_e, args: { fileId: string; name: string }) => {
@@ -551,10 +655,16 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   })
 
-  ctx.ipcMain.handle(`${ID}:open-drive`, async (_e, fileId?: string) => {
+  ctx.ipcMain.handle(`${ID}:open-drive`, async (_e, arg?: unknown) => {
     try {
+      // arg may be a bare fileId (file) or { fileId, isFolder }; no arg → vault root
+      const fileId = typeof arg === 'string' ? arg : (arg as { fileId?: unknown })?.fileId
+      const isFolder = typeof arg === 'object' && arg !== null && (arg as { isFolder?: unknown }).isFolder === true
       if (fileId) {
-        void ctx.shell.openExternal(`https://drive.google.com/file/d/${encodeURIComponent(String(fileId))}/view`)
+        const id = encodeURIComponent(String(fileId))
+        void ctx.shell.openExternal(
+          isFolder ? `https://drive.google.com/drive/folders/${id}` : `https://drive.google.com/file/d/${id}/view`
+        )
       } else {
         const fid = await ensureVault(await getToken())
         void ctx.shell.openExternal(`https://drive.google.com/drive/folders/${encodeURIComponent(fid)}`)
