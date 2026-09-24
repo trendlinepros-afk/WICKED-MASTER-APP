@@ -280,11 +280,19 @@ export const useTrades = create<State>((set, get) => {
     if (ignored > 0) parts.push(`${ignored} non-trade row(s) ignored`)
     if (rowErrors > 0) parts.push(`${rowErrors} unreadable row(s)`)
     if (crossSkipped > 0) parts.push(`${crossSkipped} kept out (already in another account)`)
+    // Heads-up when the import leaves an open position: realized P&L excludes it,
+    // and a "phantom" open when you're actually flat means a closing fill is
+    // missing from the export (the #1 cause of a mismatch with a broker's total).
+    const openNow = get().stats?.openTrades ?? 0
+    const openNote =
+      (imported > 0 || updated > 0) && openNow > 0
+        ? ` ⚠ ${openNow} position${openNow === 1 ? '' : 's'} still open — excluded from Realized P&L. If you're flat at your broker, a closing fill is missing (see Open Positions).`
+        : ''
     set({
       lastImport: { imported, updated, skipped, ignored, files },
       status:
         imported > 0 || updated > 0
-          ? `Imported: ${parts.join(' · ')}.${brokerNote}`
+          ? `Imported: ${parts.join(' · ')}.${brokerNote}${openNote}`
           : `No new executions — ${parts.length > 0 ? parts.join(' · ') : 'nothing usable in that file'}.${brokerNote}`
     })
   }

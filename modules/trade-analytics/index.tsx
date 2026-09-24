@@ -670,8 +670,13 @@ function OpenTab(): React.JSX.Element {
       </div>
       <p className="mt-2 text-xs text-muted">
         Cost basis is what you paid to open. Unrealized P&L needs live prices (not in broker order
-        exports), so it isn&apos;t shown — import a fresh report after you close a position and it moves
-        to your realized stats automatically.
+        exports), so it isn&apos;t shown, and your <strong className="text-ink">Realized P&L excludes open
+        positions</strong> — your broker&apos;s balance can look higher because it marks them to market.
+        When a position closes, import a fresh report and it moves into your realized stats automatically.
+        {' '}
+        <strong className="text-ink">Already flat at your broker but still see it here?</strong> Then this
+        export is missing that position&apos;s <em>closing</em> fill — re-export from your broker after it
+        closed (or add the missing fill with “Add trade”) and re-import.
         {bankedPartial !== 0 && (
           <>
             {' '}
