@@ -101,10 +101,14 @@ destination account) or **drag the file** onto the window. The parser
   CL $1000, GC $100, and ~60 other CME/CBOT/NYMEX/COMEX/ICE roots. A bare stock
   ticker is never treated as a future (CL the stock is Colgate; only `CL 09-26`
   is crude), and an unknown root stays at 1×.
-- **Tradovate (futures).** Tradovate's **Orders** export imports natively — only
-  `Filled` rows become fills (all the working/cancelled bracket legs are kept but
-  excluded from P&L), quantity comes from `Filled Qty`, price from `Avg Fill
-  Price`, and the `Order ID` is the de-dup key. Because the orders report carries
+- **Tradovate (futures).** BOTH Tradovate export layouts import natively: the
+  live **Orders panel** export (`Symbol`/`Side`/`Update Time`, day-scoped) and
+  the **Account Reports → Orders** export (`Contract`/`B/S`/`Fill Time`,
+  all-dates — the one to use for full history; the panel export only covers the
+  current session). Only `Filled` rows become fills (working/cancelled/rejected
+  legs are kept but excluded from P&L), quantity comes from `Filled Qty`, price
+  from `Avg Fill Price`, and the `Order ID` is the de-dup key (so the two layouts
+  de-dup against each other). Because the orders report carries
   **no P&L column**, realized P&L is computed by FIFO × the contract point value
   above — so `MYMZ6`/`MNQZ6` reconcile exactly ($0.50 and $2.00 per point), which
   is the **gross** (price-only) P&L. An orders export carries **no commissions**

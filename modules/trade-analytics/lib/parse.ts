@@ -359,7 +359,9 @@ export function instrumentMultiplier(symbol: string, fxLotSize = 100000): number
 /** Aliases are in PRIORITY order — the first alias found in the header wins. */
 const HEADER_ALIASES: Record<string, string[]> = {
   name: ['name', 'security description', 'description', 'company'],
-  symbol: ['symbol', 'ticker', 'instrument'],
+  // 'contract' = Tradovate Account Reports (its symbol column is "Contract",
+  // e.g. YMZ6). Kept last so a real "Symbol"/"Ticker" column always wins first.
+  symbol: ['symbol', 'ticker', 'instrument', 'contract'],
   side: ['side', 'direction', 'action', 'trans code', 'transaction code', 'buy/sell', 'b/s', 'order action', 'transaction type', 'transactiontype'],
   // Ledger row type (OANDA): only ORDER_FILL rows are real executions; the rest
   // (order placements, cancels, SL/TP tweaks, transfers) are filtered out.
@@ -379,9 +381,11 @@ const HEADER_ALIASES: Record<string, string[]> = {
   filledTime: [
     'filled time',
     'filled time(edt)',
+    'fill time', // Tradovate Account Reports (actual fill datetime)
     'executed time',
     'execution time',
     'update time', // TradingView / EightCap order history (fill/cancel time)
+    'timestamp', // Tradovate Account Reports (order timestamp; fallback if no fill time)
     'closing time',
     'close time',
     'date/time',
@@ -437,10 +441,11 @@ function guessBroker(headerLower: string[]): string {
   // TradingView order history (as exported from EightCap and other TV brokers):
   // distinctive Avg Fill Price + Position ID (+ its own Closed P&L columns).
   if (has('avg fill price') && has('position id')) return 'TradingView / EightCap'
-  // Tradovate orders export: Avg Fill Price + a "Remaining Qty" column (unique
-  // to Tradovate) + Order ID. A futures orders report — only Filled rows are
-  // fills, and the futures point-value drives P&L (no P&L column in the export).
+  // Tradovate orders panel export: Avg Fill Price + a "Remaining Qty" column.
   if (has('avg fill price') && has('remaining qty')) return 'Tradovate'
+  // Tradovate ACCOUNT REPORTS export (all-dates): distinct "Contract" + "B/S"
+  // columns, with Filled Qty + Avg Fill Price. Different layout, same futures.
+  if (has('contract') && has('b/s') && has('avg fill price')) return 'Tradovate'
   if (has('placed time') || (has('filled') && has('side') && has('avg price'))) return 'Webull'
   if (has('entry price', 'exit price')) return has('instrument') || has('market pos.') ? 'NinjaTrader (trades)' : 'Trade list'
   if (has('instrument') && (has('e/x') || has('order id') || has('oco') || has('state'))) return 'NinjaTrader'
