@@ -66,12 +66,27 @@ function Stat({
 
 function OverviewTab({ onManage }: { onManage: () => void }): React.JSX.Element {
   const stats = useTrades((s) => s.stats)
+  const trades = useTrades((s) => s.trades)
   if (!stats) return <div className="p-8 text-sm text-muted">No data.</div>
+
+  // P&L banked from partial scale-outs on positions that are STILL open — held
+  // out of Realized P&L until each position fully closes (see Open Positions).
+  const bankedOpen = trades.reduce((n, t) => n + (t.isOpen && t.closedQty > 0 ? t.realizedPnl : 0), 0)
 
   return (
     <div className="space-y-4 p-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Realized P&L" value={signedMoney(stats.totalRealized)} tone={stats.totalRealized >= 0 ? 'ok' : 'danger'} sub={`${num(stats.closedTrades)} closed trades`} icon={<TrendingUp size={12} />} />
+        <Stat
+          label="Realized P&L"
+          value={signedMoney(stats.totalRealized)}
+          tone={stats.totalRealized >= 0 ? 'ok' : 'danger'}
+          sub={
+            Math.abs(bankedOpen) > 0.005
+              ? `${num(stats.closedTrades)} closed · ${signedMoney(bankedOpen)} banked in open pos`
+              : `${num(stats.closedTrades)} closed trades`
+          }
+          icon={<TrendingUp size={12} />}
+        />
         <Stat label="Win rate" value={pct(stats.winRate, 1).replace('+', '')} sub={`${stats.wins}W · ${stats.losses}L · ${stats.breakeven}BE`} />
         <Stat label="Profit factor" value={Number.isFinite(stats.profitFactor) ? stats.profitFactor.toFixed(2) : '∞'} sub={`expectancy ${money(stats.expectancy)}/trade`} tone={stats.profitFactor >= 1 ? 'ok' : 'danger'} />
         <Stat label="Open positions" value={num(stats.openTrades)} sub={`cost basis ${money(stats.openCostBasis)}`} tone="accent" icon={<Wallet size={12} />} />
