@@ -109,7 +109,7 @@ export default function Overview({ plan }: { plan: PlanView }): React.JSX.Elemen
                   drive.connected ? drive.email || 'Connected' : 'Not connected — open File Vault',
                   `${list.filter((v) => v.cloud === 'complete').length} version(s) offsite`
                 ]
-              : ['Off', 'Turn on in Edit for an offsite copy']
+              : ['Off', plan.oneTime ? 'Not uploaded' : 'Turn on in Edit for an offsite copy']
           }
         />
       </div>
@@ -125,21 +125,21 @@ export default function Overview({ plan }: { plan: PlanView }): React.JSX.Elemen
         <Stat
           icon={<CalendarClock size={13} />}
           label="Next backup"
-          value={!plan.isLocalMachine ? 'Other PC' : plan.nextRun ? fmtShort(plan.nextRun) : plan.enabled ? 'Manual' : 'Paused'}
-          sub={describeSchedule(plan.schedule)}
+          value={plan.oneTime ? 'One-time' : !plan.isLocalMachine ? 'Other PC' : plan.nextRun ? fmtShort(plan.nextRun) : plan.enabled ? 'Manual' : 'Paused'}
+          sub={plan.oneTime ? 'Not scheduled' : describeSchedule(plan.schedule)}
         />
         <Stat
           icon={<History size={13} />}
           label="Versions"
           value={fmtCount(list.length)}
-          sub={plan.mode === 'incremental' ? `${chains} chain${chains === 1 ? '' : 's'} · incremental` : 'full backups'}
+          sub={plan.oneTime ? 'each run is a separate full copy' : plan.mode === 'incremental' ? `${chains} chain${chains === 1 ? '' : 's'} · incremental` : 'full backups'}
         />
         <Stat icon={<Database size={13} />} label="Space used" value={fmtBytes(used)} sub="at the backup location" />
       </div>
 
       {list.length > 0 && (
         <div className={`${card} p-4`}>
-          <div className="mb-3 text-sm font-semibold text-ink">Backup chain</div>
+          <div className="mb-3 text-sm font-semibold text-ink">{plan.oneTime ? 'Copies' : 'Backup chain'}</div>
           <Timeline versions={list} onPick={(id) => openRecovery(id)} />
         </div>
       )}

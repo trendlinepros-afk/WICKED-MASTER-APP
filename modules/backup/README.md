@@ -21,6 +21,16 @@ everything. (No disk images — file & folder only, by design.)
 4. **Activity** lists every backup/restore/validation with the files that
    couldn't be read.
 
+## One-time backups
+
+**One-time backup** (welcome screen and sidebar) is the quick path: pick folders
+and/or files, a destination (the last one used is pre-filled), optionally a name
+and a Google Drive copy, and **Back up now**. It makes a single **full** backup in
+the same storage format, listed under **One-time backups** in the sidebar so it
+can be browsed and restored like any other. It is never scheduled and never
+cleaned up; **Run again** adds another full copy next to it. Default name:
+`<first folder> [+N] · <date time>`. MCP: `backup__one-time`.
+
 ## Schemes
 
 - **Full** — every run copies everything. Each version stands alone.
@@ -116,7 +126,7 @@ disaster).
 ## MCP tools
 
 `backup__list-plans`, `backup__status`, `backup__run`, `backup__cancel`,
-`backup__history`, `backup__list-versions`, `backup__browse`, `backup__search`,
+`backup__one-time`, `backup__history`, `backup__list-versions`, `backup__browse`, `backup__search`,
 `backup__validate`, and `backup__restore` (**destructive** — gated by
 `confirm: true`). All delegate to the same IPC channels as the UI.
 

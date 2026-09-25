@@ -685,11 +685,21 @@ export default function register(ctx: ModuleIpcContext): void {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt
   }
 
+  /** "Documents +2 · 2026-09-25 14:05" — default name for a one-time backup */
+  function oneTimeName(sources: string[]): string {
+    const leaf = (sources[0] ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop()?.replace(/:$/, ' drive') || 'Backup'
+    const d = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}`
+    return `${leaf}${sources.length > 1 ? ` +${sources.length - 1}` : ''} · ${stamp}`
+  }
+
   function normalizePlan(d: PlanDraft, existing: BackupPlan | null): BackupPlan {
-    const name = String(d.name ?? '').trim().slice(0, 80)
-    if (!name) throw new Error('Give the backup a name.')
+    const oneTime = d.oneTime ?? existing?.oneTime ?? false
     const sources = [...new Set((d.sources ?? []).map((s) => String(s).trim()).filter(Boolean))]
     if (!sources.length) throw new Error('Choose at least one file or folder to back up.')
+    const name = (String(d.name ?? '').trim() || (oneTime ? oneTimeName(sources) : '')).slice(0, 80)
+    if (!name) throw new Error('Give the backup a name.')
     for (const s of sources) if (!isAbsolute(s)) throw new Error(`"${s}" is not a full path.`)
     const destPath = String(d.destination?.path ?? '').trim()
     if (!destPath) throw new Error('Choose where to store the backups.')
@@ -733,6 +743,12 @@ export default function register(ctx: ModuleIpcContext): void {
       nextRun: null,
       folder: existing?.folder ?? `${sanitizeFolder(name)} [${id.slice(0, 6)}]`
     }
+    if (oneTime) {
+      // a single full snapshot: no schedule, no chain, nothing ever cleaned up
+      Object.assign(plan, { oneTime: true, mode: 'full', fullEvery: 0, enabled: false })
+      plan.schedule = { ...plan.schedule, kind: 'manual' }
+      plan.retention = { ...plan.retention, kind: 'all' }
+    }
     if (plan.schedule.kind === 'weekly' && !plan.schedule.weekdays.length) throw new Error('Pick at least one day of the week.')
     if (!plan.destination.username) plan.destination.hasPassword = false
     refreshNextRun(plan)
@@ -745,28 +761,53 @@ export default function register(ctx: ModuleIpcContext): void {
 
   h.handle(`${ID}:list-plans`, (): PlanView[] => plans.map(viewOf))
 
+  /** Validate + store a plan (and its share password, if one was supplied). */
+  function upsertPlan(draft: PlanDraft): BackupPlan {
+    const existing = draft.id ? plans.find((p) => p.id === draft.id) ?? null : null
+    if (draft.id && !existing) throw new Error('That backup plan no longer exists.')
+    const plan = normalizePlan(draft, existing)
+    if (draft.password !== undefined) {
+      setPassword(plan.id, plan.destination.username ? draft.password : null)
+      plan.destination.hasPassword = !!draft.password && !!plan.destination.username
+    }
+    if (!plan.destination.username) setPassword(plan.id, null)
+    if (existing && (existing.destination.path !== plan.destination.path || existing.destination.username !== plan.destination.username)) {
+      reachFail.delete(plan.id)
+      manifestCache.clear()
+    }
+    plans = existing ? plans.map((p) => (p.id === plan.id ? plan : p)) : [...plans, plan]
+    savePlans()
+    changed()
+    return plan
+  }
+
   h.handle(`${ID}:save-plan`, (_e, draft: PlanDraft) => {
     try {
-      const existing = draft.id ? plans.find((p) => p.id === draft.id) ?? null : null
-      if (draft.id && !existing) throw new Error('That backup plan no longer exists.')
-      const plan = normalizePlan(draft, existing)
-      if (draft.password !== undefined) {
-        setPassword(plan.id, plan.destination.username ? draft.password : null)
-        plan.destination.hasPassword = !!draft.password && !!plan.destination.username
-      }
-      if (!plan.destination.username) setPassword(plan.id, null)
-      if (existing && (existing.destination.path !== plan.destination.path || existing.destination.username !== plan.destination.username)) {
-        reachFail.delete(plan.id)
-        manifestCache.clear()
-      }
-      plans = existing ? plans.map((p) => (p.id === plan.id ? plan : p)) : [...plans, plan]
-      savePlans()
-      changed()
-      return { ok: true, plan: viewOf(plan) }
+      return { ok: true, plan: viewOf(upsertPlan(draft)) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }
   })
+
+  /** One-time backup: pick folders + a destination and back them up once (kept browsable/restorable). */
+  h.handle(`${ID}:one-time`, (_e, draft: PlanDraft & { trigger?: HistoryEntry['trigger'] }) => {
+    try {
+      const plan = upsertPlan({ ...draft, id: undefined, oneTime: true })
+      ctx.storeSet(`${ID}.lastOneTimeDest`, { path: plan.destination.path, username: plan.destination.username })
+      const jobId = enqueue({
+        kind: 'backup',
+        planId: plan.id,
+        planName: plan.name,
+        trigger: draft.trigger === 'mcp' ? 'mcp' : 'manual',
+        exec: backupJob(plan, true)
+      })
+      return { ok: true, plan: viewOf(plan), jobId }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  h.handle(`${ID}:last-one-time-dest`, () => ctx.storeGet<{ path: string; username: string } | null>(`${ID}.lastOneTimeDest`, null))
 
   h.handle(`${ID}:set-enabled`, (_e, a: { planId: string; enabled: boolean }) => {
     const p = findPlan(a.planId)

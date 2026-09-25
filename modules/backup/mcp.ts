@@ -36,6 +36,23 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       handler: (args) => ctx.invoke(`${ID}:run`, { planId: args.planId, full: args.full === true, trigger: 'mcp' })
     },
     {
+      name: `${ID}__one-time`,
+      description:
+        'Make a one-time full backup of the given folders/files to a destination folder (local path or \\\\server\\share). It is kept in the Backup app as a one-time entry that can be browsed and restored later; it is never scheduled or cleaned up. Never modifies the source files. Network shares that need a login must be set up in the app first.',
+      inputSchema: {
+        sources: z.array(z.string()).min(1).describe('Absolute paths of folders and/or files to back up'),
+        destination: z.string().describe('Folder to store the backup in, e.g. "E:\\Backups" or "\\\\nas\\backups"'),
+        name: z.string().optional().describe('Optional label; defaults to "<first folder> · <date time>"')
+      },
+      handler: (args) =>
+        ctx.invoke(`${ID}:one-time`, {
+          name: args.name,
+          sources: args.sources,
+          destination: { path: args.destination, username: '', hasPassword: false },
+          trigger: 'mcp'
+        })
+    },
+    {
       name: `${ID}__cancel`,
       description: 'Cancel the running backup/restore job (or a queued one by jobId). A cancelled backup leaves no partial version behind.',
       inputSchema: { jobId: z.string().optional().describe('Job id; omit to cancel whatever is running') },

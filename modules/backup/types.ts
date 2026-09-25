@@ -82,6 +82,8 @@ export interface BackupPlan {
   nextRun: number | null
   /** folder name under "<destination>/WICKED Backup" (fixed at creation, survives renames) */
   folder: string
+  /** a one-time backup: always full, never scheduled, nothing cleaned up (can be run again by hand) */
+  oneTime?: boolean
 }
 
 export type RunStatus = 'success' | 'warning' | 'failed' | 'cancelled'

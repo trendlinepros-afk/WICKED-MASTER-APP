@@ -32,6 +32,8 @@ interface BackupState {
   tab: Tab
   /** editor: null = closed, {} = new plan, plan = editing */
   editing: PlanDraft | null
+  /** the One-time backup dialog is open */
+  oneTimeOpen: boolean
   versions: Record<string, VersionsState>
   /** version to preselect when switching to Recovery */
   focusVersion: string | null
@@ -44,6 +46,8 @@ interface BackupState {
   openRecovery: (versionId: string | null) => void
   openEditor: (plan?: PlanView | null) => void
   closeEditor: () => void
+  setOneTimeOpen: (open: boolean) => void
+  startOneTime: (d: PlanDraft) => Promise<{ ok: boolean; error?: string }>
   savePlan: (d: PlanDraft) => Promise<{ ok: boolean; error?: string; plan?: PlanView }>
   deletePlan: (id: string, deleteBackups: boolean) => Promise<Res & { note?: string }>
   run: (id: string, full?: boolean) => Promise<void>
@@ -70,6 +74,7 @@ export const useBackup = create<BackupState>((set, get) => ({
   selectedId: null,
   tab: 'overview',
   editing: null,
+  oneTimeOpen: false,
   versions: {},
   focusVersion: null,
   toast: null,
@@ -121,6 +126,17 @@ export const useBackup = create<BackupState>((set, get) => ({
   openRecovery: (versionId) => set({ tab: 'recovery', focusVersion: versionId }),
   openEditor: (plan) => set({ editing: plan ? { ...plan } : {} }),
   closeEditor: () => set({ editing: null }),
+
+  setOneTimeOpen: (oneTimeOpen) => set({ oneTimeOpen }),
+
+  startOneTime: async (d) => {
+    const r = (await inv('one-time', d)) as { ok: boolean; error?: string; plan?: PlanView }
+    if (r.ok && r.plan) {
+      await get().refresh()
+      set({ selectedId: r.plan.id, tab: 'overview', oneTimeOpen: false })
+    }
+    return r
+  },
 
   savePlan: async (d) => {
     const r = (await inv('save-plan', d)) as { ok: boolean; error?: string; plan?: PlanView }

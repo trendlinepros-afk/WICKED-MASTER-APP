@@ -17,16 +17,18 @@ import {
   Trash2,
   UploadCloud,
   X,
-  XCircle
+  XCircle,
+  Zap
 } from 'lucide-react'
 import { useBackup } from './store'
 import type { PlanView } from './types'
 import { describeSchedule } from './lib/schedule'
 import PlanEditor from './components/PlanEditor'
+import OneTimeDialog from './components/OneTimeDialog'
 import Overview from './components/Overview'
 import Recovery from './components/Recovery'
 import Activity from './components/Activity'
-import { btn, btnAccent, btnDanger, fmtAgo, fmtShort, JobProgressView, Modal, StatusIcon, Toggle } from './components/ui'
+import { btn, btnAccent, btnDanger, fmtAgo, fmtDateTime, fmtShort, JobProgressView, Modal, StatusIcon, Toggle } from './components/ui'
 
 /* -------------------------------- sidebar -------------------------------- */
 
@@ -48,14 +50,16 @@ function PlanCard({ p, active, running }: { p: PlanView; active: boolean; runnin
       <div className="mt-0.5 pl-[23px] text-[11px] text-muted">
         {running
           ? 'Running now…'
-          : !p.isLocalMachine
+          : p.oneTime
+            ? `One-time · ${p.lastRun ? fmtDateTime(p.lastRun.at) : 'not run yet'}`
+            : !p.isLocalMachine
             ? `Runs on ${p.machine}`
             : p.nextRun
               ? `Next: ${fmtShort(p.nextRun)}`
               : p.enabled
                 ? 'Manual'
                 : 'Schedule paused'}
-        {p.lastRun && !running ? ` · last ${fmtAgo(p.lastRun.at)}` : ''}
+        {p.lastRun && !running && !p.oneTime ? ` · last ${fmtAgo(p.lastRun.at)}` : ''}
       </div>
     </button>
   )
@@ -66,6 +70,7 @@ function PlanCard({ p, active, running }: { p: PlanView; active: boolean; runnin
 function Welcome(): React.JSX.Element {
   const openEditor = useBackup((s) => s.openEditor)
   const openExisting = useBackup((s) => s.openExisting)
+  const setOneTimeOpen = useBackup((s) => s.setOneTimeOpen)
   const feat = (icon: React.ReactNode, title: string, body: string): React.JSX.Element => (
     <div className="flex gap-3 rounded-xl border border-edge bg-surface p-4">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">{icon}</div>
@@ -95,6 +100,9 @@ function Welcome(): React.JSX.Element {
       <div className="mt-6 flex gap-2">
         <button className={btnAccent} onClick={() => openEditor(null)}>
           <Plus size={15} /> Create your first backup
+        </button>
+        <button className={btn} onClick={() => setOneTimeOpen(true)} title="Pick folders and back them up once — no schedule">
+          <Zap size={15} /> One-time backup
         </button>
         <button className={btn} onClick={() => void openExisting()}>
           <FolderSearch size={15} /> Open existing backup…
@@ -155,6 +163,8 @@ function PlanPane({ plan }: { plan: PlanView }): React.JSX.Element {
   const [deleting, setDeleting] = useState(false)
   const running = s.queue.running?.planId === plan.id ? s.queue.running : null
   const queued = s.queue.queued.filter((q) => q.planId === plan.id)
+  // one-time backups are always full, so their menu only has the Drive upload
+  const hasMenu = !plan.oneTime || plan.cloud.enabled
 
   const tab = (id: typeof s.tab, label: string): React.JSX.Element => (
     <button
@@ -172,41 +182,56 @@ function PlanPane({ plan }: { plan: PlanView }): React.JSX.Element {
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-xl font-bold text-ink">{plan.name}</h1>
             <p className="mt-0.5 text-sm text-muted">
-              {plan.mode === 'incremental' ? 'Incremental' : 'Full'} · {describeSchedule(plan.schedule)}
-              {!plan.enabled && plan.schedule.kind !== 'manual' ? ' (paused)' : ''}
+              {plan.oneTime ? (
+                <>One-time full backup · created {fmtDateTime(plan.createdAt)}</>
+              ) : (
+                <>
+                  {plan.mode === 'incremental' ? 'Incremental' : 'Full'} · {describeSchedule(plan.schedule)}
+                  {!plan.enabled && plan.schedule.kind !== 'manual' ? ' (paused)' : ''}
+                </>
+              )}
               {plan.cloud.enabled ? ' · + Google Drive copy' : ''}
             </p>
           </div>
-          <label className="flex items-center gap-2 pt-1 text-xs text-muted" title="Pause or resume the schedule">
-            Schedule <Toggle on={plan.enabled} onChange={(v) => void s.setEnabled(plan.id, v)} disabled={plan.schedule.kind === 'manual'} />
-          </label>
-          <button className={btn} onClick={() => s.openEditor(plan)}>
-            <Pencil size={14} /> Edit
-          </button>
+          {!plan.oneTime && (
+            <>
+              <label className="flex items-center gap-2 pt-1 text-xs text-muted" title="Pause or resume the schedule">
+                Schedule <Toggle on={plan.enabled} onChange={(v) => void s.setEnabled(plan.id, v)} disabled={plan.schedule.kind === 'manual'} />
+              </label>
+              <button className={btn} onClick={() => s.openEditor(plan)}>
+                <Pencil size={14} /> Edit
+              </button>
+            </>
+          )}
           <button className={btn} onClick={() => setDeleting(true)} title="Delete plan">
             <Trash2 size={14} />
           </button>
           <div className="relative flex">
-            <button className={`${btnAccent} rounded-r-none`} disabled={plan.busy} onClick={() => void s.run(plan.id)}>
-              {plan.busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} {plan.busy ? (running ? 'Running' : 'Queued') : 'Back up now'}
+            <button className={`${btnAccent} ${hasMenu ? 'rounded-r-none' : ''}`} disabled={plan.busy} onClick={() => void s.run(plan.id)}>
+              {plan.busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}{' '}
+              {plan.busy ? (running ? 'Running' : 'Queued') : plan.oneTime ? 'Run again' : 'Back up now'}
             </button>
-            <button className={`${btnAccent} rounded-l-none border-l border-accent-ink/20 px-2`} disabled={plan.busy} onClick={() => setMenu(!menu)}>
-              <ChevronDown size={14} />
-            </button>
+            {hasMenu && (
+              <button className={`${btnAccent} rounded-l-none border-l border-accent-ink/20 px-2`} disabled={plan.busy} onClick={() => setMenu(!menu)}>
+                <ChevronDown size={14} />
+              </button>
+            )}
             {menu && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
                 <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-edge bg-surface p-1 shadow-xl">
-                  <button
-                    className="w-full rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-raised"
-                    onClick={() => {
-                      setMenu(false)
-                      void s.run(plan.id, true)
-                    }}
-                  >
-                    <div className="font-medium">Run a full backup now</div>
-                    <div className="text-xs text-muted">Starts a new chain regardless of the scheme</div>
-                  </button>
+                  {!plan.oneTime && (
+                    <button
+                      className="w-full rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-raised"
+                      onClick={() => {
+                        setMenu(false)
+                        void s.run(plan.id, true)
+                      }}
+                    >
+                      <div className="font-medium">Run a full backup now</div>
+                      <div className="text-xs text-muted">Starts a new chain regardless of the scheme</div>
+                    </button>
+                  )}
                   {plan.cloud.enabled && (
                     <button
                       className="w-full rounded-lg px-3 py-2 text-left text-sm text-ink hover:bg-raised"
@@ -309,10 +334,28 @@ export default function Backup(): React.JSX.Element {
               <Plus size={15} /> New
             </button>
           </div>
+          <div className="px-3 pb-3">
+            <button className={`${btn} w-full`} onClick={() => s.setOneTimeOpen(true)} title="Pick folders and back them up once — no schedule">
+              <Zap size={14} /> One-time backup
+            </button>
+          </div>
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2">
-            {s.plans.map((p) => (
-              <PlanCard key={p.id} p={p} active={p.id === s.selectedId} running={s.queue.running?.planId === p.id} />
-            ))}
+            {s.plans
+              .filter((p) => !p.oneTime)
+              .map((p) => (
+                <PlanCard key={p.id} p={p} active={p.id === s.selectedId} running={s.queue.running?.planId === p.id} />
+              ))}
+            {s.plans.some((p) => p.oneTime) && (
+              <>
+                <div className="px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wide text-muted">One-time backups</div>
+                {s.plans
+                  .filter((p) => p.oneTime)
+                  .sort((a, b) => b.createdAt - a.createdAt)
+                  .map((p) => (
+                    <PlanCard key={p.id} p={p} active={p.id === s.selectedId} running={s.queue.running?.planId === p.id} />
+                  ))}
+              </>
+            )}
           </div>
           {otherRunning && (
             <button
@@ -341,6 +384,7 @@ export default function Backup(): React.JSX.Element {
       <main className="min-w-0 flex-1">{plan ? <PlanPane plan={plan} /> : <div className="h-full overflow-y-auto"><Welcome /></div>}</main>
 
       {s.editing && <PlanEditor />}
+      {s.oneTimeOpen && <OneTimeDialog />}
 
       {s.toast && (
         <div
