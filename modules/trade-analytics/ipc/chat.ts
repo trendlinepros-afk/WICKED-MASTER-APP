@@ -13,20 +13,27 @@ export interface ChatMsg {
   content: string
 }
 
+/** Output budget per reply — long enough that a detailed answer isn't cut mid-sentence. */
+export const CHAT_MAX_TOKENS = 8192
+
 /**
  * Read a server-sent-event stream, handing each `data:` JSON payload to
- * `pick`, which returns the text delta in it (or null). Returns the full text.
+ * `pick`, which returns the text delta in it (or null), and to `stopOf`,
+ * which reports a finish reason when the payload carries one. Returns the
+ * full text and the last finish reason seen.
  */
 export async function readSse(
   resp: Response,
   pick: (json: Record<string, unknown>) => string | null,
-  onDelta: (t: string) => void
-): Promise<string> {
+  onDelta: (t: string) => void,
+  stopOf: (json: Record<string, unknown>) => string | null = () => null
+): Promise<{ text: string; stop: string | null }> {
   if (!resp.body) throw new Error('No response stream')
   const reader = resp.body.getReader()
   const dec = new TextDecoder()
   let buf = ''
   let full = ''
+  let stop: string | null = null
   const handle = (line: string): void => {
     if (!line.startsWith('data:')) return
     const payload = line.slice(5).trim()
@@ -44,6 +51,7 @@ export async function readSse(
       full += t
       onDelta(t)
     }
+    stop = stopOf(json) ?? stop
   }
   for (;;) {
     const { value, done } = await reader.read()
@@ -57,7 +65,7 @@ export async function readSse(
     }
   }
   handle((buf + dec.decode()).trim())
-  return full
+  return { text: full, stop }
 }
 
 async function errorText(resp: Response): Promise<string> {
@@ -97,7 +105,7 @@ export async function callAiChat(
   messages: ChatMsg[],
   signal: AbortSignal,
   onDelta: (t: string) => void
-): Promise<{ provider: string; model: string; text: string } | { error: string; partial?: string }> {
+): Promise<{ provider: string; model: string; text: string; truncated: boolean } | { error: string; partial?: string }> {
   const attempts: string[] = []
   let streamed = ''
   const tap = (t: string): void => {
@@ -118,16 +126,17 @@ export async function callAiChat(
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': anthropic, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: 2000, system, messages, stream: true }),
+        body: JSON.stringify({ model: 'claude-sonnet-5', max_tokens: CHAT_MAX_TOKENS, system, messages, stream: true }),
         signal
       })
       if (!resp.ok) throw new Error(await errorText(resp))
-      const text = await readSse(
+      const { text, stop } = await readSse(
         resp,
         (j) => (j.type === 'content_block_delta' ? ((j.delta as { text?: string } | undefined)?.text ?? null) : null),
-        tap
+        tap,
+        (j) => (j.type === 'message_delta' ? ((j.delta as { stop_reason?: string } | undefined)?.stop_reason ?? null) : null)
       )
-      if (text.trim()) return { provider: 'Anthropic (Claude)', model: 'claude-sonnet-5', text }
+      if (text.trim()) return { provider: 'Anthropic (Claude)', model: 'claude-sonnet-5', text, truncated: stop === 'max_tokens' }
       throw new Error('empty reply')
     } catch (err) {
       const r = fail('Anthropic', err)
@@ -135,27 +144,34 @@ export async function callAiChat(
     }
   }
 
-  const openAiLike = async (name: string, url: string, key: string, model: string): Promise<{ provider: string; model: string; text: string }> => {
+  const openAiLike = async (
+    name: string,
+    url: string,
+    key: string,
+    model: string,
+    maxTokens: number
+  ): Promise<{ provider: string; model: string; text: string; truncated: boolean }> => {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, ...messages], stream: true }),
+      body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, ...messages], stream: true }),
       signal
     })
     if (!resp.ok) throw new Error(await errorText(resp))
-    const text = await readSse(
+    const { text, stop } = await readSse(
       resp,
       (j) => (j.choices as { delta?: { content?: string } }[] | undefined)?.[0]?.delta?.content ?? null,
-      tap
+      tap,
+      (j) => (j.choices as { finish_reason?: string | null }[] | undefined)?.[0]?.finish_reason ?? null
     )
-    if (text.trim()) return { provider: name, model, text }
+    if (text.trim()) return { provider: name, model, text, truncated: stop === 'length' }
     throw new Error('empty reply')
   }
 
   const openai = getApiKey('openai')
   if (openai) {
     try {
-      return await openAiLike('OpenAI (GPT-4o)', 'https://api.openai.com/v1/chat/completions', openai, 'gpt-4o')
+      return await openAiLike('OpenAI (GPT-4o)', 'https://api.openai.com/v1/chat/completions', openai, 'gpt-4o', CHAT_MAX_TOKENS)
     } catch (err) {
       const r = fail('OpenAI', err)
       if (r) return r
@@ -172,21 +188,23 @@ export async function callAiChat(
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: system }] },
+            generationConfig: { maxOutputTokens: 16384 },
             contents: messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }))
           }),
           signal
         }
       )
       if (!resp.ok) throw new Error(await errorText(resp))
-      const text = await readSse(
+      const { text, stop } = await readSse(
         resp,
         (j) =>
           (j.candidates as { content?: { parts?: { text?: string }[] } }[] | undefined)?.[0]?.content?.parts
             ?.map((p) => p.text ?? '')
             .join('') || null,
-        tap
+        tap,
+        (j) => (j.candidates as { finishReason?: string }[] | undefined)?.[0]?.finishReason ?? null
       )
-      if (text.trim()) return { provider: 'Google Gemini', model: 'gemini-2.5-flash', text }
+      if (text.trim()) return { provider: 'Google Gemini', model: 'gemini-2.5-flash', text, truncated: stop === 'MAX_TOKENS' }
       throw new Error('empty reply')
     } catch (err) {
       const r = fail('Gemini', err)
@@ -197,7 +215,7 @@ export async function callAiChat(
   const deepseek = getApiKey('deepseek')
   if (deepseek) {
     try {
-      return await openAiLike('DeepSeek', 'https://api.deepseek.com/chat/completions', deepseek, 'deepseek-chat')
+      return await openAiLike('DeepSeek', 'https://api.deepseek.com/chat/completions', deepseek, 'deepseek-chat', CHAT_MAX_TOKENS)
     } catch (err) {
       const r = fail('DeepSeek', err)
       if (r) return r

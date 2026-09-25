@@ -29,8 +29,9 @@ import { ID, useTrades, type Tab, type TradeDraft } from './store'
 import type { Trade } from './lib/analytics'
 import { etInputToEpoch, etInputValue } from './lib/et'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
-import { BarChart, ColumnChart, EquityCurve, TradeChart, WinLossDonut } from './components/charts'
+import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
 import ChatPanel from './components/ChatPanel'
+import { TradeChartModal } from './components/TradeChartModal'
 import { AccountsBar, BreakdownTab, CalendarTab, ExportSummaryModal, ImportModal, ManageAccountsModal, SectorCard, SectorDetail, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
@@ -265,76 +266,6 @@ function TradeRow({ t, onOpen, onEdit, onDelete }: { t: Trade; onOpen: () => voi
         <button onClick={onDelete} title="Delete trade" className="rounded p-1 text-muted hover:bg-raised hover:text-danger">
           <Trash2 size={13} />
         </button>
-      </div>
-    </div>
-  )
-}
-
-/** Compact stat cell for the trade-chart modal. */
-function MiniStat({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'danger' }): React.JSX.Element {
-  return (
-    <div className="rounded-lg border border-edge bg-bg/40 px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className={`text-sm font-bold tabular-nums ${tone === 'ok' ? 'text-ok' : tone === 'danger' ? 'text-danger' : 'text-ink'}`}>{value}</div>
-    </div>
-  )
-}
-
-/** Click-a-trade chart: entry/exit map from the fills + P/L badge + fills list. */
-function TradeChartModal({ trade, onClose }: { trade: Trade; onClose: () => void }): React.JSX.Element {
-  const ptVal = trade.multiplier && trade.multiplier !== 1 ? trade.multiplier : null
-  const fills = [...trade.fills].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-edge bg-surface" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
-          {trade.direction === 'long' ? <ArrowUpRight size={16} className="text-ok" /> : <ArrowDownRight size={16} className="text-danger" />}
-          <span className="text-sm font-semibold">{trade.symbol}</span>
-          <span className="rounded bg-raised px-1.5 py-0.5 text-[11px] uppercase text-muted">{trade.direction}</span>
-          <span className="min-w-0 truncate text-xs text-muted">
-            {shares(trade.qty)} {ptVal ? `· $${ptVal}/pt ` : ''}· {trade.isOpen ? 'open' : `${dateShort(trade.openedAt)} → ${dateShort(trade.closedAt)}`}
-          </span>
-          <button onClick={onClose} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-ink">
-            <X size={15} />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="rounded-xl border border-edge bg-bg/40 p-3">
-            <TradeChart trade={trade} />
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <MiniStat label="Avg entry" value={trade.avgEntry.toFixed(2)} />
-            <MiniStat label="Avg exit" value={trade.isOpen ? '—' : trade.avgExit.toFixed(2)} />
-            <MiniStat label="Hold" value={duration(trade.holdSeconds)} />
-            <MiniStat
-              label="Realized P&L"
-              value={trade.isOpen ? 'open' : signedMoney(trade.realizedPnl)}
-              tone={trade.isOpen ? undefined : trade.realizedPnl >= 0 ? 'ok' : 'danger'}
-            />
-          </div>
-          <div className="mt-3 overflow-hidden rounded-lg border border-edge">
-            <div className="grid grid-cols-[1fr_64px_70px_90px] gap-2 border-b border-edge bg-raised/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-              <div>Fill time</div>
-              <div>Side</div>
-              <div className="text-right">Qty</div>
-              <div className="text-right">Price</div>
-            </div>
-            <div className="max-h-44 overflow-y-auto">
-              {fills.map((f, i) => (
-                <div key={i} className="grid grid-cols-[1fr_64px_70px_90px] gap-2 border-b border-edge/50 px-3 py-1.5 text-xs last:border-0">
-                  <div className="truncate text-muted">{f.at != null ? dateTime(f.at) : '—'}</div>
-                  <div className={`font-medium ${f.side === 'buy' ? 'text-ok' : 'text-danger'}`}>{f.side.toUpperCase()}</div>
-                  <div className="text-right tabular-nums">{shares(f.qty)}</div>
-                  <div className="text-right tabular-nums">{f.price.toFixed(2)}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <p className="mt-2 text-[11px] text-muted">
-            The chart is drawn from your fills — dots are executions, the dashed lines are your average entry and exit,
-            and the shaded band is the P/L. No market-data feed is needed, so it works for futures too.
-          </p>
-        </div>
       </div>
     </div>
   )
@@ -946,7 +877,7 @@ function AiTab(): React.JSX.Element {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-col xl:min-h-0 xl:w-[44%] xl:max-w-[760px] xl:shrink-0">
+      <div className="flex min-w-0 flex-col xl:min-h-0 xl:w-[58%] xl:max-w-[1150px] xl:shrink-0">
         <ChatPanel />
       </div>
     </div>

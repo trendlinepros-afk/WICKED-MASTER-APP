@@ -5,6 +5,7 @@ import { filterTradesToRange, resolveRange, type RangePreset } from './lib/range
 import type { Execution } from './lib/parse'
 import { duration, money, pct } from './lib/format'
 import { buildChatContext } from './lib/chat-context'
+import { chatToHtml, chatToMarkdown } from './lib/chat-export'
 
 export const ID = 'trade-analytics'
 
@@ -114,7 +115,7 @@ export function buildAiPrompt(stats: Stats, trades: Trade[], strategies: { name:
   ].join('')
 }
 
-/** One message in the AI Coach chat (kept in memory only). */
+/** One message in an AI Coach chat. */
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -122,9 +123,24 @@ export interface ChatMessage {
   /** set when the reply failed or was stopped (content = whatever arrived) */
   error?: string
   provider?: string
+  /** the reply hit the model's length limit — offer "Continue" */
+  truncated?: boolean
   /** still streaming */
   pending?: boolean
 }
+
+/** A saved coach conversation, as listed in the chat history rail. */
+export interface ChatSummary {
+  id: string
+  title: string
+  /** accounts · date range when the chat started */
+  scope: string
+  createdAt: number
+  updatedAt: number
+  count: number
+}
+
+export const CONTINUE_PROMPT = 'Continue exactly where you stopped — don’t repeat what you already wrote.'
 
 interface State {
   tab: Tab
@@ -184,9 +200,15 @@ interface State {
   aiModel: string
   aiError: string
 
-  // AI coach chat — lives in memory for this session only
+  // AI coach chat — saved per conversation in trades.db (history rail)
   chat: ChatMessage[]
   chatBusy: boolean
+  /** id of the conversation on screen (null = a new, not-yet-saved chat) */
+  activeChatId: string | null
+  activeChatTitle: string
+  activeChatScope: string
+  activeChatCreatedAt: number
+  chats: ChatSummary[]
 
   // account-summary PDF export
   exportingSummary: boolean
@@ -224,7 +246,12 @@ interface State {
   cancelAi: () => Promise<void>
   sendChat: (text: string) => Promise<void>
   stopChat: () => Promise<void>
+  /** start a fresh conversation (the current one stays in history) */
   clearChat: () => void
+  loadChats: () => Promise<void>
+  openChat: (id: string) => Promise<void>
+  deleteChat: (id: string) => Promise<void>
+  exportChat: (format: 'pdf' | 'md') => Promise<string | null>
 }
 
 export const useTrades = create<State>((set, get) => {
@@ -360,6 +387,11 @@ export const useTrades = create<State>((set, get) => {
     aiError: '',
     chat: [],
     chatBusy: false,
+    activeChatId: null,
+    activeChatTitle: '',
+    activeChatScope: '',
+    activeChatCreatedAt: 0,
+    chats: [],
 
     setTab: (t) => set({ tab: t, sectorFocus: null }),
     setSectorFocus: (sector) => set({ sectorFocus: sector }),
@@ -431,6 +463,7 @@ export const useTrades = create<State>((set, get) => {
       void get().loadNotes()
       void get().loadSectors()
       void get().auditDuplicates()
+      void get().loadChats()
       set({ loaded: true })
     },
 
@@ -677,27 +710,60 @@ export const useTrades = create<State>((set, get) => {
         analysis: aiText
       })
       const history = get()
-        .chat.filter((m) => !m.error && !m.pending && m.content.trim())
+        .chat.filter((m) => !m.pending && m.content.trim()) // partial (stopped/cut-off) replies stay, so "Continue" works
         .map((m) => ({ role: m.role, content: m.content }))
       const newId = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-      const chatId = newId()
+
+      // first message of a new conversation → it gets an id, title and scope
+      if (!get().activeChatId) {
+        const scope = `${viewed.length === accounts.length && accounts.length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')} · ${rangeLabel || 'Lifetime'}`
+        set({
+          activeChatId: `c${newId()}`,
+          activeChatTitle: text.replace(/\s+/g, ' ').slice(0, 80),
+          activeChatScope: scope,
+          activeChatCreatedAt: Date.now()
+        })
+      }
+      const convId = get().activeChatId!
+      const persist = async (): Promise<void> => {
+        const st = get()
+        if (st.activeChatId !== convId) return
+        await invoke('chat-save', {
+          id: convId,
+          title: st.activeChatTitle,
+          scope: st.activeChatScope,
+          messages: st.chat.filter((m) => !m.pending)
+        })
+        await get().loadChats()
+      }
+
+      const replyId = newId()
       set({
-        chat: [...get().chat, { id: newId(), role: 'user', content: text }, { id: chatId, role: 'assistant', content: '', pending: true }],
+        chat: [...get().chat, { id: newId(), role: 'user', content: text }, { id: replyId, role: 'assistant', content: '', pending: true }],
         chatBusy: true
       })
+      void persist()
       const patch = (fn: (m: ChatMessage) => ChatMessage): void =>
-        set({ chat: get().chat.map((m) => (m.id === chatId ? fn(m) : m)) })
+        set({ chat: get().chat.map((m) => (m.id === replyId ? fn(m) : m)) })
       const off = window.wicked.on(`${ID}:ai-chat-delta`, (payload) => {
         const d = payload as { chatId?: string; text?: string }
-        if (d.chatId === chatId && d.text) patch((m) => ({ ...m, content: m.content + d.text }))
+        if (d.chatId === replyId && d.text) patch((m) => ({ ...m, content: m.content + d.text }))
       })
       try {
-        const res = (await invoke('ai-chat', { chatId, system, messages: [...history, { role: 'user', content: text }] })) as Res & {
+        const res = (await invoke('ai-chat', { chatId: replyId, system, messages: [...history, { role: 'user', content: text }] })) as Res & {
           text?: string
           provider?: string
           partial?: string
+          truncated?: boolean
         }
-        if (res.ok === true) patch((m) => ({ ...m, content: String(res.text ?? m.content), provider: String(res.provider ?? ''), pending: false }))
+        if (res.ok === true)
+          patch((m) => ({
+            ...m,
+            content: String(res.text ?? m.content),
+            provider: String(res.provider ?? ''),
+            truncated: res.truncated === true,
+            pending: false
+          }))
         else {
           const e = res as Err & { partial?: string }
           patch((m) => ({ ...m, content: e.partial || m.content, error: e.error ?? 'The coach could not answer.', pending: false }))
@@ -707,6 +773,7 @@ export const useTrades = create<State>((set, get) => {
       } finally {
         off()
         set({ chatBusy: false })
+        await persist()
       }
     },
 
@@ -715,7 +782,53 @@ export const useTrades = create<State>((set, get) => {
     },
 
     clearChat: () => {
-      if (!get().chatBusy) set({ chat: [] })
+      if (get().chatBusy) return
+      set({ chat: [], activeChatId: null, activeChatTitle: '', activeChatScope: '', activeChatCreatedAt: 0 })
+    },
+
+    loadChats: async () => {
+      const res = (await invoke('chats-list')) as Res & { chats?: ChatSummary[] }
+      if (res.ok === true) set({ chats: res.chats ?? [] })
+    },
+
+    openChat: async (id) => {
+      if (get().chatBusy || get().activeChatId === id) return
+      const res = (await invoke('chat-get', id)) as Res & {
+        chat?: { id: string; title: string; scope: string; createdAt: number; messages: ChatMessage[] }
+      }
+      if (res.ok !== true || !res.chat) {
+        await get().loadChats()
+        return
+      }
+      const c = res.chat
+      set({
+        chat: c.messages.map((m, i) => ({ ...m, id: m.id || `m${i}`, pending: false })),
+        activeChatId: c.id,
+        activeChatTitle: c.title,
+        activeChatScope: c.scope,
+        activeChatCreatedAt: c.createdAt
+      })
+    },
+
+    deleteChat: async (id) => {
+      if (get().chatBusy && get().activeChatId === id) return
+      await invoke('chat-delete', id)
+      if (get().activeChatId === id) get().clearChat()
+      await get().loadChats()
+    },
+
+    exportChat: async (format) => {
+      const { chat, activeChatTitle, activeChatScope, activeChatCreatedAt } = get()
+      const messages = chat.filter((m) => !m.pending)
+      if (!messages.length) return 'Nothing to export yet.'
+      const meta = { title: activeChatTitle || 'Coach chat', scope: activeChatScope, createdAt: activeChatCreatedAt || Date.now() }
+      const res = (await invoke('chat-export', {
+        format,
+        title: meta.title,
+        ...(format === 'md' ? { markdown: chatToMarkdown(meta, messages) } : { html: chatToHtml(meta, messages) })
+      })) as Res
+      if (res.ok === true || (res as Err).cancelled) return null
+      return (res as Err).error ?? 'Export failed.'
     }
   }
 })

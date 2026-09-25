@@ -293,7 +293,7 @@ const FUTURES_POINT_VALUE: Record<string, number> = {
 const FUT_SPACED = /^([A-Z0-9]{1,4})\s+(?:\d{2}-\d{2}|(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s?\d{2,4})$/
 const FUT_CODE = /^([A-Z0-9]{1,4})[FGHJKMNQUVXZ]\d{1,2}$/
 
-function futuresRoot(symbol: string): string | null {
+export function futuresRoot(symbol: string): string | null {
   const spaced = symbol.match(FUT_SPACED)
   if (spaced) return spaced[1]
   const code = symbol.match(FUT_CODE)

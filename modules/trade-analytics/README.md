@@ -207,12 +207,22 @@ cross-checked by hand).
   The header shows the record for the trades in view — e.g. **18W / 11L · 62%
   w/r** (breakevens shown as `BE` when present; win rate = wins ÷ closed trades,
   the same figure as Overview).
-  **Click a row to chart it**: a modal draws the trade's execution map from its
-  own fills (dots = executions on a price/time axis, dashed lines = average
-  entry and exit, a shaded profit/loss band between them) with the realized
-  **P&L in a badge in the top-right corner**, plus a per-fill list. It's built
-  from the fills alone — **no market-data feed** — so it works for futures too
-  (the badge shows the point move rather than a meaningless %-of-notional).
+  **Click a row to chart it**: a modal shows **real price candles** around the
+  trade (Yahoo Finance's public chart API via main — no key; `ipc/candles.ts`)
+  with the trade on top: every fill as a buy ▲ / sell ▼ at its exact time and
+  price, the average entry/exit lines, the hold window shaded, a hover
+  crosshair with OHLC, and interval (1m…1D, limited to what the feed keeps for
+  that date) and zoom controls. Futures map to the exact contract first
+  (`MNQZ6` → `MNQZ26.CME`, `YMZ6` → `YMZ26.CBT`), then the continuous front
+  month (`MNQ=F`); FX → `EURUSD=X`; crypto → `BTC-USD`. If the candles don't
+  bracket the fill prices (wrong contract month) the chart says so. Tiles under
+  it (`lib/excursion.ts`): **best available (MFE)** and **heat taken (MAE)**
+  while you were in (bar-level, and never narrower than your own fills), how
+  much of the move you **captured**, what price did **after you exited**, and
+  the risk/reward the market offered. Prices use the instrument's precision
+  (5 decimals for FX, 3 for JPY pairs), moves read as pts or pips, and
+  quantities as lots / contracts / sh. With no market data (offline, too old
+  for any interval) it falls back to the fills-only sketch.
   Hover a row to **edit** or **delete** it, or use **Add trade** to enter one by
   hand (symbol, direction, qty, entry/exit price + ET time, optional partial
   exit and account). Editing/deleting acts on the underlying executions — the
@@ -247,8 +257,16 @@ also fixes inflated open-position counts.
   answer "what went wrong on the 24th?" or "how do my MNQ shorts do after
   11:00?". Streaming lives in `ipc/chat.ts` (SSE for all four providers; a
   provider that fails before any text falls through to the next, one that
-  fails mid-answer keeps the partial text). The conversation is kept in memory
-  only and clears when WICKED closes; **New chat** starts over.
+  fails mid-answer keeps the partial text).
+  **Chats are saved** (table `coach_chats` in `trades.db`, so they ride along
+  with Backup/Cloud Sync) and listed in a **history rail** on the left of the
+  chat — click one to resume it, hover to delete, **New** to start fresh.
+  **Export chat** saves the conversation as a PDF (printed by the shell's
+  sandboxed `printHtmlToPdf`) or Markdown (`lib/chat-export.ts`; all text is
+  HTML-escaped). Replies get up to 8k output tokens; if one still hits the
+  provider's length limit (Anthropic `max_tokens`, OpenAI/DeepSeek `length`,
+  Gemini `MAX_TOKENS`) it's flagged with a **Continue** button that asks the
+  coach to pick up where it stopped.
 
 Charts are hand-rolled SVG (no chart dependency) using the shell theme tokens, so
 they track light/dark automatically.
