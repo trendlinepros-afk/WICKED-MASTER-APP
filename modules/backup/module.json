@@ -1,0 +1,8 @@
+{
+  "id": "backup",
+  "name": "Backup",
+  "icon": "DatabaseBackup",
+  "version": "1.0.0",
+  "description": "File & folder backups — full or incremental, scheduled, to a local or network location with an offsite copy in Google Drive. Browse versions and restore files.",
+  "status": "stable"
+}

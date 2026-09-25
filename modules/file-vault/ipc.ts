@@ -24,6 +24,7 @@ import {
   trashFile,
   type DriveFileRaw
 } from './ipc/gdrive'
+import { setDriveProvider } from './ipc/shared'
 
 /* ------------------------------------------------------------------------ *
  *  FILE VAULT — personal cloud file storage on the user's own Google Drive.
@@ -137,6 +138,15 @@ export default function register(ctx: ModuleIpcContext): void {
       throw err
     }
   }
+
+  // Let other modules (Backup's offsite copy) reuse this connection — token only.
+  setDriveProvider({
+    getToken,
+    status: () => {
+      ensureAuthLoaded()
+      return { connected: !!refreshToken && !!clientId, email }
+    }
+  })
 
   /* ------------------------------ vault folder ----------------------------- */
 
