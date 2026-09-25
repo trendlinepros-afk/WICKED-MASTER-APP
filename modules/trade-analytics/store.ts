@@ -24,8 +24,8 @@ export interface Account {
 
 /** "Export Account Summary" request (PDF; built in main via printHtmlToPdf). */
 export interface SummaryExportReq {
-  /** account id, or 'all' for the combined view */
-  account: string
+  /** account ids to combine into one report ([] = all accounts) */
+  accounts: string[]
   preset: RangePreset
   startYmd?: string
   endYmd?: string

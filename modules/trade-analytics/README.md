@@ -267,6 +267,13 @@ also fixes inflated open-position counts.
   provider's length limit (Anthropic `max_tokens`, OpenAI/DeepSeek `length`,
   Gemini `MAX_TOKENS`) it's flagged with a **Continue** button that asks the
   coach to pick up where it stopped.
+- **Export Account Summary** (header button) — a two-page PDF (equity curve,
+  hourly P&L, win/loss pie, commissions, streaks, weekday edge + a one-paragraph
+  AI verdict) for a timeframe preset or custom dates. **Tick any combination of
+  accounts** (it starts from the accounts you're viewing); several are combined
+  into one report, each account's positions still FIFO-matched on their own.
+  Built in main (`export-summary`, `accounts: string[]`, `[]` = all) and printed
+  with the shell's `printHtmlToPdf`.
 
 Charts are hand-rolled SVG (no chart dependency) using the shell theme tokens, so
 they track light/dark automatically.

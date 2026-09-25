@@ -1385,7 +1385,12 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
   const busy = useTrades((s) => s.exportingSummary)
   const hasAiKey = useTrades((s) => s.hasAiKey)
 
-  const [account, setAccount] = useState(selected.length === 1 ? selected[0] : 'all')
+  // start from the accounts the dashboard is showing (empty selection = all)
+  const [picked, setPicked] = useState<string[]>(() =>
+    selected.length ? selected.filter((id) => accounts.some((a) => a.id === id)) : accounts.map((a) => a.id)
+  )
+  const allPicked = accounts.length > 0 && picked.length === accounts.length
+  const toggle = (id: string): void => setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   // start from whatever range the dashboard is currently filtered to
   const [preset, setPreset] = useState<RangePreset>(useTrades.getState().rangePreset)
   const todayYmd = etParts(Date.now()).ymd
@@ -1398,7 +1403,7 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
   const [endYmd, setEndYmd] = useState(todayYmd)
 
   const run = async (): Promise<void> => {
-    const ok = await exportSummary({ account, preset, startYmd, endYmd })
+    const ok = await exportSummary({ accounts: allPicked ? [] : picked, preset, startYmd, endYmd })
     if (ok) onClose()
   }
 
@@ -1417,21 +1422,55 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted">Account</span>
-            <select
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              className="w-full rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm outline-none focus:border-accent"
-            >
-              <option value="all">All accounts (combined)</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="space-y-1.5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-xs font-medium text-muted">Accounts</span>
+              <span className="text-[11px] text-muted">
+                {picked.length === 0
+                  ? 'pick at least one'
+                  : allPicked
+                    ? 'all combined'
+                    : picked.length === 1
+                      ? '1 account'
+                      : `${picked.length} accounts combined`}
+              </span>
+            </div>
+            <div className="overflow-hidden rounded-lg border border-edge bg-raised">
+              {accounts.length > 1 && (
+                <label className="flex cursor-pointer items-center gap-2.5 border-b border-edge px-3 py-2 text-sm hover:bg-edge/40">
+                  <input
+                    type="checkbox"
+                    checked={allPicked}
+                    ref={(el) => {
+                      if (el) el.indeterminate = picked.length > 0 && !allPicked
+                    }}
+                    onChange={() => setPicked(allPicked ? [] : accounts.map((a) => a.id))}
+                    className="accent-[rgb(var(--wk-accent))]"
+                  />
+                  <span className="font-medium">All accounts</span>
+                </label>
+              )}
+              <div className="max-h-48 overflow-y-auto">
+                {accounts.map((a) => (
+                  <label key={a.id} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-edge/40">
+                    <input
+                      type="checkbox"
+                      checked={picked.includes(a.id)}
+                      onChange={() => toggle(a.id)}
+                      className="accent-[rgb(var(--wk-accent))]"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                    <span className="shrink-0 text-[11px] text-muted">{a.executions.toLocaleString()} fills</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {picked.length > 1 && (
+              <p className="text-[11px] text-muted">
+                Trades from the chosen accounts are combined into one report (each account’s positions are still matched separately).
+              </p>
+            )}
+          </div>
 
           <div className="space-y-1.5">
             <span className="text-xs font-medium text-muted">Timeframe</span>
@@ -1496,7 +1535,7 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
           </button>
           <button
             onClick={() => void run()}
-            disabled={busy || (preset === 'custom' && (!startYmd || !endYmd))}
+            disabled={busy || picked.length === 0 || (preset === 'custom' && (!startYmd || !endYmd))}
             className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
