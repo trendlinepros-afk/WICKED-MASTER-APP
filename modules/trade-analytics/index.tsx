@@ -30,6 +30,7 @@ import type { Trade } from './lib/analytics'
 import { etInputToEpoch, etInputValue } from './lib/et'
 import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, TradeChart, WinLossDonut } from './components/charts'
+import ChatPanel from './components/ChatPanel'
 import { AccountsBar, BreakdownTab, CalendarTab, ExportSummaryModal, ImportModal, ManageAccountsModal, SectorCard, SectorDetail, StatsTab } from './components/panels'
 
 const pos = (n: number): string => (n >= 0 ? 'text-ok' : 'text-danger')
@@ -341,6 +342,7 @@ function TradeChartModal({ trade, onClose }: { trade: Trade; onClose: () => void
 
 function TradesTab(): React.JSX.Element {
   const trades = useTrades((s) => s.trades)
+  const stats = useTrades((s) => s.stats)
   const deleteTrade = useTrades((s) => s.deleteTrade)
   const [editor, setEditor] = useState<{ trade: Trade | null } | null>(null)
   const [chartTrade, setChartTrade] = useState<Trade | null>(null)
@@ -361,12 +363,27 @@ function TradesTab(): React.JSX.Element {
         <span className="text-xs text-muted">
           {trades.length} trade{trades.length === 1 ? '' : 's'} · click a row to chart it · hover to edit or delete
         </span>
-        <button
-          onClick={() => setEditor({ trade: null })}
-          className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90"
-        >
-          <Plus size={13} /> Add trade
-        </button>
+        <div className="flex items-center gap-3">
+          {stats && stats.closedTrades > 0 && (
+            <span
+              className="rounded-lg border border-edge bg-raised px-2.5 py-1 text-xs font-semibold tabular-nums"
+              title={`Closed trades in view: ${stats.wins} won, ${stats.losses} lost${stats.breakeven ? `, ${stats.breakeven} breakeven` : ''} — win rate = wins ÷ closed trades`}
+            >
+              <span className="text-ok">{stats.wins}W</span>
+              <span className="text-muted"> / </span>
+              <span className="text-danger">{stats.losses}L</span>
+              {stats.breakeven > 0 && <span className="text-muted"> / {stats.breakeven}BE</span>}
+              <span className="text-muted"> · </span>
+              <span className="text-ink">{stats.winRate.toFixed(0)}% w/r</span>
+            </span>
+          )}
+          <button
+            onClick={() => setEditor({ trade: null })}
+            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:opacity-90"
+          >
+            <Plus size={13} /> Add trade
+          </button>
+        </div>
       </div>
       {trades.length === 0 ? (
         <div className="p-8 text-sm text-muted">No trades yet — import a broker CSV or add one manually with “Add trade”.</div>
@@ -796,12 +813,12 @@ function StrategyCard(): React.JSX.Element {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-sm font-semibold text-ink"
       >
-        <Pencil size={13} className="text-accent" />
-        My strategy
-        <span className="font-normal text-muted">
+        <Pencil size={13} className="shrink-0 text-accent" />
+        <span className="shrink-0 whitespace-nowrap">My strategy</span>
+        <span className="min-w-0 truncate font-normal text-muted">
           — tell the coach how you actually trade so its analysis is based on your plan
         </span>
-        <span className="ml-auto text-xs text-muted">{open ? 'Hide' : account?.strategy?.trim() ? 'Edit' : 'Add'}</span>
+        <span className="ml-auto shrink-0 text-xs text-muted">{open ? 'Hide' : account?.strategy?.trim() ? 'Edit' : 'Add'}</span>
       </button>
       {open && (
         <div className="space-y-2 border-t border-edge px-3.5 py-3">
@@ -875,58 +892,63 @@ function AiTab(): React.JSX.Element {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-      {!s.hasAiKey && (
-        <div className="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
-          <AlertTriangle size={15} className="shrink-0 text-warn" />
-          <span>Add an Anthropic, OpenAI, Gemini or DeepSeek key in <strong>Settings → API Keys</strong> to enable AI coaching.</span>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => void s.analyze()}
-          disabled={s.aiBusy || !s.hasAiKey || !s.stats || s.stats.closedTrades === 0}
-          className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
-        >
-          {s.aiBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-          {s.aiText ? 'Re-analyze my trading' : 'Analyze my trading'}
-        </button>
-        <button
-          onClick={() => void exportPdf()}
-          disabled={exporting || !s.stats || s.stats.closedTrades === 0}
-          title={s.aiText ? 'Export your stats + the AI coach analysis as a PDF' : 'Export your stats as a PDF (run the AI analysis first to include it)'}
-          className="flex items-center gap-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
-        >
-          {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
-          Export PDF
-        </button>
-        {s.aiProvider && (
-          <span className="text-xs text-muted">
-            via {s.aiProvider}
-            {s.aiModel ? ` · ${s.aiModel}` : ''}
-          </span>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 xl:flex-row xl:overflow-hidden">
+      <div className="flex min-w-0 flex-col gap-3 xl:min-h-0 xl:flex-1">
+        {!s.hasAiKey && (
+          <div className="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
+            <AlertTriangle size={15} className="shrink-0 text-warn" />
+            <span>Add an Anthropic, OpenAI, Gemini or DeepSeek key in <strong>Settings → API Keys</strong> to enable AI coaching.</span>
+          </div>
         )}
-        {s.aiBusy && (
-          <button onClick={() => void s.cancelAi()} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
-            Cancel
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void s.analyze()}
+            disabled={s.aiBusy || !s.hasAiKey || !s.stats || s.stats.closedTrades === 0}
+            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
+          >
+            {s.aiBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+            {s.aiText ? 'Re-analyze my trading' : 'Analyze my trading'}
           </button>
+          <button
+            onClick={() => void exportPdf()}
+            disabled={exporting || !s.stats || s.stats.closedTrades === 0}
+            title={s.aiText ? 'Export your stats + the AI coach analysis as a PDF' : 'Export your stats as a PDF (run the AI analysis first to include it)'}
+            className="flex items-center gap-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+          >
+            {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
+            Export PDF
+          </button>
+          {s.aiProvider && (
+            <span className="text-xs text-muted">
+              via {s.aiProvider}
+              {s.aiModel ? ` · ${s.aiModel}` : ''}
+            </span>
+          )}
+          {s.aiBusy && (
+            <button onClick={() => void s.cancelAi()} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
+              Cancel
+            </button>
+          )}
+        </div>
+        <StrategyCard />
+        {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
+        {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
+        {s.aiText ? (
+          <div className="min-h-[240px] flex-1 overflow-y-auto whitespace-pre-wrap rounded-xl border border-edge bg-surface p-4 text-sm leading-relaxed text-ink xl:min-h-0">
+            {s.aiText}
+          </div>
+        ) : (
+          <div className="flex min-h-[240px] flex-1 items-center justify-center rounded-xl border border-dashed border-edge text-center text-sm text-muted xl:min-h-0">
+            <div className="max-w-sm p-6">
+              <Sparkles size={22} className="mx-auto text-accent" />
+              <p className="mt-2">Get an AI coach&apos;s read on your stats — strengths, leaks, risk issues and concrete process fixes. Your numbers are sent to the AI; nothing about your account is stored.</p>
+            </div>
+          </div>
         )}
       </div>
-      <StrategyCard />
-      {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
-      {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
-      {s.aiText ? (
-        <div className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-xl border border-edge bg-surface p-4 text-sm leading-relaxed text-ink">
-          {s.aiText}
-        </div>
-      ) : (
-        <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-edge text-center text-sm text-muted">
-          <div className="max-w-sm p-6">
-            <Sparkles size={22} className="mx-auto text-accent" />
-            <p className="mt-2">Get an AI coach&apos;s read on your stats — strengths, leaks, risk issues and concrete process fixes. Your numbers are sent to the AI; nothing about your account is stored.</p>
-          </div>
-        </div>
-      )}
+      <div className="flex min-w-0 flex-col xl:min-h-0 xl:w-[44%] xl:max-w-[760px] xl:shrink-0">
+        <ChatPanel />
+      </div>
     </div>
   )
 }

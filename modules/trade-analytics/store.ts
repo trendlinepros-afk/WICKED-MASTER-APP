@@ -4,6 +4,7 @@ import { computeMetrics, type TradeMetrics } from './lib/metrics'
 import { filterTradesToRange, resolveRange, type RangePreset } from './lib/range'
 import type { Execution } from './lib/parse'
 import { duration, money, pct } from './lib/format'
+import { buildChatContext } from './lib/chat-context'
 
 export const ID = 'trade-analytics'
 
@@ -113,6 +114,18 @@ export function buildAiPrompt(stats: Stats, trades: Trade[], strategies: { name:
   ].join('')
 }
 
+/** One message in the AI Coach chat (kept in memory only). */
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  /** set when the reply failed or was stopped (content = whatever arrived) */
+  error?: string
+  provider?: string
+  /** still streaming */
+  pending?: boolean
+}
+
 interface State {
   tab: Tab
   loaded: boolean
@@ -171,6 +184,10 @@ interface State {
   aiModel: string
   aiError: string
 
+  // AI coach chat — lives in memory for this session only
+  chat: ChatMessage[]
+  chatBusy: boolean
+
   // account-summary PDF export
   exportingSummary: boolean
 
@@ -205,6 +222,9 @@ interface State {
   loadSectors: () => Promise<void>
   analyze: () => Promise<void>
   cancelAi: () => Promise<void>
+  sendChat: (text: string) => Promise<void>
+  stopChat: () => Promise<void>
+  clearChat: () => void
 }
 
 export const useTrades = create<State>((set, get) => {
@@ -338,6 +358,8 @@ export const useTrades = create<State>((set, get) => {
     aiModel: '',
     exportingSummary: false,
     aiError: '',
+    chat: [],
+    chatBusy: false,
 
     setTab: (t) => set({ tab: t, sectorFocus: null }),
     setSectorFocus: (sector) => set({ sectorFocus: sector }),
@@ -637,6 +659,63 @@ export const useTrades = create<State>((set, get) => {
 
     cancelAi: async () => {
       await invoke('cancel')
+    },
+
+    sendChat: async (raw) => {
+      const text = raw.trim()
+      const { chatBusy, stats, metrics, trades, accounts, selectedAccounts, rangeLabel, dayNotes, aiText } = get()
+      if (!text || chatBusy || !stats) return
+      const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
+      // rebuilt every message, so a different account/date range mid-chat is picked up
+      const system = buildChatContext({
+        stats,
+        metrics,
+        trades,
+        accounts: viewed.map((a) => ({ id: a.id, name: a.name, strategy: a.strategy || '', feePerContract: a.feePerContract || 0 })),
+        rangeLabel,
+        dayNotes,
+        analysis: aiText
+      })
+      const history = get()
+        .chat.filter((m) => !m.error && !m.pending && m.content.trim())
+        .map((m) => ({ role: m.role, content: m.content }))
+      const newId = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+      const chatId = newId()
+      set({
+        chat: [...get().chat, { id: newId(), role: 'user', content: text }, { id: chatId, role: 'assistant', content: '', pending: true }],
+        chatBusy: true
+      })
+      const patch = (fn: (m: ChatMessage) => ChatMessage): void =>
+        set({ chat: get().chat.map((m) => (m.id === chatId ? fn(m) : m)) })
+      const off = window.wicked.on(`${ID}:ai-chat-delta`, (payload) => {
+        const d = payload as { chatId?: string; text?: string }
+        if (d.chatId === chatId && d.text) patch((m) => ({ ...m, content: m.content + d.text }))
+      })
+      try {
+        const res = (await invoke('ai-chat', { chatId, system, messages: [...history, { role: 'user', content: text }] })) as Res & {
+          text?: string
+          provider?: string
+          partial?: string
+        }
+        if (res.ok === true) patch((m) => ({ ...m, content: String(res.text ?? m.content), provider: String(res.provider ?? ''), pending: false }))
+        else {
+          const e = res as Err & { partial?: string }
+          patch((m) => ({ ...m, content: e.partial || m.content, error: e.error ?? 'The coach could not answer.', pending: false }))
+        }
+      } catch (err) {
+        patch((m) => ({ ...m, error: err instanceof Error ? err.message : String(err), pending: false }))
+      } finally {
+        off()
+        set({ chatBusy: false })
+      }
+    },
+
+    stopChat: async () => {
+      await invoke('ai-chat-cancel')
+    },
+
+    clearChat: () => {
+      if (!get().chatBusy) set({ chat: [] })
     }
   }
 })

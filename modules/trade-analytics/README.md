@@ -204,6 +204,9 @@ cross-checked by hand).
   symbol. Filter the account bar to see one account's cost; realized P&L is
   always shown net of commissions & fees.
 - **Trades** — every round-trip trade (open ones flagged), entry/exit/hold/P&L.
+  The header shows the record for the trades in view — e.g. **18W / 11L · 62%
+  w/r** (breakevens shown as `BE` when present; win rate = wins ÷ closed trades,
+  the same figure as Overview).
   **Click a row to chart it**: a modal draws the trade's execution map from its
   own fills (dots = executions on a price/time axis, dashed lines = average
   entry and exit, a shaded profit/loss band between them) with the realized
@@ -233,6 +236,19 @@ also fixes inflated open-position counts.
   (Anthropic → OpenAI → Gemini → DeepSeek, from the shell vault) and returns
   process feedback. Keys are read in main at call time and never sent to the
   renderer. Process critique only — not investment advice.
+  **Chat with your coach** (right-hand panel): a back-and-forth conversation,
+  streamed as it's written. Each message sends a context block built by
+  `lib/chat-context.ts` from exactly what the journal is showing (selected
+  accounts + date range): summary stats, per-symbol / weekday / hour / daily
+  breakdowns, open positions, the trader's strategy notes and Calendar journal
+  notes, the on-screen analysis, and the **full closed-trade list** (numbered
+  `#1…`, ET times, entry/exit, net P&L, point move for futures / % for stocks,
+  fees, hold — the most recent 600 in detail if there are more). So it can
+  answer "what went wrong on the 24th?" or "how do my MNQ shorts do after
+  11:00?". Streaming lives in `ipc/chat.ts` (SSE for all four providers; a
+  provider that fails before any text falls through to the next, one that
+  fails mid-answer keeps the partial text). The conversation is kept in memory
+  only and clears when WICKED closes; **New chat** starts over.
 
 Charts are hand-rolled SVG (no chart dependency) using the shell theme tokens, so
 they track light/dark automatically.
