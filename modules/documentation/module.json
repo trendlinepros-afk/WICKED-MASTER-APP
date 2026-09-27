@@ -1,0 +1,8 @@
+{
+  "id": "documentation",
+  "name": "Documentation",
+  "icon": "BookLock",
+  "version": "1.0.0",
+  "description": "IT documentation for your site, IT Glue style — configurations, contacts, passwords, domains, SSL, networks and more, behind a password.",
+  "status": "stable"
+}
