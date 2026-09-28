@@ -22,7 +22,7 @@ export interface FileRole {
 
 export const MODULE_FILE_ROLES: FileRole[] = [
   { file: 'module.json', role: 'Manifest/metadata: id, name, lucide icon, version, description, status (stable/beta/external), and an optional `group` (nav folder).' },
-  { file: 'index.tsx', role: 'Default-export React component. Renders inside the shell (theme already applied). Owns its own scrolling; no BrowserWindow/menus/global shortcuts.' },
+  { file: 'index.tsx', role: 'Default-export React component. Renders inside the shell (theme already applied). Owns its own scrolling; no BrowserWindow/menus/global shortcuts (ipc.ts can ask the shell for them via ctx.registerGlobalShortcut / ctx.createHelperWindow).' },
   { file: 'mcp.ts', role: 'REQUIRED. Default-export register(ctx) returning MCP tool definitions so AI agents can call the module. Tools delegate to the same IPC channels the UI uses.' },
   { file: 'ipc.ts', role: 'Main-process handlers, auto-registered at startup. Every channel namespaced <module-id>:<action>. Required if the module does any main-process work.' },
   { file: 'store.ts', role: "Optional Zustand store for the module's UI state." },
@@ -42,7 +42,8 @@ export const MODULE_RULES: string[] = [
   'Credential-needing tools MUST NOT auto-use stored vault secrets on the MCP path. Gate with ctx.credential("<credential name>", args.value); when absent it returns a message NAMING (never echoing) the credential. Never log or return credential values.',
   'Provider API keys are set once in Settings → API Keys and read in the main process via ctx.getApiKey(provider). Never store keys in a module or send a key value to the renderer.',
   'Never require WICKED to run as admin. Elevate a specific action on demand (Start-Process -Verb RunAs) so UAC fires only for that action.',
-  'The shell owns theming, navigation, window management, and auto-update — modules must not reimplement them.'
+  'The shell owns theming, navigation, window management, and auto-update — modules must not reimplement them.',
+  'A module that genuinely needs a system-wide hotkey or an on-screen overlay / hidden worker page uses ctx.registerGlobalShortcut(...) and ctx.createHelperWindow({ html, bounds, ... }) in ipc.ts — never globalShortcut or new BrowserWindow directly.'
 ]
 
 /** The full copy-ready prompt the user hands to Claude Code to start a new module. */

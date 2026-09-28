@@ -2,9 +2,12 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getApiKey } from './api-keys'
+import { createHelperWindow, registerGlobalShortcut, unregisterGlobalShortcut, type HelperWindow, type HelperWindowOptions } from './helper-windows'
 import { onBackupFlush } from './backup-flush'
 import { recordingIpcMain } from './mcp/channel-registry'
 import { moduleStoreGet, moduleStoreSet } from './settings'
+
+export type { HelperWindow, HelperWindowOptions } from './helper-windows'
 
 /**
  * Render an HTML document in a hidden window and print it to PDF bytes
@@ -90,6 +93,20 @@ export interface ModuleIpcContext {
    * on-disk state is consistent when captured.
    */
   onBackupFlush: (fn: () => void) => void
+  /**
+   * System-wide hotkey (Electron accelerator, e.g. "CommandOrControl+R").
+   * Shell-owned: released on quit; returns { ok:false, error } when the combo
+   * is malformed or another program holds it. Only for modules whose whole
+   * point is a hotkey (e.g. start a screen recording from any app).
+   */
+  registerGlobalShortcut: (accelerator: string, handler: () => void) => { ok: true } | { ok: false; error: string }
+  unregisterGlobalShortcut: (accelerator: string) => void
+  /**
+   * Frameless overlay on a monitor, or a hidden worker page, rendered from a
+   * self-contained HTML string with the normal window.wicked bridge. Closed
+   * automatically when the last real WICKED window closes.
+   */
+  createHelperWindow: (opts: HelperWindowOptions) => HelperWindow
 }
 
 type RegisterFn = (ctx: ModuleIpcContext) => void
@@ -112,7 +129,10 @@ export function registerModuleIpc(getMainWindow: () => BrowserWindow | null): st
     storeSet: moduleStoreSet,
     getApiKey,
     printHtmlToPdf,
-    onBackupFlush
+    onBackupFlush,
+    registerGlobalShortcut,
+    unregisterGlobalShortcut,
+    createHelperWindow
   }
   const registered: string[] = []
   for (const [path, mod] of Object.entries(ipcModules)) {

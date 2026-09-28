@@ -41,7 +41,10 @@ Hard rules (enforced by the contract — see `modules/README.md` for detail):
 - **Styling**: use the shell theme tokens only — `bg surface raised edge ink muted
   accent accent-ink danger ok warn` (e.g. `className="bg-surface text-ink border-edge"`).
   The root element is `h-full`; own your scrolling. Don't create BrowserWindows,
-  global shortcuts, menus, or theme handling — the shell owns those.
+  global shortcuts, menus, or theme handling — the shell owns those. A module
+  that truly needs a system-wide hotkey or an overlay / hidden worker window asks
+  the shell via `ctx.registerGlobalShortcut` / `ctx.createHelperWindow` (see
+  `modules/screen-rec/ipc.ts`).
 - **Elevation**: never require WICKED to run as admin; elevate a specific action on
   demand via PowerShell `Start-Process -Verb RunAs`.
 - **Data paths (optional)**: register `<id>:data-paths` returning `ModuleDataPath[]`

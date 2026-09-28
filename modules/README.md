@@ -75,7 +75,10 @@ keeps its own `/m/<id>` route and works exactly as before.
 Default-export a React component. It renders inside the shell's router with the
 shell's theme already applied (Tailwind `dark:` variants + `--wk-*` CSS variables).
 Do **not** create your own `BrowserWindow`, register global shortcuts, or touch
-`document.documentElement` theme classes.
+`document.documentElement` theme classes. If the module's whole point needs a
+system-wide hotkey or an on-screen overlay / hidden worker page (e.g. a screen
+recorder), ask the shell from `ipc.ts` via `ctx.registerGlobalShortcut` and
+`ctx.createHelperWindow` (below).
 
 ```tsx
 export default function RobocopyGui(): React.JSX.Element {
@@ -97,8 +100,24 @@ interface ModuleIpcContext {
   getMainWindow(): BrowserWindow | null
   storeGet<T>(key: string, fallback: T): T   // shared electron-store persistence
   storeSet(key: string, value: unknown): void
+  getApiKey(provider: string): string | null  // central vault, main only
+  printHtmlToPdf(html: string): Promise<Buffer>
+  onBackupFlush(fn: () => void): void
+  // system-wide hotkey, shell-owned (released on quit); { ok:false, error } if taken
+  registerGlobalShortcut(accelerator: string, handler: () => void): { ok: true } | { ok: false; error: string }
+  unregisterGlobalShortcut(accelerator: string): void
+  // frameless overlay on a monitor or hidden worker page from a self-contained
+  // HTML string; gets window.wicked; auto-closed with the last real window
+  createHelperWindow(opts: HelperWindowOptions): HelperWindow
 }
 ```
+
+Helper windows are for the rare module that must draw outside its page (a
+screen-picker overlay, a recording pill hidden from capture via
+`excludeFromCapture`) or keep a Chromium API alive while the user is elsewhere
+(a MediaRecorder). The page talks to your handlers over your own
+`<module-id>:<action>` channels; check `event.sender.id === helper.id` before
+trusting a helper-only channel. See `modules/screen-rec/` for a reference.
 
 Rules:
 

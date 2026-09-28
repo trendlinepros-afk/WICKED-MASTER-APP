@@ -1,0 +1,8 @@
+{
+  "id": "screen-rec",
+  "name": "ScreenRec",
+  "icon": "MonitorPlay",
+  "version": "1.0.0",
+  "description": "Ctrl+R screen recording: record clips from any app, then render the session into one 1920×1080 MP4 with your mic and an optional music bed.",
+  "status": "stable"
+}

@@ -11,6 +11,7 @@ import { broadcastToWeb, registerWebServerIpc, stopWebServer } from './webserver
 import { getSettings, setSettings } from './settings'
 import { initUpdater, scheduleChecks } from './updater'
 import { registerModuleIpc } from './module-ipc'
+import { closeAllHelperWindows, isHelperWindow } from './helper-windows'
 import { registerRecoveryIpc } from './recovery'
 import { registerBackupIpc, scheduleBackups } from './backup'
 import { pushNow, registerSyncIpc, scheduleSync, shouldPushOnClose } from './sync'
@@ -135,6 +136,14 @@ app.whenReady().then(() => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+    // Module helper windows (overlays, hidden workers) must not keep the app
+    // alive: when the last real window closes, close them too so
+    // window-all-closed fires and WICKED quits as before.
+    window.on('closed', () => {
+      if (isHelperWindow(window)) return
+      const realLeft = BrowserWindow.getAllWindows().some((w) => w !== window && !w.isDestroyed() && !isHelperWindow(w))
+      if (!realLeft) closeAllHelperWindows()
+    })
   })
 
   // Defense in depth for every webContents (windows AND <webview>s): strip any
