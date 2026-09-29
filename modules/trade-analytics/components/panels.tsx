@@ -927,21 +927,20 @@ export function BreakdownTab(): React.JSX.Element {
         <StatCell label="Best duration band" value={m.durationHi.best ? signedMoney(m.durationHi.best.pnl) : '—'} tone="ok" sub={m.durationHi.best?.label} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-edge bg-surface p-4">
-          <h3 className="text-sm font-semibold">P&L distribution (per trade)</h3>
-          <p className="mb-3 mt-0.5 text-xs text-muted">
-            How many trades landed in each profit/loss bucket — healthy trading keeps the red side capped while the green side stretches right.
-          </p>
-          <DistributionChart buckets={m.pnlDistribution} />
-        </div>
-        <div className="rounded-xl border border-edge bg-surface p-4">
-          <h3 className="text-sm font-semibold">Weekday × hour heatmap (ET close time)</h3>
-          <p className="mb-3 mt-0.5 text-xs text-muted">
-            P&L for every weekday + hour combination — green cells are when to trade, red cells are when to sit out.
-          </p>
-          <HeatmapCard pnl={m.weekdayHourPnl} n={m.weekdayHourN} />
-        </div>
+      <div className="rounded-xl border border-edge bg-surface p-4">
+        <h3 className="text-sm font-semibold">Weekday × time-of-day heatmap (15-minute slots, ET close time)</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">
+          P&L for every weekday and 15-minute window — green cells are when to trade, red cells are when to sit out. Hover a cell for the numbers.
+        </p>
+        <HeatmapCard pnl={m.weekdayQuarterPnl} n={m.weekdayQuarterN} wins={m.weekdayQuarterWins} />
+      </div>
+
+      <div className="rounded-xl border border-edge bg-surface p-4">
+        <h3 className="text-sm font-semibold">P&L distribution (per trade)</h3>
+        <p className="mb-3 mt-0.5 text-xs text-muted">
+          How many trades landed in each profit/loss bucket — healthy trading keeps the red side capped while the green side stretches right.
+        </p>
+        <DistributionChart buckets={m.pnlDistribution} />
       </div>
 
       <ChartCard title="P&L vs price range" desc="Profit by the price of what you traded — do cheap tickers or expensive ones treat you better? (Agg P&L = total dollars; Win/Loss = trade counts.)" m={m} buckets={m.byPriceRange} hi={m.priceHi} />
@@ -981,7 +980,7 @@ function DistributionChart({ buckets }: { buckets: MetricBucket[] }): React.JSX.
   const isLoss = (label: string): boolean => label.startsWith('-') || label.startsWith('≤')
   return (
     <div className="w-full overflow-x-auto">
-      <div className="flex min-w-full items-end gap-1" style={{ height: 180 }}>
+      <div className="flex min-w-full items-stretch gap-1" style={{ height: 180 }}>
         {buckets.map((b) => (
           <div
             key={b.label}
@@ -990,7 +989,7 @@ function DistributionChart({ buckets }: { buckets: MetricBucket[] }): React.JSX.
             title={`${b.label}: ${b.trades} trade(s)`}
           >
             <span className="text-[10px] tabular-nums text-muted">{b.trades || ''}</span>
-            <div className="flex h-full w-full items-end justify-center">
+            <div className="flex min-h-0 w-full flex-1 items-end justify-center">
               <div
                 className="w-full rounded-t"
                 style={{ height: `${(b.trades / maxN) * 100}%`, background: isLoss(b.label) ? 'rgb(var(--wk-danger))' : 'rgb(var(--wk-ok))', opacity: 0.85, minHeight: b.trades ? 2 : 0 }}
@@ -1007,54 +1006,124 @@ function DistributionChart({ buckets }: { buckets: MetricBucket[] }): React.JSX.
 /* ============================== heatmap =============================== */
 
 const HEAT_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const slotName = (k: number): string => `${Math.floor(k / 4)}:${String((k % 4) * 15).padStart(2, '0')}`
+const hour12 = (h: number): string => (h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`)
+const heatMoney = (v: number): string => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const shortHeat = (v: number): string => {
+  const a = Math.abs(v)
+  return `${v >= 0 ? '+' : '-'}$${a >= 1000 ? `${(a / 1000).toFixed(a >= 10000 ? 0 : 1)}k` : a.toFixed(0)}`
+}
 
-function HeatmapCard({ pnl, n }: { pnl: number[][]; n: number[][] }): React.JSX.Element {
-  // only show hours that saw any activity, to keep the grid compact
-  const activeHours: number[] = []
-  for (let h = 0; h < 24; h++) {
+/** Weekday × 15-minute P&L grid ([dow][slot 0-95], ET close time). */
+function HeatmapCard({ pnl, n, wins }: { pnl: number[][]; n: number[][]; wins: number[][] }): React.JSX.Element {
+  const cnt = (d: number, k: number): number => n[d]?.[k] ?? 0
+  const val = (d: number, k: number): number => pnl[d]?.[k] ?? 0
+  const won = (d: number, k: number): number => wins[d]?.[k] ?? 0
+  // a continuous slot range covering every slot that saw a trade (so time reads left → right evenly)
+  let first = -1
+  let last = -1
+  for (let k = 0; k < 96; k++) {
     let any = 0
-    for (let d = 0; d < 7; d++) any += n[d]?.[h] ?? 0
-    if (any > 0) activeHours.push(h)
+    for (let d = 0; d < 7; d++) any += cnt(d, k)
+    if (any > 0) {
+      if (first < 0) first = k
+      last = k
+    }
   }
-  if (activeHours.length === 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No closed trades.</div>
+  if (first < 0) return <div className="flex h-32 items-center justify-center text-sm text-muted">No closed trades.</div>
+  // start on the hour so the hour headers line up
+  first = Math.floor(first / 4) * 4
+  last = Math.floor(last / 4) * 4 + 3
+  const slots = Array.from({ length: last - first + 1 }, (_, i) => first + i)
+  const hours = Array.from({ length: slots.length / 4 }, (_, i) => Math.floor(first / 4) + i)
+  // weekends only when something happened there
+  const days = [1, 2, 3, 4, 5, 0, 6].filter((d) => d >= 1 && d <= 5 ? true : slots.some((k) => cnt(d, k) > 0))
+
+  const colTotal = slots.map((k) => ({ pnl: days.reduce((a, d) => a + val(d, k), 0), n: days.reduce((a, d) => a + cnt(d, k), 0), w: days.reduce((a, d) => a + won(d, k), 0) }))
   let maxAbs = 1
-  for (let d = 0; d < 7; d++) for (const h of activeHours) maxAbs = Math.max(maxAbs, Math.abs(pnl[d]?.[h] ?? 0))
-  const cell = (d: number, h: number): React.JSX.Element => {
-    const v = pnl[d]?.[h] ?? 0
-    const c = n[d]?.[h] ?? 0
-    const intensity = c === 0 ? 0 : Math.max(0.12, Math.abs(v) / maxAbs)
-    const bg = c === 0 ? 'transparent' : `rgb(var(--wk-${v >= 0 ? 'ok' : 'danger'}) / ${intensity.toFixed(2)})`
-    return (
-      <td key={h} className="p-0.5">
-        <div
-          className="h-6 w-full rounded"
-          style={{ background: bg, border: c === 0 ? '1px solid rgb(var(--wk-edge)/0.4)' : 'none' }}
-          title={c === 0 ? `${HEAT_DOW[d]} ${h}:00 — no trades` : `${HEAT_DOW[d]} ${h}:00 — ${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(0)} · ${c} trade(s)`}
-        />
-      </td>
-    )
-  }
+  for (const d of days) for (const k of slots) maxAbs = Math.max(maxAbs, Math.abs(val(d, k)))
+  const maxCol = Math.max(1, ...colTotal.map((c) => Math.abs(c.pnl)))
+
+  const cellBg = (v: number, c: number, max: number): string => (c === 0 ? 'transparent' : `rgb(var(--wk-${v >= 0 ? 'ok' : 'danger'}) / ${Math.max(0.14, Math.min(1, Math.abs(v) / max)).toFixed(2)})`)
+  const tip = (label: string, k: number, v: number, c: number, w: number): string =>
+    c === 0 ? `${label} ${slotName(k)}–${slotName(k + 1)} ET — no trades` : `${label} ${slotName(k)}–${slotName(k + 1)} ET\n${heatMoney(v)} · ${c} trade${c === 1 ? '' : 's'} (${w}W / ${c - w}L)`
+
   return (
-    <div className="w-full overflow-x-auto">
-      <table className="w-full border-separate" style={{ borderSpacing: 0 }}>
-        <thead>
-          <tr>
-            <th className="w-8" />
-            {activeHours.map((h) => (
-              <th key={h} className="text-[9px] font-normal text-muted">{h}</th>
+    <div className="w-full">
+      <div className="w-full overflow-x-auto">
+        <table className="w-full table-fixed border-separate" style={{ borderSpacing: 0, minWidth: 64 + slots.length * 15 + 84 }}>
+          <colgroup>
+            <col style={{ width: 44 }} />
+            {slots.map((k) => (
+              <col key={k} />
             ))}
-          </tr>
-        </thead>
-        <tbody>
-          {[1, 2, 3, 4, 5, 0, 6].map((d) => (
-            <tr key={d}>
-              <td className="pr-1 text-right text-[10px] text-muted">{HEAT_DOW[d]}</td>
-              {activeHours.map((h) => cell(d, h))}
+            <col style={{ width: 84 }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th />
+              {hours.map((h) => (
+                <th key={h} colSpan={4} className="border-l border-edge/60 pb-1 pl-1 text-left text-[10px] font-semibold text-muted">
+                  {hour12(h)}
+                </th>
+              ))}
+              <th className="pb-1 pr-1 text-right text-[10px] font-semibold text-muted">Day total</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="mt-1.5 text-[10px] text-muted">Green = net profit, red = net loss; deeper = larger. Hour is ET close time.</p>
+          </thead>
+          <tbody>
+            {days.map((d) => {
+              const rowPnl = slots.reduce((a, k) => a + val(d, k), 0)
+              const rowN = slots.reduce((a, k) => a + cnt(d, k), 0)
+              return (
+                <tr key={d}>
+                  <td className="pr-1.5 text-right text-[10.5px] text-muted">{HEAT_DOW[d]}</td>
+                  {slots.map((k) => {
+                    const c = cnt(d, k)
+                    const v = val(d, k)
+                    return (
+                      <td key={k} className={`p-[1.5px] ${k % 4 === 0 ? 'border-l border-edge/60' : ''}`}>
+                        <div
+                          className="h-7 w-full rounded-[3px] hover:outline hover:outline-2 hover:outline-accent"
+                          style={{ background: cellBg(v, c, maxAbs), boxShadow: c === 0 ? 'inset 0 0 0 1px rgb(var(--wk-edge) / 0.35)' : 'none' }}
+                          title={tip(HEAT_DOW[d], k, v, c, won(d, k))}
+                        />
+                      </td>
+                    )
+                  })}
+                  <td className={`pl-2 text-right text-[11px] font-semibold tabular-nums ${rowN === 0 ? 'text-muted' : rowPnl >= 0 ? 'text-ok' : 'text-danger'}`}>
+                    {rowN ? shortHeat(rowPnl) : '—'}
+                    {rowN > 0 && <span className="ml-1 text-[9.5px] font-normal text-muted">{rowN}t</span>}
+                  </td>
+                </tr>
+              )
+            })}
+            <tr>
+              <td className="pr-1.5 pt-2 text-right text-[10.5px] font-semibold text-ink">All</td>
+              {slots.map((k, i) => {
+                const c = colTotal[i]
+                return (
+                  <td key={k} className={`p-[1.5px] pt-2 ${k % 4 === 0 ? 'border-l border-edge/60' : ''}`}>
+                    <div
+                      className="h-5 w-full rounded-[3px] hover:outline hover:outline-2 hover:outline-accent"
+                      style={{ background: cellBg(c.pnl, c.n, maxCol), boxShadow: c.n === 0 ? 'inset 0 0 0 1px rgb(var(--wk-edge) / 0.35)' : 'none' }}
+                      title={tip('All days', k, c.pnl, c.n, c.w)}
+                    />
+                  </td>
+                )
+              })}
+              <td />
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] text-muted">
+        <span className="flex items-center gap-1.5">
+          <span>-{shortHeat(maxAbs).slice(1)}</span>
+          <span className="h-2.5 w-28 rounded-full" style={{ background: 'linear-gradient(90deg, rgb(var(--wk-danger)), rgb(var(--wk-danger) / 0.15), rgb(var(--wk-ok) / 0.15), rgb(var(--wk-ok)))' }} />
+          <span>{shortHeat(maxAbs)}</span>
+        </span>
+        <span>Each column is a 15-minute window by ET close time; “All” adds up the weekdays. Deeper colour = bigger P&L.</span>
+      </div>
     </div>
   )
 }

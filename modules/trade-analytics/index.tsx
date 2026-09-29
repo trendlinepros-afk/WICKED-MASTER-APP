@@ -23,12 +23,10 @@ import {
   X
 } from 'lucide-react'
 import { SHELL_IPC, type ApiProviderId } from '@shared/types'
-import { buildReportPdf } from '../stock-planner/lib/pdf'
-import { buildJournalReport } from './lib/report'
 import { ID, useTrades, type Tab, type TradeDraft } from './store'
 import type { Trade } from './lib/analytics'
-import { etInputToEpoch, etInputValue } from './lib/et'
-import { dateShort, dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
+import { etDateTime, etInputToEpoch, etInputValue } from './lib/et'
+import { dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
 import { BarChart, ColumnChart, EquityCurve, WinLossDonut } from './components/charts'
 import ChatPanel from './components/ChatPanel'
 import { TradeChartModal } from './components/TradeChartModal'
@@ -231,12 +229,28 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: 'ok'
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4
 
+/** Entry/exit moment on the ET clock — the date is dropped for an exit on the entry's day. */
+function WhenCell({ at, sameDayAs }: { at: number | null; sameDayAs?: number | null }): React.JSX.Element {
+  const w = etDateTime(at)
+  if (!w) return <div className="text-right text-muted">—</div>
+  const same = sameDayAs != null && etDateTime(sameDayAs)?.ymd === w.ymd
+  return (
+    <div className="truncate text-right tabular-nums" title={`${w.date}, ${w.time} ET`}>
+      {!same && <span className="text-muted">{w.date} · </span>}
+      <span className="text-ink">{w.time}</span>
+    </div>
+  )
+}
+
+const TRADE_COLS = 'md:grid-cols-[76px_minmax(80px,1fr)_150px_84px_150px_84px_60px_112px_56px]'
+
 function TradeRow({ t, onOpen, onEdit, onDelete }: { t: Trade; onOpen: () => void; onEdit: () => void; onDelete: () => void }): React.JSX.Element {
+  const fills = t.fills.length
   return (
     <div
       onClick={onOpen}
       title="Click to chart this trade"
-      className="group grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto_auto_auto] items-center gap-2 border-b border-edge/50 px-3 py-2 text-xs hover:bg-raised/40 md:grid-cols-[70px_1fr_90px_90px_100px_100px_64px]"
+      className={`group grid cursor-pointer grid-cols-[auto_1fr_auto_auto_auto_auto_auto_auto_auto] items-center gap-2 border-b border-edge/50 px-3 py-2 text-xs hover:bg-raised/40 ${TRADE_COLS}`}
     >
       <div className="flex items-center gap-1 font-semibold">
         {t.direction === 'long' ? <ArrowUpRight size={13} className="text-ok" /> : <ArrowDownRight size={13} className="text-danger" />}
@@ -246,10 +260,12 @@ function TradeRow({ t, onOpen, onEdit, onDelete }: { t: Trade; onOpen: () => voi
         {t.isOpen ? (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 font-medium text-accent">OPEN · {shares(t.openQty)} sh</span>
         ) : (
-          `${shares(t.qty)} sh · ${dateShort(t.openedAt)}→${dateShort(t.closedAt)}`
+          `${shares(t.qty)} ${t.multiplier !== 1 ? 'ct' : 'sh'} · ${t.direction}${fills > 2 ? ` · ${fills} fills` : ''}`
         )}
       </div>
+      <WhenCell at={t.openedAt} />
       <div className="text-right tabular-nums text-muted">{t.avgEntry.toFixed(2)}</div>
+      {t.isOpen ? <div className="text-right text-accent">open</div> : <WhenCell at={t.closedAt} sameDayAs={t.openedAt} />}
       <div className="text-right tabular-nums text-muted">{t.isOpen ? '—' : t.avgExit.toFixed(2)}</div>
       <div className="text-right tabular-nums text-muted">{duration(t.holdSeconds)}</div>
       <div className={`text-right font-semibold tabular-nums ${t.isOpen ? 'text-accent' : pos(t.realizedPnl)}`}>
@@ -320,10 +336,12 @@ function TradesTab(): React.JSX.Element {
         <div className="p-8 text-sm text-muted">No trades yet — import a broker CSV or add one manually with “Add trade”.</div>
       ) : (
         <>
-          <div className="grid grid-cols-[70px_1fr_90px_90px_100px_100px_64px] gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+          <div className={`grid gap-2 border-b border-edge px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted ${TRADE_COLS}`}>
             <div>Symbol</div>
-            <div>Detail</div>
+            <div>Size</div>
+            <div className="text-right">Entry time (ET)</div>
             <div className="text-right">Entry</div>
+            <div className="text-right">Exit time (ET)</div>
             <div className="text-right">Exit</div>
             <div className="text-right">Hold</div>
             <div className="text-right">P&L</div>
@@ -798,23 +816,16 @@ function AiTab(): React.JSX.Element {
   const s = useTrades()
   const [exporting, setExporting] = useState(false)
   const [exportErr, setExportErr] = useState('')
+  const canAnalyze = s.hasAiKey && !!s.stats && s.stats.closedTrades > 0
+  const analyzing = s.chatBusy && s.chat.some((m) => m.pending && m.kind === 'analysis')
 
   const exportPdf = async (): Promise<void> => {
-    const { stats, aiText, executions } = useTrades.getState()
-    if (!stats || exporting) return
+    if (exporting) return
     setExporting(true)
     setExportErr('')
     try {
-      const now = new Date()
-      const stamp = `${now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })} ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
-      const spec = buildJournalReport(stats, aiText, executions.length, stamp)
-      const b64 = buildReportPdf(spec, [], 'WICKED · TRADE JOURNAL')
-      const res = (await window.wicked.invoke(`${ID}:save-pdf`, { data: b64 })) as {
-        ok?: boolean
-        cancelled?: boolean
-        error?: string
-      }
-      if (!res.ok && !res.cancelled) setExportErr(res.error ?? 'PDF export failed.')
+      const err = await s.exportReport()
+      if (err) setExportErr(err)
     } catch (err) {
       setExportErr(err instanceof Error ? err.message : String(err))
     } finally {
@@ -823,61 +834,41 @@ function AiTab(): React.JSX.Element {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 xl:flex-row xl:overflow-hidden">
-      <div className="flex min-w-0 flex-col gap-3 xl:min-h-0 xl:flex-1">
-        {!s.hasAiKey && (
-          <div className="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
-            <AlertTriangle size={15} className="shrink-0 text-warn" />
-            <span>Add an Anthropic, OpenAI, Gemini or DeepSeek key in <strong>Settings → API Keys</strong> to enable AI coaching.</span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
+      {!s.hasAiKey && (
+        <div className="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm">
+          <AlertTriangle size={15} className="shrink-0 text-warn" />
+          <span>Add an Anthropic, OpenAI, Gemini or DeepSeek key in <strong>Settings → API Keys</strong> to enable AI coaching.</span>
+        </div>
+      )}
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={() => void s.analyze()}
-            disabled={s.aiBusy || !s.hasAiKey || !s.stats || s.stats.closedTrades === 0}
+            disabled={s.chatBusy || !canAnalyze}
+            title="A full review of the trades in view — strengths, leaks, risk and process fixes, with charts. It opens as a new chat so you can ask follow-ups."
             className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink hover:opacity-90 disabled:opacity-40"
           >
-            {s.aiBusy ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-            {s.aiText ? 'Re-analyze my trading' : 'Analyze my trading'}
+            {analyzing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+            {analyzing ? 'Analyzing…' : 'Analyze my trading'}
           </button>
           <button
             onClick={() => void exportPdf()}
             disabled={exporting || !s.stats || s.stats.closedTrades === 0}
-            title={s.aiText ? 'Export your stats + the AI coach analysis as a PDF' : 'Export your stats as a PDF (run the AI analysis first to include it)'}
+            title="A colour PDF of your stats and charts, plus the latest AI analysis"
             className="flex items-center gap-2 rounded-lg bg-raised px-4 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
           >
             {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
             Export PDF
           </button>
-          {s.aiProvider && (
-            <span className="text-xs text-muted">
-              via {s.aiProvider}
-              {s.aiModel ? ` · ${s.aiModel}` : ''}
-            </span>
-          )}
-          {s.aiBusy && (
-            <button onClick={() => void s.cancelAi()} className="rounded-lg bg-raised px-3 py-2 text-sm hover:bg-edge/60">
-              Cancel
-            </button>
-          )}
         </div>
-        <StrategyCard />
-        {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
-        {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
-        {s.aiText ? (
-          <div className="min-h-[240px] flex-1 overflow-y-auto whitespace-pre-wrap rounded-xl border border-edge bg-surface p-4 text-sm leading-relaxed text-ink xl:min-h-0">
-            {s.aiText}
-          </div>
-        ) : (
-          <div className="flex min-h-[240px] flex-1 items-center justify-center rounded-xl border border-dashed border-edge text-center text-sm text-muted xl:min-h-0">
-            <div className="max-w-sm p-6">
-              <Sparkles size={22} className="mx-auto text-accent" />
-              <p className="mt-2">Get an AI coach&apos;s read on your stats — strengths, leaks, risk issues and concrete process fixes. Your numbers are sent to the AI; nothing about your account is stored.</p>
-            </div>
-          </div>
-        )}
+        <div className="min-w-[280px] flex-1">
+          <StrategyCard />
+        </div>
       </div>
-      <div className="flex min-w-0 flex-col xl:min-h-0 xl:w-[58%] xl:max-w-[1150px] xl:shrink-0">
+      {s.aiError && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{s.aiError}</div>}
+      {exportErr && <div className="rounded-lg bg-danger/10 p-2 text-xs text-danger">{exportErr}</div>}
+      <div className="flex min-h-0 flex-1">
         <ChatPanel />
       </div>
     </div>

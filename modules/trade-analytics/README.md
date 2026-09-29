@@ -203,7 +203,7 @@ cross-checked by hand).
   win/loss donut, avg win/loss, streaks, long-vs-short, volume, best/worst
   symbol. Filter the account bar to see one account's cost; realized P&L is
   always shown net of commissions & fees.
-- **Trades** — every round-trip trade (open ones flagged), entry/exit/hold/P&L.
+- **Trades** — every round-trip trade (open ones flagged): size, **entry time and exit time (ET, to the second — the exit drops the date when it's the same day)**, entry/exit price, hold and P&L.
   The header shows the record for the trades in view — e.g. **18W / 11L · 62%
   w/r** (breakevens shown as `BE` when present; win rate = wins ÷ closed trades,
   the same figure as Overview).
@@ -239,34 +239,56 @@ If data from an older build ended up in more than one account, a **"Clean up
 duplicates"** banner appears — it keeps each fill in a single account (the
 earliest-created named account that holds it) and removes the extra copies, which
 also fixes inflated open-position counts.
+- **Breakdown** — market-open / power-hour cells, a full-width **weekday ×
+  15-minute heatmap** (ET close time; hour headers, day totals, an "All days"
+  row, hover for P&L · trades · W/L — `weekdayQuarter*` in `lib/metrics.ts`),
+  the per-trade P&L distribution, and P&L by price, size, time of day, hold,
+  weekday, month, year, side and asset type.
 - **Open Positions** — the "no sell yet" list with cost basis and age.
 - **Symbols** — P&L-by-symbol bar chart + a sortable-by-P&L table.
 - **Timing** — P&L by weekday, by hour (ET), and daily.
-- **AI Coach** — sends a compact stats digest to your configured AI provider
-  (Anthropic → OpenAI → Gemini → DeepSeek, from the shell vault) and returns
-  process feedback. Keys are read in main at call time and never sent to the
-  renderer. Process critique only — not investment advice.
-  **Chat with your coach** (right-hand panel): a back-and-forth conversation,
-  streamed as it's written. Each message sends a context block built by
+- **AI Coach** — one page: **Analyze my trading**, **Export PDF** and the
+  **My strategy** notes on top, the coach chat filling the rest. Keys come from
+  the shell vault (Anthropic → OpenAI → Gemini → DeepSeek), are read in main at
+  call time and never reach the renderer. Process coaching only — not advice.
+  **Analyze my trading** starts a new chat and streams a full review into it
+  (`ANALYZE_PROMPT` in `store.ts`: overview, what's working, leaks, risk,
+  process fixes, a Do / Don't / Watch-for guide, with charts) — so follow-up
+  questions just continue the conversation.
+  **The chat**: each message sends a context block built by
   `lib/chat-context.ts` from exactly what the journal is showing (selected
-  accounts + date range): summary stats, per-symbol / weekday / hour / daily
-  breakdowns, open positions, the trader's strategy notes and Calendar journal
-  notes, the on-screen analysis, and the **full closed-trade list** (numbered
-  `#1…`, ET times, entry/exit, net P&L, point move for futures / % for stocks,
-  fees, hold — the most recent 600 in detail if there are more). So it can
-  answer "what went wrong on the 24th?" or "how do my MNQ shorts do after
-  11:00?". Streaming lives in `ipc/chat.ts` (SSE for all four providers; a
-  provider that fails before any text falls through to the next, one that
-  fails mid-answer keeps the partial text).
+  accounts + date range): summary stats, per-symbol / weekday / hour /
+  15-minute-slot / daily breakdowns, open positions, the trader's strategy and
+  Calendar notes, and the **full closed-trade list** (numbered `#1…`, ET times,
+  entry/exit, net P&L, point move for futures / % for stocks, fees, hold — the
+  most recent 600 in detail if there are more). Streaming lives in
+  `ipc/chat.ts` (SSE for all four providers; a provider that fails before any
+  text falls through to the next, one that fails mid-answer keeps the partial).
+  **Charts, tables and colour in replies**: the coach writes ```` ```chart ````
+  blocks (JSON) that render as SVG charts in the bubble and in every PDF
+  (`lib/chat-charts.ts`). `source` charts (`summary` tiles, `equity`,
+  `daily_pnl`, `trade_pnl`, `pnl_by_hour`, `pnl_by_15m`, `pnl_by_weekday`,
+  `pnl_by_symbol`, `pnl_by_hold_time`, `win_loss`, `long_short`, `fees`,
+  `drawdown`) are filled from the journal itself — exact numbers — and frozen
+  into the saved reply when it finishes (stripped again before the chat goes
+  back to the model); custom charts carry the coach's own computed values.
+  Markdown tables, `+$…` / `-$…` colouring and **Do / Don't / Watch for**
+  callouts come from `lib/rich-text.ts` (a safe markdown subset — nothing from
+  the model is ever injected as HTML).
+  **PDFs**: ask the coach for a PDF / report and it starts its reply with
+  `@pdf <title>`; when the whole reply has arrived (including any
+  **Continue** parts) it is printed to a colour PDF with its charts and saved
+  to `Documents\Stock Trading\Coach reports` (card with Open / Show in folder).
+  Every reply also has **Save as PDF**, **Export chat** saves the whole
+  conversation (colour PDF or Markdown with charts turned into tables), and
+  **Export PDF** makes a *Trading report*: stat tiles and the journal's charts
+  plus the latest analysis. All built by `lib/chat-export.ts` and printed with
+  the shell's sandboxed `printHtmlToPdf` (`chat-pdf` handler).
   **Chats are saved** (table `coach_chats` in `trades.db`, so they ride along
-  with Backup/Cloud Sync) and listed in a **history rail** on the left of the
-  chat — click one to resume it, hover to delete, **New** to start fresh.
-  **Export chat** saves the conversation as a PDF (printed by the shell's
-  sandboxed `printHtmlToPdf`) or Markdown (`lib/chat-export.ts`; all text is
-  HTML-escaped). Replies get up to 8k output tokens; if one still hits the
-  provider's length limit (Anthropic `max_tokens`, OpenAI/DeepSeek `length`,
-  Gemini `MAX_TOKENS`) it's flagged with a **Continue** button that asks the
-  coach to pick up where it stopped.
+  with Backup/Cloud Sync) and listed in a history rail — click one to resume
+  it, hover to delete, **New** to start fresh. Replies get up to 8k output
+  tokens; one that still hits the provider's length limit gets a **Continue**
+  button.
 - **Export Account Summary** (header button) — a two-page PDF (equity curve,
   hourly P&L, win/loss pie, commissions, streaks, weekday edge + a one-paragraph
   AI verdict) for a timeframe preset or custom dates. **Tick any combination of

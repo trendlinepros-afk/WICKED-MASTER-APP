@@ -75,3 +75,23 @@ export function etInputToEpoch(local: string): number | null {
   const offset = asEt - utcGuess
   return utcGuess - offset
 }
+
+/* ---------------- ET clock with seconds (trade entry / exit times) --------------- */
+
+const ET_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true
+})
+
+/** Epoch ms → { date: "Sep 22", time: "9:31:05 AM", ymd } on the ET clock. */
+export function etDateTime(at: number | null | undefined): { date: string; time: string; ymd: string } | null {
+  if (at == null || !Number.isFinite(at)) return null
+  const parts = ET_CLOCK.formatToParts(new Date(at))
+  const g = (t: string): string => parts.find((p) => p.type === t)?.value ?? ''
+  return { date: `${g('month')} ${g('day')}`, time: `${g('hour')}:${g('minute')}:${g('second')} ${g('dayPeriod')}`, ymd: etParts(at).ymd }
+}

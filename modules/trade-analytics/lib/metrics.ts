@@ -260,6 +260,10 @@ export interface TradeMetrics {
   // weekday × hour P&L heatmap ([dow 0-6][hour 0-23])
   weekdayHourPnl: number[][]
   weekdayHourN: number[][]
+  // weekday × 15-minute slot ([dow 0-6][slot 0-95], slot = hour*4 + minute/15, ET close time)
+  weekdayQuarterPnl: number[][]
+  weekdayQuarterN: number[][]
+  weekdayQuarterWins: number[][]
   // P&L by market sector (populated only when a sector map is supplied)
   bySector: MetricBucket[]
 }
@@ -310,6 +314,9 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
   const yearKeys = new Set<string>()
   const weekdayHourPnl = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
   const weekdayHourN = Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
+  const weekdayQuarterPnl = Array.from({ length: 7 }, () => new Array<number>(96).fill(0))
+  const weekdayQuarterN = Array.from({ length: 7 }, () => new Array<number>(96).fill(0))
+  const weekdayQuarterWins = Array.from({ length: 7 }, () => new Array<number>(96).fill(0))
 
   const timeBuckets = new Map<string, MetricBucket>()
   const dow = DOW_LABEL.map((l) => emptyBucket(l))
@@ -342,6 +349,10 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     dayMap.set(p.ymd, db)
     weekdayHourPnl[p.dow][p.hour] += pnl
     weekdayHourN[p.dow][p.hour] += 1
+    const slot = p.hour * 4 + Math.floor(p.minute / 15)
+    weekdayQuarterPnl[p.dow][slot] += pnl
+    weekdayQuarterN[p.dow][slot] += 1
+    if (pnl > 1e-6) weekdayQuarterWins[p.dow][slot] += 1
     monthKeys.add(`${p.y}-${p.m}`)
     yearKeys.add(String(p.y))
 
@@ -514,6 +525,9 @@ export function computeMetrics(trades: Trade[], sectorOf?: Record<string, string
     pnlDistribution,
     weekdayHourPnl,
     weekdayHourN,
+    weekdayQuarterPnl,
+    weekdayQuarterN,
+    weekdayQuarterWins,
     bySector: [...sectorMap.values()].sort((a, b) => b.pnl - a.pnl)
   }
 }

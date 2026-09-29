@@ -13,6 +13,7 @@ import type { Stats, Trade } from './analytics'
 import type { TradeMetrics } from './metrics'
 import { etParts } from './et'
 import { duration, money, pct } from './format'
+import { chartInstructions } from './chat-charts'
 
 /** cap on closed trades listed individually (≈100 chars each) */
 export const CHAT_TRADE_LIMIT = 600
@@ -107,6 +108,25 @@ export function buildChatContext(c: ChatContextInput): string {
   }
   bucketLine('BY WEEKDAY (by close time)', s.byDayOfWeek)
   bucketLine('BY HOUR ET (by close time)', s.byHour)
+  if (m?.weekdayQuarterN) {
+    const slots: string[] = []
+    for (let k = 0; k < 96; k++) {
+      let n = 0
+      let pnl = 0
+      let w = 0
+      for (let d = 0; d < 7; d++) {
+        n += m.weekdayQuarterN[d]?.[k] ?? 0
+        pnl += m.weekdayQuarterPnl[d]?.[k] ?? 0
+        w += m.weekdayQuarterWins[d]?.[k] ?? 0
+      }
+      if (n) slots.push(`${Math.floor(k / 4)}:${p2((k % 4) * 15)} ${signed(pnl)}, ${n}, ${w}W`)
+    }
+    if (slots.length) {
+      out.push('')
+      out.push('BY 15-MINUTE SLOT ET (slot start: net P&L, trades, wins; by close time)')
+      out.push(slots.join(' · '))
+    }
+  }
 
   if (s.byDay.length) {
     const days = s.byDay.slice(-DAY_LIMIT)
@@ -174,6 +194,8 @@ export function buildChatContext(c: ChatContextInput): string {
     out.push('YOUR EARLIER WRITTEN ANALYSIS (already shown to the trader on this screen — they may ask about it):')
     out.push(c.analysis.trim())
   }
+  out.push('')
+  out.push(chartInstructions())
   return out.join('\n')
 }
 
@@ -183,5 +205,6 @@ export const CHAT_SUGGESTIONS = [
   'Walk me through my worst day — what went wrong?',
   'Am I actually following my strategy?',
   'Compare my longs vs shorts',
-  'What does a typical winning trade look like vs a losing one?'
+  'What does a typical winning trade look like vs a losing one?',
+  'Make me a PDF report of this week'
 ]

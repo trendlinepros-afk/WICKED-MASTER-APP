@@ -3,9 +3,10 @@ import { buildTradesByAccount, computeStats, type Stats, type Trade } from './li
 import { computeMetrics, type TradeMetrics } from './lib/metrics'
 import { filterTradesToRange, resolveRange, type RangePreset } from './lib/range'
 import type { Execution } from './lib/parse'
-import { duration, money, pct } from './lib/format'
 import { buildChatContext } from './lib/chat-context'
-import { chatToHtml, chatToMarkdown } from './lib/chat-export'
+import { chatToHtml, chatToMarkdown, reportToHtml, tradingReportMarkdown } from './lib/chat-export'
+import { freezeCharts, stripChartData, type ChartInputs } from './lib/chat-charts'
+import { pdfDirective } from './lib/rich-text'
 
 export const ID = 'trade-analytics'
 
@@ -75,46 +76,6 @@ type Res = Ok | Err
 const invoke = <T = Res>(channel: string, ...args: unknown[]): Promise<T> =>
   window.wicked.invoke(`${ID}:${channel}`, ...args) as Promise<T>
 
-/** Build the compact digest the AI coach analyzes. `strategies` = the trader's
- *  own per-account strategy notes, included so the coach reasons from their
- *  stated intent instead of guessing it from the numbers. */
-export function buildAiPrompt(stats: Stats, trades: Trade[], strategies: { name: string; strategy: string }[] = []): string {
-  const top = stats.bySymbol.slice(0, 8).map((s) => `${s.symbol}: ${money(s.realizedPnl)} (${s.trades} trades, ${s.wins}W/${s.losses}L)`)
-  const worst = [...stats.bySymbol].reverse().slice(0, 6).map((s) => `${s.symbol}: ${money(s.realizedPnl)}`)
-  const dow = stats.byDayOfWeek.map((b) => `${b.label} ${money(b.pnl)}`).join(', ')
-  const hours = stats.byHour.map((b) => `${b.label} ${money(b.pnl)}`).join(', ')
-  const open = trades
-    .filter((t) => t.isOpen)
-    .map((t) => `${t.symbol} ${t.direction} ${t.openQty}sh @ ${t.avgEntry.toFixed(2)}`)
-    .join('; ')
-  const withNotes = strategies.filter((s) => s.strategy.trim())
-  const strategyBlock =
-    withNotes.length > 0
-      ? 'THE TRADER\'S OWN STRATEGY DESCRIPTION — treat as ground truth about their intent, and evaluate whether ' +
-        'the stats show them actually FOLLOWING it:\n' +
-        withNotes.map((s) => (withNotes.length > 1 ? `[${s.name}] ${s.strategy.trim()}` : s.strategy.trim())).join('\n') +
-        '\n\n'
-      : ''
-  return [
-    'You are a professional trading coach analyzing a retail trader\'s executed-trade statistics. ',
-    'Give sharp, specific, actionable feedback — strengths, ',
-    'weaknesses, risk issues, and 3-5 concrete things to change. Be direct and concise. Use the numbers. ',
-    'Do NOT give financial/investment advice or tell them what to buy; focus on their PROCESS and stats.\n\n',
-    strategyBlock,
-    `Realized P&L: ${money(stats.totalRealized)} over ${stats.closedTrades} closed trades\n`,
-    `Win rate: ${pct(stats.winRate)} (${stats.wins}W / ${stats.losses}L / ${stats.breakeven}BE)\n`,
-    `Avg win ${money(stats.avgWin)}, avg loss ${money(stats.avgLoss)}, profit factor ${stats.profitFactor.toFixed(2)}, expectancy ${money(stats.expectancy)}/trade\n`,
-    `Largest win ${money(stats.largestWin)}, largest loss ${money(stats.largestLoss)}\n`,
-    `Long: ${money(stats.longPnl)} (${stats.longTrades} trades). Short: ${money(stats.shortPnl)} (${stats.shortTrades} trades)\n`,
-    `Avg hold time: ${duration(stats.avgHoldSeconds)}. Max win streak ${stats.maxWinStreak}, max loss streak ${stats.maxLossStreak}\n`,
-    `P&L by weekday: ${dow || 'n/a'}\n`,
-    `P&L by hour (ET): ${hours || 'n/a'}\n`,
-    `Best symbols: ${top.join('; ')}\n`,
-    `Worst symbols: ${worst.join('; ')}\n`,
-    `Open positions (still holding, no exit yet): ${open || 'none'} — total cost basis ${money(stats.openCostBasis)}\n`
-  ].join('')
-}
-
 /** One message in an AI Coach chat. */
 export interface ChatMessage {
   id: string
@@ -127,7 +88,35 @@ export interface ChatMessage {
   truncated?: boolean
   /** still streaming */
   pending?: boolean
+  /** what the chat shows instead of the raw prompt (e.g. "Analyze my trading") */
+  display?: string
+  /** this turn is (or answers) an "Analyze my trading" request */
+  kind?: 'analysis'
+  /** the PDF this reply was turned into (an "@pdf" reply, or saved from the bubble) */
+  pdf?: { file: string; name: string }
+  pdfError?: string
 }
+
+/** Options for one chat turn. */
+export interface SendOpts {
+  /** show this in the bubble instead of the prompt text */
+  display?: string
+  kind?: 'analysis'
+  /** title for a conversation this turn starts */
+  title?: string
+}
+
+/** The request "Analyze my trading" sends into the chat. */
+export const ANALYZE_PROMPT = [
+  'Analyze my trading in full, like a coach reviewing my journal. Use this structure:',
+  '## Overview — 2–3 sentences with the headline numbers, then the summary stat tiles chart.',
+  '## What’s working — strengths, with evidence (trades, $, win rates).',
+  '## Leaks — the biggest problems costing me money, each with its $ impact and specific trades.',
+  '## Risk & discipline — sizing, tilt after losses, stops, streaks, fees.',
+  '## Process fixes — 3–5 concrete, measurable rules for next week.',
+  '## The guide — one line each: **Do:**, **Don’t:**, **Watch for:**.',
+  'Back the points with charts from the journal where they help (for example the equity curve, P&L by hour or 15-minute slot, by weekday, by hold time, by symbol, wins vs losses, fees). Be direct and specific.'
+].join('\n')
 
 /** A saved coach conversation, as listed in the chat history rail. */
 export interface ChatSummary {
@@ -194,11 +183,11 @@ interface State {
 
   // AI coach
   hasAiKey: boolean
-  aiBusy: boolean
+  /** the latest "Analyze my trading" reply this session (for the report PDF) */
   aiText: string
-  aiProvider: string
-  aiModel: string
   aiError: string
+  /** id of the reply whose PDF is being made */
+  pdfBusyId: string | null
 
   // AI coach chat — saved per conversation in trades.db (history rail)
   chat: ChatMessage[]
@@ -243,8 +232,7 @@ interface State {
   deleteTrade: (account: string, hashes: string[]) => Promise<void>
   loadSectors: () => Promise<void>
   analyze: () => Promise<void>
-  cancelAi: () => Promise<void>
-  sendChat: (text: string) => Promise<void>
+  sendChat: (text: string, opts?: SendOpts) => Promise<void>
   stopChat: () => Promise<void>
   /** start a fresh conversation (the current one stays in history) */
   clearChat: () => void
@@ -252,9 +240,62 @@ interface State {
   openChat: (id: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
   exportChat: (format: 'pdf' | 'md') => Promise<string | null>
+  /** save one coach reply (and its continuations) as a colour PDF */
+  replyPdf: (id: string) => Promise<string | null>
+  openPdf: (file: string, reveal?: boolean) => Promise<void>
+  /** the AI Coach tab's "Export PDF": stats + charts + the latest analysis */
+  exportReport: () => Promise<string | null>
+  /** what source charts are drawn from (the journal in view) */
+  chartInputs: () => ChartInputs | null
+}
+
+/** A reply plus any "Continue" replies that followed it, as one text. */
+export function replyChainOf(chat: ChatMessage[], id: string): { content: string; ids: string[] } {
+  let i = chat.findIndex((m) => m.id === id)
+  if (i < 0) return { content: '', ids: [] }
+  // walk back to the first part (a continuation's prompt is CONTINUE_PROMPT)
+  while (i >= 2 && chat[i - 1]?.role === 'user' && chat[i - 1].content === CONTINUE_PROMPT && chat[i - 2]?.role === 'assistant') i -= 2
+  const ids: string[] = []
+  const parts: string[] = []
+  for (let k = i; k < chat.length; k += 2) {
+    const m = chat[k]
+    if (!m || m.role !== 'assistant') break
+    ids.push(m.id)
+    parts.push(m.content)
+    const next = chat[k + 1]
+    if (!next || next.role !== 'user' || next.content !== CONTINUE_PROMPT) break
+  }
+  return { content: parts.join(''), ids }
 }
 
 export const useTrades = create<State>((set, get) => {
+  /** Turn a reply (with its continuations) into a colour PDF — saved straight to
+   *  Documents/Stock Trading/Coach reports ('auto') or where the trader picks ('dialog'). */
+  async function makePdf(id: string, mode: 'auto' | 'dialog'): Promise<string | null> {
+    const st = get()
+    const chain = replyChainOf(st.chat, id)
+    if (!chain.content.trim()) return 'Nothing to put in a PDF yet.'
+    const directive = pdfDirective(chain.content)
+    const title = directive?.title || st.activeChatTitle || 'Coach report'
+    const html = reportToHtml(title, st.activeChatScope, chain.content, st.chartInputs())
+    const target = chain.ids[chain.ids.length - 1] ?? id
+    set({ pdfBusyId: target })
+    try {
+      const res = (await invoke('chat-pdf', { html, title, mode })) as Res & { file?: string; name?: string }
+      if (res.ok === true && res.file) {
+        const pdf = { file: String(res.file), name: String(res.name ?? res.file) }
+        set({ chat: get().chat.map((m) => (m.id === target ? { ...m, pdf, pdfError: undefined } : m)) })
+        return null
+      }
+      if ((res as Err).cancelled) return null
+      const error = (res as Err).error ?? 'The PDF could not be made.'
+      set({ chat: get().chat.map((m) => (m.id === target ? { ...m, pdfError: error } : m)) })
+      return error
+    } finally {
+      set({ pdfBusyId: null })
+    }
+  }
+
   /** Recompute trades/stats/metrics for the current account selection AND the
    *  global date-range filter. Closed trades outside the range are dropped;
    *  open positions always stay (they're current state, not period activity). */
@@ -379,10 +420,8 @@ export const useTrades = create<State>((set, get) => {
     sectorFocus: null,
 
     hasAiKey: false,
-    aiBusy: false,
     aiText: '',
-    aiProvider: '',
-    aiModel: '',
+    pdfBusyId: null,
     exportingSummary: false,
     aiError: '',
     chat: [],
@@ -585,7 +624,7 @@ export const useTrades = create<State>((set, get) => {
         }
         recompute((res.executions as Execution[]) ?? [])
         await get().refreshAccounts()
-        set({ status: account ? 'Account data cleared.' : 'All imported trade data cleared.', lastImport: null, aiText: '', aiProvider: '' })
+        set({ status: account ? 'Account data cleared.' : 'All imported trade data cleared.', lastImport: null, aiText: '' })
       } finally {
         set({ importing: false })
       }
@@ -659,8 +698,8 @@ export const useTrades = create<State>((set, get) => {
     },
 
     analyze: async () => {
-      const { stats, trades, aiBusy, hasAiKey } = get()
-      if (aiBusy) return
+      const { stats, hasAiKey, chatBusy } = get()
+      if (chatBusy) return
       if (!stats || stats.closedTrades === 0) {
         set({ aiError: 'Import some closed trades first.' })
         return
@@ -669,34 +708,21 @@ export const useTrades = create<State>((set, get) => {
         set({ aiError: 'No AI key set. Add an Anthropic, OpenAI, Gemini or DeepSeek key in Settings → API Keys.' })
         return
       }
-      set({ aiBusy: true, aiError: '', aiText: '', aiProvider: '', aiModel: '' })
-      try {
-        // ground the analysis in the strategy notes of the accounts being viewed
-        const { accounts, selectedAccounts } = get()
-        const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
-        const strategies = viewed.map((a) => ({ name: a.name, strategy: a.strategy || '' }))
-        const res = (await invoke('ai-analyze', { prompt: buildAiPrompt(stats, trades, strategies) })) as Res & {
-          text?: string
-          provider?: string
-          model?: string
-        }
-        if (res.ok !== true) {
-          set({ aiError: (res as Err).error ?? 'AI analysis failed.' })
-          return
-        }
-        set({ aiText: String(res.text ?? ''), aiProvider: String(res.provider ?? ''), aiModel: String(res.model ?? '') })
-      } finally {
-        set({ aiBusy: false })
-      }
+      set({ aiError: '' })
+      // every analysis gets its own conversation (earlier chats stay in the history rail)
+      get().clearChat()
+      const day = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      await get().sendChat(ANALYZE_PROMPT, { display: 'Analyze my trading', kind: 'analysis', title: `Trading analysis · ${day}` })
     },
 
-    cancelAi: async () => {
-      await invoke('cancel')
+    chartInputs: () => {
+      const { stats, trades, metrics } = get()
+      return stats ? { stats, trades, metrics } : null
     },
 
-    sendChat: async (raw) => {
+    sendChat: async (raw, opts = {}) => {
       const text = raw.trim()
-      const { chatBusy, stats, metrics, trades, accounts, selectedAccounts, rangeLabel, dayNotes, aiText } = get()
+      const { chatBusy, stats, metrics, trades, accounts, selectedAccounts, rangeLabel, dayNotes } = get()
       if (!text || chatBusy || !stats) return
       const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
       // rebuilt every message, so a different account/date range mid-chat is picked up
@@ -707,11 +733,12 @@ export const useTrades = create<State>((set, get) => {
         accounts: viewed.map((a) => ({ id: a.id, name: a.name, strategy: a.strategy || '', feePerContract: a.feePerContract || 0 })),
         rangeLabel,
         dayNotes,
-        analysis: aiText
+        analysis: ''
       })
       const history = get()
         .chat.filter((m) => !m.pending && m.content.trim()) // partial (stopped/cut-off) replies stay, so "Continue" works
-        .map((m) => ({ role: m.role, content: m.content }))
+        // frozen chart data is for display — the model only needs its own chart specs back
+        .map((m) => ({ role: m.role, content: m.role === 'assistant' ? stripChartData(m.content) : m.content }))
       const newId = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 
       // first message of a new conversation → it gets an id, title and scope
@@ -719,7 +746,7 @@ export const useTrades = create<State>((set, get) => {
         const scope = `${viewed.length === accounts.length && accounts.length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')} · ${rangeLabel || 'Lifetime'}`
         set({
           activeChatId: `c${newId()}`,
-          activeChatTitle: text.replace(/\s+/g, ' ').slice(0, 80),
+          activeChatTitle: (opts.title ?? opts.display ?? text).replace(/\s+/g, ' ').slice(0, 80),
           activeChatScope: scope,
           activeChatCreatedAt: Date.now()
         })
@@ -739,7 +766,11 @@ export const useTrades = create<State>((set, get) => {
 
       const replyId = newId()
       set({
-        chat: [...get().chat, { id: newId(), role: 'user', content: text }, { id: replyId, role: 'assistant', content: '', pending: true }],
+        chat: [
+          ...get().chat,
+          { id: newId(), role: 'user', content: text, ...(opts.display ? { display: opts.display } : {}), ...(opts.kind ? { kind: opts.kind } : {}) },
+          { id: replyId, role: 'assistant', content: '', pending: true, ...(opts.kind ? { kind: opts.kind } : {}) }
+        ],
         chatBusy: true
       })
       void persist()
@@ -749,6 +780,16 @@ export const useTrades = create<State>((set, get) => {
         const d = payload as { chatId?: string; text?: string }
         if (d.chatId === replyId && d.text) patch((m) => ({ ...m, content: m.content + d.text }))
       })
+      // source charts keep the numbers they were drawn with, even after the view changes
+      const freeze = (md: string): string => {
+        const inputs = get().chartInputs()
+        try {
+          return inputs ? freezeCharts(md, inputs) : md
+        } catch {
+          return md
+        }
+      }
+      let finished = false
       try {
         const res = (await invoke('ai-chat', { chatId: replyId, system, messages: [...history, { role: 'user', content: text }] })) as Res & {
           text?: string
@@ -756,17 +797,14 @@ export const useTrades = create<State>((set, get) => {
           partial?: string
           truncated?: boolean
         }
-        if (res.ok === true)
-          patch((m) => ({
-            ...m,
-            content: String(res.text ?? m.content),
-            provider: String(res.provider ?? ''),
-            truncated: res.truncated === true,
-            pending: false
-          }))
-        else {
+        if (res.ok === true) {
+          const content = freeze(String(res.text ?? ''))
+          patch((m) => ({ ...m, content: content || m.content, provider: String(res.provider ?? ''), truncated: res.truncated === true, pending: false }))
+          finished = res.truncated !== true
+          if (opts.kind === 'analysis') set({ aiText: content })
+        } else {
           const e = res as Err & { partial?: string }
-          patch((m) => ({ ...m, content: e.partial || m.content, error: e.error ?? 'The coach could not answer.', pending: false }))
+          patch((m) => ({ ...m, content: freeze(e.partial || m.content), error: e.error ?? 'The coach could not answer.', pending: false }))
         }
       } catch (err) {
         patch((m) => ({ ...m, error: err instanceof Error ? err.message : String(err), pending: false }))
@@ -775,9 +813,18 @@ export const useTrades = create<State>((set, get) => {
         set({ chatBusy: false })
         await persist()
       }
+      // "@pdf" replies become a PDF on their own (once the whole report has arrived)
+      if (finished && get().activeChatId === convId) {
+        const chain = replyChainOf(get().chat, replyId)
+        const directive = pdfDirective(chain.content)
+        if (directive) {
+          await makePdf(replyId, 'auto')
+          await persist()
+        }
+      }
     },
 
-    stopChat: async () => {
+        stopChat: async () => {
       await invoke('ai-chat-cancel')
     },
 
@@ -822,13 +869,41 @@ export const useTrades = create<State>((set, get) => {
       const messages = chat.filter((m) => !m.pending)
       if (!messages.length) return 'Nothing to export yet.'
       const meta = { title: activeChatTitle || 'Coach chat', scope: activeChatScope, createdAt: activeChatCreatedAt || Date.now() }
+      const inputs = get().chartInputs()
       const res = (await invoke('chat-export', {
         format,
         title: meta.title,
-        ...(format === 'md' ? { markdown: chatToMarkdown(meta, messages) } : { html: chatToHtml(meta, messages) })
+        ...(format === 'md' ? { markdown: chatToMarkdown(meta, messages, inputs) } : { html: chatToHtml(meta, messages, inputs) })
       })) as Res
       if (res.ok === true || (res as Err).cancelled) return null
       return (res as Err).error ?? 'Export failed.'
+    },
+
+    replyPdf: async (id) => {
+      const r = await makePdf(id, 'dialog')
+      const st = get()
+      if (st.activeChatId)
+        await invoke('chat-save', { id: st.activeChatId, title: st.activeChatTitle, scope: st.activeChatScope, messages: st.chat.filter((m) => !m.pending) })
+      return r
+    },
+
+    openPdf: async (file, reveal = false) => {
+      await invoke('open-file', { file, reveal })
+    },
+
+    exportReport: async () => {
+      const { stats, chat, aiText, accounts, selectedAccounts, rangeLabel } = get()
+      if (!stats || stats.closedTrades === 0) return 'Import some closed trades first.'
+      // the analysis on screen wins; otherwise the latest one this session
+      const lastAnalysis = [...chat].reverse().find((m) => m.role === 'assistant' && m.kind === 'analysis' && !m.pending && m.content.trim())
+      const analysis = lastAnalysis ? replyChainOf(chat, lastAnalysis.id).content : aiText
+      const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
+      const scope = `${viewed.length === accounts.length && accounts.length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')} · ${rangeLabel || 'Lifetime'}`
+      const html = reportToHtml('Trading report', scope, tradingReportMarkdown(analysis), get().chartInputs())
+      const res = (await invoke('chat-pdf', { html, title: 'Trading report', mode: 'dialog' })) as Res
+      if (res.ok === true || (res as Err).cancelled) return null
+      return (res as Err).error ?? 'PDF export failed.'
     }
   }
+
 })
