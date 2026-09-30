@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Format, GenerateRequest, Generated, ImageRef, ImageWeight, Job, LibraryItem, Model, ModuleSettings } from './types'
+import type { Format, GenerateRequest, Generated, ImageRef, ImageWeight, Job, KeyCheckResult, LibraryItem, Model, ModuleSettings } from './types'
 import { DEFAULT_SETTINGS } from './lib/models'
 
 export const ID = 'thumbnail-generator'
@@ -41,6 +41,10 @@ interface State {
 
   init: () => Promise<() => void>
   refreshKey: () => Promise<void>
+  /** last Re-check result (is a key set + does Pikzels accept it) */
+  keyCheck: KeyCheckResult | null
+  keyChecking: boolean
+  checkKey: () => Promise<KeyCheckResult>
   setTab: (t: Tab) => void
   setForm: (patch: Partial<CreateForm>) => void
   generate: () => Promise<void>
@@ -72,6 +76,8 @@ export const defaultForm: CreateForm = {
 export const useThumbs = create<State>((set, get) => ({
   ready: false,
   hasKey: false,
+  keyCheck: null,
+  keyChecking: false,
   settings: DEFAULT_SETTINGS,
   library: [],
   tab: 'create',
@@ -100,6 +106,19 @@ export const useThumbs = create<State>((set, get) => ({
   refreshKey: async () => {
     const key = (await inv('key-status')) as { hasKey: boolean }
     set({ hasKey: key.hasKey })
+  },
+
+  checkKey: async () => {
+    set({ keyChecking: true })
+    let r: KeyCheckResult
+    try {
+      r = (await inv('key-check')) as KeyCheckResult
+    } catch (err) {
+      r = { hasKey: get().hasKey, state: 'unreachable', message: `Check failed: ${err instanceof Error ? err.message : String(err)}`, at: Date.now() }
+    }
+    set({ keyChecking: false, keyCheck: r, hasKey: r.hasKey })
+    get().showToast(r.state === 'ok' ? 'ok' : r.state === 'unreachable' ? 'warn' : 'err', r.message)
+    return r
   },
 
   setTab: (tab) => {

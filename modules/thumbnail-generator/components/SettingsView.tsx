@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Coins, FolderOpen, KeyRound, RefreshCw } from 'lucide-react'
+import { CircleCheck, CircleX, Coins, FolderOpen, KeyRound, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react'
 import { inv, useThumbs } from '../store'
 import { fmtUsd, MODELS } from '../lib/models'
 import { btn, card, inputSm, label } from './ui'
@@ -25,9 +25,12 @@ export default function SettingsView(): React.JSX.Element {
           <p className="text-xs text-muted">
             {s.hasKey ? 'A key is set in the WICKED vault.' : 'No key yet.'} Keys live in <b>Settings → API Keys → Pikzels</b> (never inside this module).
           </p>
-          <button className={`${btn} mt-2`} onClick={() => void s.refreshKey()}>
-            <RefreshCw size={13} /> Re-check
-          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button className={btn} disabled={s.keyChecking} onClick={() => void s.checkKey()} title="Tests the key with Pikzels (no credits used)">
+              {s.keyChecking ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />} {s.keyChecking ? 'Checking…' : 'Re-check'}
+            </button>
+            {s.keyCheck && !s.keyChecking && <KeyCheckLine />}
+          </div>
         </section>
 
         <section className={`${card} p-5`}>
@@ -133,5 +136,20 @@ export default function SettingsView(): React.JSX.Element {
         </section>
       </div>
     </div>
+  )
+}
+
+function KeyCheckLine(): React.JSX.Element | null {
+  const r = useThumbs((st) => st.keyCheck)
+  if (!r) return null
+  const time = new Date(r.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+  const [Icon, tone] = r.state === 'ok' ? [CircleCheck, 'text-ok'] : r.state === 'unreachable' ? [TriangleAlert, 'text-warn'] : [CircleX, 'text-danger']
+  return (
+    <span className={`flex min-w-0 items-start gap-1.5 text-xs ${tone}`}>
+      <Icon size={14} className="mt-px shrink-0" />
+      <span className="min-w-0">
+        {r.message} <span className="text-muted">· checked {time}</span>
+      </span>
+    </span>
   )
 }

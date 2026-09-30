@@ -138,3 +138,11 @@ export interface ModuleSettings {
 export interface KeyStatus {
   hasKey: boolean
 }
+
+/** Result of Settings → Re-check: is a key set, and does Pikzels accept it? */
+export interface KeyCheckResult {
+  hasKey: boolean
+  state: 'missing' | 'ok' | 'rejected' | 'unreachable'
+  message: string
+  at: number
+}

@@ -52,18 +52,54 @@ export function ytPreview(url?: string): string | undefined {
   return m ? `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` : undefined
 }
 
-/** Thumbnail box that takes either a local path or a URL, at a fixed aspect. */
+const remoteCache = new Map<string, string>()
+const isWeb = (u?: string): u is string => !!u && /^https?:\/\//i.test(u)
+
+/**
+ * data URL for a web image (YouTube thumbnail, pasted link). The shell's CSP
+ * blocks remote <img> sources, so main downloads + shrinks it (cached both sides).
+ */
+export function useRemotePreview(url: string | undefined): { src: string | null; loading: boolean; error: string } {
+  const [st, setSt] = useState<{ src: string | null; loading: boolean; error: string }>(() => ({ src: url ? (remoteCache.get(url) ?? null) : null, loading: false, error: '' }))
+  useEffect(() => {
+    if (!isWeb(url)) return setSt({ src: null, loading: false, error: '' })
+    const hit = remoteCache.get(url)
+    if (hit) return setSt({ src: hit, loading: false, error: '' })
+    let alive = true
+    setSt({ src: null, loading: true, error: '' })
+    void (inv('remote-preview', { url }) as Promise<{ ok: boolean; dataUrl?: string; error?: string }>).then(
+      (r) => {
+        if (!alive) return
+        if (r.ok && r.dataUrl) {
+          remoteCache.set(url, r.dataUrl)
+          setSt({ src: r.dataUrl, loading: false, error: '' })
+        } else setSt({ src: null, loading: false, error: r.error ?? 'Couldn’t load the image' })
+      },
+      (err: unknown) => alive && setSt({ src: null, loading: false, error: String(err) })
+    )
+    return () => {
+      alive = false
+    }
+  }, [url])
+  return st
+}
+
+/** Thumbnail box that takes either a local path or a URL (web or data:), at a fixed aspect. */
 export function Thumb({ path, url, alt, aspect = '16/9', className = '' }: { path?: string; url?: string; alt?: string; aspect?: string; className?: string }): React.JSX.Element {
   const local = usePreview(path)
-  const src = local ?? url ?? null
+  const web = !local && isWeb(url)
+  const remote = useRemotePreview(web ? url : undefined)
+  const src = local ?? (web ? remote.src : url) ?? null
   const [broken, setBroken] = useState(false)
   useEffect(() => setBroken(false), [src])
   return (
     <div className={`relative overflow-hidden rounded-lg bg-black/30 ${className}`} style={{ aspectRatio: aspect }}>
       {src && !broken ? (
         <img src={src} alt={alt ?? ''} onError={() => setBroken(true)} className="h-full w-full object-cover" draggable={false} />
+      ) : web && remote.loading ? (
+        <div className="h-full w-full animate-pulse bg-raised/60" />
       ) : (
-        <div className="flex h-full w-full items-center justify-center text-muted/60">
+        <div className="flex h-full w-full items-center justify-center text-muted/60" title={remote.error || undefined}>
           <ImageOff size={18} />
         </div>
       )}

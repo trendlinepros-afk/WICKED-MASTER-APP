@@ -1,12 +1,14 @@
+import { nativeImage } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { basename, extname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
-import type { Format, GenerateRequest, Generated, ImageRef, Job, KeyStatus, LibraryItem, LibraryKind, Model, ModuleSettings, Score, TitleResult, YtLookup } from './types'
+import type { Format, GenerateRequest, Generated, ImageRef, Job, KeyCheckResult, KeyStatus, LibraryItem, LibraryKind, Model, ModuleSettings, Score, TitleResult, YtLookup } from './types'
 import { DEFAULT_SETTINGS, MODELS, modelInfo, modelRestriction, slug } from './lib/models'
 import { PikzelsClient, PikzelsError, type CreditInfo, type ThumbnailOut } from './ipc/pikzels'
 import { lookupYouTube } from './ipc/youtube'
+import { fetchRemotePreview, type Shrunk } from './ipc/remote-image'
 
 /* ------------------------------------------------------------------------ *
  *  THUMBNAIL GENERATOR — Pikzels v2 in a desktop UI.
@@ -28,6 +30,22 @@ const POLL_MS = 5000
 const POLL_MAX_MS = 20 * 60_000
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+const PREVIEW_MAX_W = 640
+const PREVIEW_CACHE_MAX = 400
+const PREVIEW_PARALLEL = 6
+
+/** Scale a web image down for on-screen previews (JPEG, or PNG to keep transparency). */
+function shrinkForPreview(buf: Buffer, mime: string): Shrunk | null {
+  try {
+    let img = nativeImage.createFromBuffer(buf)
+    if (img.isEmpty()) return null
+    if (img.getSize().width > PREVIEW_MAX_W) img = img.resize({ width: PREVIEW_MAX_W, quality: 'good' })
+    return mime === 'image/png' ? { data: img.toPNG(), mime: 'image/png' } : { data: img.toJPEG(82), mime: 'image/jpeg' }
+  } catch {
+    return null
+  }
+}
 
 export default function register(ctx: ModuleIpcContext): void {
   const dataDir = join(ctx.app.getPath('userData'), 'modules', ID)
@@ -308,6 +326,12 @@ export default function register(ctx: ModuleIpcContext): void {
   const h = ctx.ipcMain
 
   h.handle(`${ID}:key-status`, (): KeyStatus => ({ hasKey: !!ctx.getApiKey('pikzels') }))
+  h.handle(`${ID}:key-check`, async (): Promise<KeyCheckResult> => {
+    const key = ctx.getApiKey('pikzels')
+    if (!key) return { hasKey: false, state: 'missing', message: 'No Pikzels key in the WICKED vault yet — add it under Settings → API Keys → Pikzels.', at: Date.now() }
+    const r = await new PikzelsClient(key).checkKey()
+    return { hasKey: true, state: r.state, message: r.message, at: Date.now() }
+  })
   h.handle(`${ID}:settings`, (): ModuleSettings => settings())
   h.handle(`${ID}:settings-set`, (_e, patch: Partial<ModuleSettings>) => {
     const clean: Partial<ModuleSettings> = {}
@@ -615,6 +639,36 @@ export default function register(ctx: ModuleIpcContext): void {
       saveLibrary()
       if (st.status === 'processing') void pollItem(id)
       return { ok: true, item }
+    } catch (err) {
+      return { ok: false, error: errMsg(err) }
+    }
+  })
+
+  // web images (YouTube thumbnails, pasted links) → small data URL; the window can't load them directly
+  const remoteCache = new Map<string, Promise<string>>()
+  let remoteActive = 0
+  const remoteWaiting: (() => void)[] = []
+  const remoteSlot = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (remoteActive >= PREVIEW_PARALLEL) await new Promise<void>((r) => remoteWaiting.push(r))
+    remoteActive++
+    try {
+      return await fn()
+    } finally {
+      remoteActive--
+      remoteWaiting.shift()?.()
+    }
+  }
+  h.handle(`${ID}:remote-preview`, async (_e, a: { url: string }) => {
+    const url = String(a?.url ?? '').trim()
+    let p = remoteCache.get(url)
+    if (!p) {
+      p = remoteSlot(() => fetchRemotePreview(url, { shrink: shrinkForPreview }))
+      remoteCache.set(url, p)
+      p.catch(() => remoteCache.delete(url))
+      if (remoteCache.size > PREVIEW_CACHE_MAX) remoteCache.delete(remoteCache.keys().next().value as string)
+    }
+    try {
+      return { ok: true, dataUrl: await p }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }

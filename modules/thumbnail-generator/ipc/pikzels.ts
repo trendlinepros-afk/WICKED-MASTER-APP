@@ -67,6 +67,12 @@ export interface PikzonalityStatus {
   raw: Record<string, unknown>
 }
 
+export interface KeyCheck {
+  state: 'ok' | 'rejected' | 'unreachable'
+  status: number
+  message: string
+}
+
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -217,6 +223,29 @@ export class PikzelsClient {
     const id = String(json.id ?? json.pikzonality_id ?? (json.data as { id?: string } | undefined)?.id ?? '')
     if (!id) throw new PikzelsError(200, `Pikzels accepted the ${kind} but returned no id`)
     return { id, credits: creditInfo(json, headers) }
+  }
+
+  /**
+   * Is the key accepted? One GET for a persona id that can't exist — free (no
+   * generation), no retries. 401/403 = rejected; any other HTTP answer (404 for
+   * the made-up id) means Pikzels authenticated the request.
+   */
+  async checkKey(): Promise<KeyCheck> {
+    let resp: Response
+    try {
+      resp = await this.fetchFn(`${this.base}/v2/pikzonality/00000000-0000-0000-0000-000000000000`, {
+        method: 'GET',
+        headers: { 'X-Api-Key': this.apiKey, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000)
+      })
+    } catch (err) {
+      return { state: 'unreachable', status: 0, message: `Couldn’t reach Pikzels: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    const text = await resp.text().catch(() => '')
+    if (resp.status === 401 || resp.status === 403) return { state: 'rejected', status: resp.status, message: errorMessage(resp.status, text) }
+    if (resp.status === 429) return { state: 'ok', status: resp.status, message: 'Pikzels accepted the key (it’s rate-limiting right now — wait a moment before generating).' }
+    if (resp.status >= 500) return { state: 'unreachable', status: resp.status, message: `Pikzels is having trouble right now (HTTP ${resp.status}) — try again in a minute.` }
+    return { state: 'ok', status: resp.status, message: 'Pikzels accepted the key.' }
   }
 
   async getPikzonality(id: string): Promise<PikzonalityStatus> {

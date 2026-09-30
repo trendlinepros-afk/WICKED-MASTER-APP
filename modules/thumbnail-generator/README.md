@@ -33,6 +33,17 @@ links expire after ~24 h.
   link) → the channel's recent thumbnails are pulled from the public page
   (`ipc/youtube.ts`, no key; maxres → sd → hq fallback) → pick three → train.
   Personas from three face photos (files) or from thumbnails you appear in.
+- **Web image previews**: the shell's Content-Security-Policy only lets the
+  window show `self` / `data:` / `blob:` images, so YouTube thumbnails and
+  pasted image links are downloaded in main (`remote-preview` →
+  `ipc/remote-image.ts`: http(s) only, real images only (sniffed, no SVG), 15 MB
+  cap, 6 at a time) and shrunk to ≤ 640 px with `nativeImage` before being handed
+  over as a data URL (cached in main and in the renderer). Training still sends
+  Pikzels the full-size `i.ytimg.com` URLs.
+- **Settings → Re-check** (and the Create banner) tests the key: `key-check`
+  does one free `GET /v2/pikzonality/<made-up id>` — 401/403 = rejected, any
+  other answer = accepted, network/5xx = couldn't reach Pikzels — and shows the
+  result with the time it was checked.
 - **Downloads**: `<Downloads>/Thumbnail Generator/` (changeable), named
   `YYYY-MM-DD HHMM <prompt slug> vN.png`. Open / show-in-folder / score /
   recreate from every result card and from History.
@@ -55,7 +66,7 @@ only" vs "delete everywhere".
 - The docs we could reach don't pin down whether base64 images should be bare
   or `data:` URIs; bare is sent first and a 4xx is retried once as data URIs.
 - Training left in progress when the app closes resumes polling on next launch.
-- `ipc/pikzels.ts`, `ipc/youtube.ts` and `lib/models.ts` have no Electron
+- `ipc/pikzels.ts`, `ipc/youtube.ts`, `ipc/remote-image.ts` and `lib/models.ts` have no Electron
   imports and are covered by headless tests with a mocked `fetch`.
 
 ## MCP

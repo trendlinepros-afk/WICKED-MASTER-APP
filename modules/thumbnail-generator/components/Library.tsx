@@ -113,7 +113,7 @@ function Trainer({ kind, onClose }: { kind: LibraryKind; onClose: () => void }):
                   const on = isPicked(r)
                   return (
                     <button key={key(r)} onClick={() => toggle(r)} className={`relative rounded-lg border-2 ${on ? 'border-accent' : 'border-transparent'} ${!on && picked.length >= 3 ? 'opacity-50' : ''}`} title={r.label}>
-                      <Thumb path={r.path} url={r.preview ?? r.url} aspect={kind === 'persona' ? '1/1' : '16/9'} />
+                      <Thumb path={r.path} url={r.preview ?? r.url} aspect={kind === 'persona' && r.path ? '1/1' : '16/9'} />
                       {on && (
                         <span className="absolute left-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-accent text-accent-ink">
                           <Check size={12} />

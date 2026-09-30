@@ -188,8 +188,8 @@ export default function Create(): React.JSX.Element {
             <span className="flex-1">
               No Pikzels API key yet — add it under <b>Settings → API Keys → Pikzels</b>, then come back.
             </span>
-            <button className={btnSm} onClick={() => void s.refreshKey()}>
-              Re-check
+            <button className={btnSm} disabled={s.keyChecking} onClick={() => void s.checkKey()}>
+              {s.keyChecking ? 'Checking…' : 'Re-check'}
             </button>
           </div>
         )}
