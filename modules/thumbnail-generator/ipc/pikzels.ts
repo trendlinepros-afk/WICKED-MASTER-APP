@@ -20,10 +20,66 @@ const TIMEOUT_MS = 180_000
 
 export class PikzelsError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** request fields a VALIDATION_ERROR complained about (e.g. ['name']) */
+  fields: string[]
+  constructor(status: number, message: string, fields: string[] = []) {
     super(message)
     this.status = status
+    this.fields = fields
   }
+}
+
+type FieldIssue = { field: string; message: string }
+
+/** `details: [{field, message}]` wherever the error body nests it ({details} or {error: {details}}). */
+export function validationIssues(text: string): FieldIssue[] {
+  let j: unknown
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return []
+  }
+  const out: FieldIssue[] = []
+  const visit = (v: unknown, depth: number): void => {
+    if (!v || typeof v !== 'object' || depth > 3) return
+    if (Array.isArray(v)) {
+      for (const d of v) {
+        const o = d as Record<string, unknown>
+        if (o && typeof o === 'object' && (typeof o.field === 'string' || Array.isArray(o.loc))) {
+          const field = typeof o.field === 'string' ? o.field : String((o.loc as unknown[]).at(-1) ?? '')
+          out.push({ field, message: String(o.message ?? o.msg ?? '') })
+        }
+      }
+      return
+    }
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) if (/^(details|errors|detail|error)$/.test(k)) visit(x, depth + 1)
+  }
+  visit(j, 0)
+  return out
+}
+
+/**
+ * Names to try when Pikzels rejects one with a bare "Provide a valid name" (its
+ * rules aren't published): as typed, then camelCase split + symbols dropped,
+ * then shorter at word boundaries.
+ */
+export function nameCandidates(name: string): string[] {
+  const out: string[] = []
+  const add = (v: string): void => {
+    const t = v.replace(/\s+/g, ' ').trim()
+    if (t && !out.includes(t)) out.push(t)
+  }
+  const cut = (v: string, max: number): string => (v.length <= max ? v : v.slice(0, max + 1).replace(/\s+\S*$/, '').trim() || v.slice(0, max))
+  add(name)
+  const clean = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/[^\p{L}\p{N} _-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  add(clean)
+  for (const max of [32, 24, 20, 16, 12]) add(cut(clean, max))
+  return out
 }
 
 export interface ThumbnailOut {
@@ -103,6 +159,8 @@ export function creditInfo(body: Record<string, unknown> | null, headers?: Heade
 }
 
 function errorMessage(status: number, text: string): string {
+  const issues = validationIssues(text)
+  if (issues.length) return `Pikzels rejected the request (HTTP ${status}): ${issues.map((i) => `${i.field || 'request'} — ${i.message || 'invalid'}`).join('; ')}`
   let msg = ''
   try {
     const j = JSON.parse(text) as Record<string, unknown>
@@ -157,7 +215,7 @@ export class PikzelsClient {
         await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 1000 * 2 ** attempt + Math.random() * 500)
         continue
       }
-      throw new PikzelsError(resp.status, errorMessage(resp.status, text))
+      throw new PikzelsError(resp.status, errorMessage(resp.status, text), validationIssues(text).map((i) => i.field))
     }
   }
 
@@ -172,6 +230,8 @@ export class PikzelsClient {
       return await this.call('POST', path, body, signal)
     } catch (err) {
       if (!(err instanceof PikzelsError) || err.status < 400 || err.status >= 500 || err.status === 401 || err.status === 403 || err.status === 402 || err.status === 429 || !b64Keys.length) throw err
+      // a complaint about a non-image field (e.g. the name) won't be fixed by re-encoding the images
+      if (err.fields.length && !err.fields.some((f) => /image|base64/i.test(f))) throw err
       const alt: Record<string, unknown> = { ...body }
       const toUri = (v: string): string => (v.startsWith('data:') ? v : `data:image/jpeg;base64,${v}`)
       for (const k of b64Keys) alt[k] = Array.isArray(body[k]) ? (body[k] as string[]).map(toUri) : toUri(String(body[k]))
@@ -215,14 +275,29 @@ export class PikzelsClient {
     return { outputs, reasoning: String(json.reasoning ?? ''), prompt_compacted: String(json.prompt_compacted ?? ''), request_id: String(json.request_id ?? ''), credits: creditInfo(json, headers) }
   }
 
-  async createPikzonality(kind: 'persona' | 'style', name: string, images: { urls?: string[]; base64s?: string[] }): Promise<{ id: string; credits: CreditInfo }> {
+  /**
+   * Train a persona/style. If Pikzels rejects the name (a validation error, no
+   * credits spent) the next of `nameCandidates` is tried; `name` in the result
+   * is the one it accepted.
+   */
+  async createPikzonality(kind: 'persona' | 'style', name: string, images: { urls?: string[]; base64s?: string[] }): Promise<{ id: string; credits: CreditInfo; name: string }> {
     const imgs = images.urls?.length ? images.urls : (images.base64s ?? [])
     if (imgs.length !== 3) throw new PikzelsError(400, `Pikzels needs exactly 3 images to train a ${kind} (got ${imgs.length}).`)
-    const body: Record<string, unknown> = { name, ...(images.urls?.length ? { image_urls: images.urls } : { image_base64s: images.base64s }) }
-    const { json, headers } = await this.postImages(`/v2/pikzonality/${kind}`, body)
-    const id = String(json.id ?? json.pikzonality_id ?? (json.data as { id?: string } | undefined)?.id ?? '')
-    if (!id) throw new PikzelsError(200, `Pikzels accepted the ${kind} but returned no id`)
-    return { id, credits: creditInfo(json, headers) }
+    const tries = nameCandidates(name)
+    for (let i = 0; ; i++) {
+      const body: Record<string, unknown> = { name: tries[i], ...(images.urls?.length ? { image_urls: images.urls } : { image_base64s: images.base64s }) }
+      try {
+        const { json, headers } = await this.postImages(`/v2/pikzonality/${kind}`, body)
+        const id = String(json.id ?? json.pikzonality_id ?? (json.data as { id?: string } | undefined)?.id ?? '')
+        if (!id) throw new PikzelsError(200, `Pikzels accepted the ${kind} but returned no id`)
+        return { id, credits: creditInfo(json, headers), name: tries[i] }
+      } catch (err) {
+        const badName = err instanceof PikzelsError && (err.status === 400 || err.status === 422) && err.fields.includes('name')
+        if (!badName) throw err
+        if (i + 1 >= tries.length)
+          throw new PikzelsError(err.status, `Pikzels didn’t accept the name “${name}” (shorter versions were tried too). Use a short name — letters, numbers and spaces, about 20 characters or fewer.`, err.fields)
+      }
+    }
   }
 
   /**

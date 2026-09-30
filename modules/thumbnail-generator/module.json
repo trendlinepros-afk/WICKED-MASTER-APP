@@ -2,7 +2,7 @@
   "id": "thumbnail-generator",
   "name": "Thumbnail Generator",
   "icon": "ImagePlus",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "YouTube thumbnails with Pikzels — prompt or recreate, your face as a persona, channel-matched themes, scores and titles. Every result lands in Downloads.",
   "status": "stable"
 }

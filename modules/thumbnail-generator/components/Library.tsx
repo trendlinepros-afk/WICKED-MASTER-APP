@@ -52,17 +52,19 @@ function Trainer({ kind, onClose }: { kind: LibraryKind; onClose: () => void }):
     setYtLabel(`${r.kind === 'channel' ? 'Channel' : 'Video'} ${r.label ?? ''} — ${imgs.length} thumbnail${imgs.length === 1 ? '' : 's'}`)
     setPool(imgs)
     setPicked(imgs.slice(0, 3))
-    if (!name.trim() && r.kind === 'channel' && r.label) setName(`${r.label.replace(/^@/, '')} look`)
+    // "@TheEmotionalTraderMindset" → "The Emotional Trader Mindset look"
+    if (!name.trim() && r.kind === 'channel' && r.label) setName(`${r.label.replace(/^@/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_.-]+/g, ' ')} look`)
   }
 
   const train = async (): Promise<void> => {
     if (picked.length !== 3 || !name.trim() || busy) return
     setBusy(true)
     setError('')
-    const r = (await inv('train', { kind, name: name.trim(), images: picked.map(({ path, url }) => ({ path, url })), specialInstructions: instructions, sourceUrl: source === 'youtube' ? yt.trim() : '' })) as { ok: boolean; error?: string }
+    const r = (await inv('train', { kind, name: name.trim(), images: picked.map(({ path, url }) => ({ path, url })), specialInstructions: instructions, sourceUrl: source === 'youtube' ? yt.trim() : '' })) as { ok: boolean; error?: string; pikzelsName?: string }
     setBusy(false)
     if (!r.ok) return setError(r.error ?? 'Training failed to start')
-    s.showToast('ok', `Training the ${kindLabel(kind)} — usually a few minutes. It will show as ready in Library.`)
+    const renamed = r.pikzelsName ? ` Pikzels didn’t accept “${name.trim()}” as a name, so it’s “${r.pikzelsName}” on Pikzels (still “${name.trim()}” here).` : ''
+    s.showToast('ok', `Training the ${kindLabel(kind)} — usually a few minutes. It will show as ready in Library.${renamed}`)
     onClose()
   }
 
@@ -264,7 +266,9 @@ function ItemCard({ item }: { item: LibraryItem }): React.JSX.Element {
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
-                <span className="truncate text-sm font-semibold text-ink">{item.name}</span>
+                <span className="truncate text-sm font-semibold text-ink" title={item.pikzelsName ? `Named “${item.pikzelsName}” on Pikzels` : undefined}>
+                  {item.name}
+                </span>
                 <button className="text-muted hover:text-ink" onClick={() => setRenaming(true)} title="Rename">
                   <Pencil size={11} />
                 </button>

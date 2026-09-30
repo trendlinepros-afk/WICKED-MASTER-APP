@@ -525,6 +525,7 @@ export default function register(ctx: ModuleIpcContext): void {
         id: created.id,
         kind,
         name,
+        ...(created.name !== name ? { pikzelsName: created.name } : {}),
         status: 'processing',
         progress: 0,
         specialInstructions: '',
@@ -553,7 +554,7 @@ export default function register(ctx: ModuleIpcContext): void {
           }
         }
       })
-      return { ok: true, item }
+      return { ok: true, item, ...(created.name !== name ? { pikzelsName: created.name } : {}) }
     } catch (err) {
       return { ok: false, error: errMsg(err) }
     }

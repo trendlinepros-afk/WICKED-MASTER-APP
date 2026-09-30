@@ -14,6 +14,8 @@ export interface LibraryItem {
   id: string
   kind: LibraryKind
   name: string
+  /** the name Pikzels accepted, when it rejected `name` and a shorter one was used */
+  pikzelsName?: string
   status: TrainStatus
   progress: number
   /** current special instructions (empty = none) */

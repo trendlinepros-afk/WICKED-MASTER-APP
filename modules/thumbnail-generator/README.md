@@ -40,6 +40,13 @@ links expire after ~24 h.
   cap, 6 at a time) and shrunk to ≤ 640 px with `nativeImage` before being handed
   over as a data URL (cached in main and in the renderer). Training still sends
   Pikzels the full-size `i.ytimg.com` URLs.
+- **Names Pikzels rejects**: Pikzels doesn't publish its name rules and answers
+  some names (e.g. a 30-character one) with `VALIDATION_ERROR` → `name: Provide a
+  valid name.` Training then retries with `nameCandidates` (camelCase split,
+  symbols dropped, cut to 32/24/20/16/12 chars at word boundaries); a rejected
+  request costs no credits. The library keeps the name you typed and records the
+  accepted one as `pikzelsName` (tooltip on the card; the toast says so). Other
+  validation errors aren't retried and are shown as `field — message`.
 - **Settings → Re-check** (and the Create banner) tests the key: `key-check`
   does one free `GET /v2/pikzonality/<made-up id>` — 401/403 = rejected, any
   other answer = accepted, network/5xx = couldn't reach Pikzels — and shows the
