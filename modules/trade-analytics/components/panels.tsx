@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Archive,
+  ArchiveRestore,
   CalendarDays,
   Check,
   ChevronDown,
@@ -18,7 +20,7 @@ import {
   Wallet,
   X
 } from 'lucide-react'
-import { useTrades, type SummaryExportReq } from '../store'
+import { activeAccounts, useTrades, type Account, type SummaryExportReq } from '../store'
 import { RANGE_PRESETS, type RangePreset } from '../lib/range'
 import { computeStats } from '../lib/analytics'
 import type { MetricBucket, BucketHighlights, TradeMetrics } from '../lib/metrics'
@@ -37,6 +39,7 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
   const toggle = useTrades((s) => s.toggleAccount)
   const selectAll = useTrades((s) => s.selectAllAccounts)
   const [open, setOpen] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -47,12 +50,35 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
     return () => window.removeEventListener('mousedown', onDown)
   }, [])
 
+  const active = activeAccounts(accounts)
+  const archived = accounts.filter((a) => a.archived)
+  const archivedOn = archived.filter((a) => selected.includes(a.id))
+  const allActiveOn = active.length > 0 && active.every((a) => selected.includes(a.id))
   const viewing =
     selected.length === 0
       ? 'All accounts'
-      : selected.length === 1
-        ? accounts.find((a) => a.id === selected[0])?.name ?? '1 account'
-        : `${selected.length} accounts`
+      : allActiveOn && archivedOn.length
+        ? `All accounts + ${archivedOn.length === 1 ? archivedOn[0].name : `${archivedOn.length} archived`}`
+        : selected.length === 1
+          ? accounts.find((a) => a.id === selected[0])?.name ?? '1 account'
+          : `${selected.length} accounts`
+
+  const row = (a: Account): React.JSX.Element => {
+    const on = selected.includes(a.id)
+    return (
+      <button
+        key={a.id}
+        onClick={() => toggle(a.id)}
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-raised"
+      >
+        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-accent bg-accent text-accent-ink' : 'border-edge'}`}>
+          {on && <Check size={11} />}
+        </span>
+        <span className={`min-w-0 truncate ${a.archived && !on ? 'text-muted' : ''}`}>{a.name}</span>
+        <span className="ml-auto shrink-0 text-xs text-muted">{num(a.executions)}</span>
+      </button>
+    )
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-edge bg-surface/60 px-4 py-2">
@@ -66,34 +92,37 @@ export function AccountsBar({ onManage }: { onManage: () => void }): React.JSX.E
           <ChevronDown size={13} className="text-muted" />
         </button>
         {open && (
-          <div className="absolute left-0 z-30 mt-1 w-64 rounded-xl border border-edge bg-surface p-1 shadow-2xl">
+          <div className="absolute left-0 z-30 mt-1 w-72 rounded-xl border border-edge bg-surface p-1 shadow-2xl">
             <button
               onClick={() => selectAll()}
               className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-raised"
             >
               <span className="w-[15px] shrink-0">{selected.length === 0 && <Check size={13} className="text-accent" />}</span>
               <span className="font-medium">All accounts</span>
-              <span className="ml-auto text-xs text-muted">stacked</span>
+              <span className="ml-auto text-xs text-muted">{archived.length ? 'active only' : 'stacked'}</span>
             </button>
             <div className="my-1 h-px bg-edge" />
-            <div className="max-h-64 overflow-y-auto">
-              {accounts.map((a) => {
-                const on = selected.includes(a.id)
-                return (
-                  <button
-                    key={a.id}
-                    onClick={() => toggle(a.id)}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-raised"
-                  >
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-accent bg-accent text-accent-ink' : 'border-edge'}`}>
-                      {on && <Check size={11} />}
-                    </span>
-                    <span className="min-w-0 truncate">{a.name}</span>
-                    <span className="ml-auto shrink-0 text-xs text-muted">{num(a.executions)}</span>
-                  </button>
-                )
-              })}
-            </div>
+            <div className="max-h-64 overflow-y-auto">{active.map(row)}</div>
+            {archived.length > 0 && (
+              <>
+                <div className="my-1 h-px bg-edge" />
+                <button
+                  onClick={() => setShowArchived((v) => !v)}
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs font-semibold text-muted hover:bg-raised hover:text-ink"
+                >
+                  <Archive size={12} className="shrink-0" />
+                  <span className="whitespace-nowrap">Archived accounts ({archived.length})</span>
+                  {archivedOn.length > 0 && <span className="ml-auto whitespace-nowrap font-normal text-accent">{archivedOn.length} included</span>}
+                  <ChevronDown size={12} className={`shrink-0 transition-transform ${archivedOn.length ? '' : 'ml-auto'} ${showArchived || archivedOn.length ? 'rotate-180' : ''}`} />
+                </button>
+                {(showArchived || archivedOn.length > 0) && (
+                  <div className="max-h-48 overflow-y-auto">
+                    {archived.map(row)}
+                    <p className="px-2.5 pb-1 text-[11px] text-muted">Left out of All accounts — check one to include its trades.</p>
+                  </div>
+                )}
+              </>
+            )}
             <p className="px-2.5 py-1 text-[11px] text-muted">Check multiple to stack their results together.</p>
           </div>
         )}
@@ -230,7 +259,8 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
   const importing = useTrades((s) => s.importing)
   const importDialog = useTrades((s) => s.importDialog)
   const createAccount = useTrades((s) => s.createAccount)
-  const [account, setAccount] = useState(importAccount || accounts[0]?.id || 'default')
+  const targets = activeAccounts(accounts)
+  const [account, setAccount] = useState(importAccount || targets[0]?.id || 'default')
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
 
@@ -271,7 +301,7 @@ export function ImportModal({ onClose }: { onClose: () => void }): React.JSX.Ele
                 onChange={(e) => setAccount(e.target.value)}
                 className="min-w-0 flex-1 cursor-pointer rounded-lg border border-edge bg-raised px-2.5 py-2 text-sm text-ink outline-none focus:border-accent [&>option]:bg-surface"
               >
-                {accounts.map((a) => (
+                {targets.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>
@@ -380,13 +410,18 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
   const setAccountFee = useTrades((s) => s.setAccountFee)
   const del = useTrades((s) => s.deleteAccount)
   const clearAll = useTrades((s) => s.clearAll)
+  const setArchived = useTrades((s) => s.setAccountArchived)
   const [newName, setNewName] = useState('')
   const [confirmDel, setConfirmDel] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const active = activeAccounts(accounts)
+  const archived = accounts.filter((a) => a.archived)
+  const lastActive = active.length <= 1
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div
-        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-edge bg-surface"
+        className="flex max-h-[80vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-edge bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-edge px-4 py-3">
@@ -425,7 +460,7 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {accounts.map((a) => (
+          {active.map((a) => (
             <div key={a.id} className="flex items-center gap-2 border-b border-edge/50 px-4 py-2.5 last:border-b-0">
               <AccountNameField key={`${a.id}:${a.name}`} name={a.name} onSave={(v) => void rename(a.id, v)} />
               <label
@@ -452,6 +487,14 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
               </label>
               <span className="shrink-0 text-xs text-muted">{num(a.executions)} exec</span>
               <Pencil size={12} className="shrink-0 text-muted" />
+              <button
+                onClick={() => void setArchived(a.id, true)}
+                disabled={lastActive}
+                title={lastActive ? 'Keep at least one active account — add a new one first' : 'Archive: keep its trades but leave it out of All accounts'}
+                className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <Archive size={12} /> Archive
+              </button>
               <button
                 onClick={() => void clearAll(a.id)}
                 title="Clear this account's trades (keeps the account)"
@@ -482,8 +525,65 @@ export function ManageAccountsModal({ onClose }: { onClose: () => void }): React
               )}
             </div>
           ))}
+          {archived.length > 0 && (
+            <div className="border-t border-edge">
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className="flex w-full items-center gap-2 bg-raised/40 px-4 py-2.5 text-left text-sm font-medium text-ink hover:bg-raised"
+              >
+                <Archive size={14} className="text-muted" />
+                Archived accounts
+                <span className="rounded-full bg-raised px-1.5 text-xs text-muted">{archived.length}</span>
+                <span className="ml-auto text-[11px] font-normal text-muted">not in All accounts</span>
+                <ChevronDown size={14} className={`text-muted transition-transform ${showArchived ? 'rotate-180' : ''}`} />
+              </button>
+              {showArchived &&
+                archived.map((a) => (
+                  <div key={a.id} className="flex items-center gap-2 border-t border-edge/50 px-4 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm text-ink/80">{a.name}</div>
+                      <div className="text-[11px] text-muted">
+                        {num(a.executions)} exec
+                        {a.archivedAt ? ` · archived ${new Date(a.archivedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void setArchived(a.id, false)}
+                      title="Un-archive: back into your active accounts and All accounts"
+                      className="flex shrink-0 items-center gap-1 rounded-lg border border-edge px-2 py-1 text-xs font-medium text-ink hover:border-accent hover:text-accent"
+                    >
+                      <ArchiveRestore size={12} /> Un-archive
+                    </button>
+                    {a.id === 'default' ? (
+                      <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase text-muted">default</span>
+                    ) : confirmDel === a.id ? (
+                      <button
+                        onClick={() => {
+                          void del(a.id)
+                          setConfirmDel('')
+                        }}
+                        className="shrink-0 rounded-lg bg-danger px-2 py-1 text-xs font-medium text-white"
+                      >
+                        Delete?
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDel(a.id)}
+                        title="Delete account and its trades"
+                        className="shrink-0 rounded-md p-1.5 text-muted hover:bg-danger/15 hover:text-danger"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
         <p className="border-t border-edge px-4 py-2 text-[11px] text-muted">
+          <strong className="text-ink">Archive</strong> keeps an account&apos;s trades but leaves it out of{' '}
+          <em>All accounts</em> — tick it under <em>Viewing</em> to include it, or un-archive it.
+          <br />
           Imports never mix between accounts — each account is matched into round trips on its own. Deleting an
           account also deletes its imported trades.
           <br />
@@ -1454,11 +1554,14 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
   const busy = useTrades((s) => s.exportingSummary)
   const hasAiKey = useTrades((s) => s.hasAiKey)
 
-  // start from the accounts the dashboard is showing (empty selection = all)
+  // start from the accounts the dashboard is showing (empty selection = all active)
+  const active = activeAccounts(accounts)
+  const archived = accounts.filter((a) => a.archived)
   const [picked, setPicked] = useState<string[]>(() =>
-    selected.length ? selected.filter((id) => accounts.some((a) => a.id === id)) : accounts.map((a) => a.id)
+    selected.length ? selected.filter((id) => accounts.some((a) => a.id === id)) : active.map((a) => a.id)
   )
-  const allPicked = accounts.length > 0 && picked.length === accounts.length
+  // "All accounts" = every active account (archived ones only when ticked)
+  const allPicked = active.length > 0 && active.every((a) => picked.includes(a.id)) && !archived.some((a) => picked.includes(a.id))
   const toggle = (id: string): void => setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   // start from whatever range the dashboard is currently filtered to
   const [preset, setPreset] = useState<RangePreset>(useTrades.getState().rangePreset)
@@ -1513,24 +1616,31 @@ export function ExportSummaryModal({ onClose }: { onClose: () => void }): React.
                     ref={(el) => {
                       if (el) el.indeterminate = picked.length > 0 && !allPicked
                     }}
-                    onChange={() => setPicked(allPicked ? [] : accounts.map((a) => a.id))}
+                    onChange={() => setPicked(allPicked ? [] : active.map((a) => a.id))}
                     className="accent-[rgb(var(--wk-accent))]"
                   />
                   <span className="font-medium">All accounts</span>
                 </label>
               )}
               <div className="max-h-48 overflow-y-auto">
-                {accounts.map((a) => (
-                  <label key={a.id} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-edge/40">
-                    <input
-                      type="checkbox"
-                      checked={picked.includes(a.id)}
-                      onChange={() => toggle(a.id)}
-                      className="accent-[rgb(var(--wk-accent))]"
-                    />
-                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                    <span className="shrink-0 text-[11px] text-muted">{a.executions.toLocaleString()} fills</span>
-                  </label>
+                {[...active, ...archived].map((a, i) => (
+                  <div key={a.id}>
+                    {a.archived && i === active.length && (
+                      <div className="flex items-center gap-1.5 border-t border-edge px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                        <Archive size={11} /> Archived — tick to include
+                      </div>
+                    )}
+                    <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-edge/40">
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(a.id)}
+                        onChange={() => toggle(a.id)}
+                        className="accent-[rgb(var(--wk-accent))]"
+                      />
+                      <span className={`min-w-0 flex-1 truncate ${a.archived ? 'text-muted' : ''}`}>{a.name}</span>
+                      <span className="shrink-0 text-[11px] text-muted">{a.executions.toLocaleString()} fills</span>
+                    </label>
+                  </div>
                 ))}
               </div>
             </div>

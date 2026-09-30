@@ -23,7 +23,7 @@ import {
   X
 } from 'lucide-react'
 import { SHELL_IPC, type ApiProviderId } from '@shared/types'
-import { ID, useTrades, type Tab, type TradeDraft } from './store'
+import { activeAccounts, ID, useTrades, type Tab, type TradeDraft } from './store'
 import type { Trade } from './lib/analytics'
 import { etDateTime, etInputToEpoch, etInputValue } from './lib/et'
 import { dateTime, duration, money, num, pct, shares, signedMoney } from './lib/format'
@@ -490,6 +490,7 @@ function TradeEditor({ trade, onClose }: { trade: Trade | null; onClose: () => v
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
+                    {a.archived ? ' (archived)' : ''}
                   </option>
                 ))}
               </select>
@@ -743,7 +744,7 @@ function StrategyCard(): React.JSX.Element {
   const accounts = useTrades((s) => s.accounts)
   const selected = useTrades((s) => s.selectedAccounts)
   const save = useTrades((s) => s.setAccountStrategy)
-  const [accountId, setAccountId] = useState(selected.length === 1 ? selected[0] : accounts[0]?.id ?? 'default')
+  const [accountId, setAccountId] = useState(selected.length === 1 ? selected[0] : (activeAccounts(accounts)[0]?.id ?? accounts[0]?.id ?? 'default'))
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0]
   const [text, setText] = useState(account?.strategy ?? '')
   const [savedTick, setSavedTick] = useState(false)
@@ -780,6 +781,7 @@ function StrategyCard(): React.JSX.Element {
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
+                  {a.archived ? ' (archived)' : ''}
                 </option>
               ))}
             </select>

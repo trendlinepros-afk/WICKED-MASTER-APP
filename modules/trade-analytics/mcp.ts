@@ -14,19 +14,19 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__accounts`,
       description:
-        'List the trading accounts (id, name, execution count). Use an account id OR name to scope the summary / trades / list-executions tools. Read-only.',
+        'List the trading accounts (id, name, execution count, archived flag). Archived accounts are left out of every "all accounts" result; use an account id OR name to scope the summary / trades / list-executions tools to any account, archived or not. Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:accounts-list`)
     },
     {
       name: `${ID}__summary`,
       description:
-        'PRECISE account P&L and stats, computed exactly like the app UI (FIFO round-trips per symbol, accounts kept fully separate). Returns realized P&L, closed/open trade counts, win rate, profit factor, expectancy, gross/avg win & loss, largest win/loss, best/worst symbol, per-symbol P&L, and current open positions with cost basis. This is the correct tool for "how much did I make / how am I doing" — do NOT sum raw executions yourself. Optionally scope with `account` (id or name); omit to get every account reported independently plus a combined view. Read-only.',
+        'PRECISE account P&L and stats, computed exactly like the app UI (FIFO round-trips per symbol, accounts kept fully separate). Returns realized P&L, closed/open trade counts, win rate, profit factor, expectancy, gross/avg win & loss, largest win/loss, best/worst symbol, per-symbol P&L, and current open positions with cost basis. This is the correct tool for "how much did I make / how am I doing" — do NOT sum raw executions yourself. Optionally scope with `account` (id or name); omit to get every account reported independently (archived ones flagged) plus a combined view of the ACTIVE accounts — archived accounts are excluded from it, like "All accounts" in the app. Read-only.',
       inputSchema: {
         account: z
           .string()
           .optional()
-          .describe('Account id or name to scope to, e.g. "Webull - TrendLine Trading". Omit for all accounts + combined.')
+          .describe('Account id or name to scope to, e.g. "Webull - TrendLine Trading". Omit for every account + a combined view of the active ones.')
       },
       handler: (args) => ctx.invoke(`${ID}:summary`, args.account)
     },
@@ -35,7 +35,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       description:
         'The matched round-trip trades and open positions, computed FIFO per symbol per account — each with direction, quantity, average entry & exit price, realized P&L, % return, entry/exit timestamps, hold time and status (closed/open). Use this to inspect or list individual trades. Read-only.',
       inputSchema: {
-        account: z.string().optional().describe('Account id or name to scope to. Omit for all accounts (kept FIFO-separate).'),
+        account: z.string().optional().describe('Account id or name to scope to. Omit for all active (non-archived) accounts, kept FIFO-separate.'),
         status: z.enum(['all', 'open', 'closed']).optional().describe('Filter by trade status (default all).'),
         limit: z.number().optional().describe('Max trades to return, newest first (default 100, max 500).')
       },

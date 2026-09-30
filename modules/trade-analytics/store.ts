@@ -21,6 +21,26 @@ export interface Account {
   feePerContract: number
   /** the trader's own strategy description — grounds the AI coach's analysis */
   strategy: string
+  /** archived: kept, but left out of "All accounts" until checked explicitly */
+  archived?: boolean
+  archivedAt?: number
+}
+
+/** Accounts that "All accounts" covers (everything that isn't archived). */
+export function activeAccounts(accounts: Account[]): Account[] {
+  return accounts.filter((a) => !a.archived)
+}
+
+/** The accounts in view: the explicit selection, or every active account when nothing is picked. */
+export function viewedAccounts(accounts: Account[], selected: string[]): Account[] {
+  return selected.length > 0 ? accounts.filter((a) => selected.includes(a.id)) : activeAccounts(accounts)
+}
+
+/** "All accounts", one name, or the names in view — for chat / report scope lines. */
+export function scopeLabel(accounts: Account[], selected: string[], rangeLabel: string): string {
+  const viewed = viewedAccounts(accounts, selected)
+  const who = selected.length === 0 && activeAccounts(accounts).length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')
+  return `${who} · ${rangeLabel || 'Lifetime'}`
 }
 
 /** "Export Account Summary" request (PDF; built in main via printHtmlToPdf). */
@@ -211,6 +231,7 @@ interface State {
   setImportAccount: (id: string) => void
   toggleAccount: (id: string) => void
   selectAllAccounts: () => void
+  setAccountArchived: (id: string, archived: boolean) => Promise<void>
   setRange: (preset: RangePreset, startYmd?: string, endYmd?: string) => void
   loadNotes: () => Promise<void>
   setDayNote: (date: string, text: string) => Promise<void>
@@ -304,7 +325,14 @@ export const useTrades = create<State>((set, get) => {
     selected: string[] = get().selectedAccounts,
     sectors: Record<string, string> = get().sectors
   ): void => {
-    const filtered = selected.length > 0 ? all.filter((e) => selected.includes(e.account || 'default')) : all
+    // nothing picked = "All accounts" = every account except the archived ones
+    const archived = new Set(get().accounts.filter((a) => a.archived).map((a) => a.id))
+    const filtered =
+      selected.length > 0
+        ? all.filter((e) => selected.includes(e.account || 'default'))
+        : archived.size
+          ? all.filter((e) => !archived.has(e.account || 'default'))
+          : all
     const allTrades = buildTradesByAccount(filtered)
     const { rangePreset, rangeStartYmd, rangeEndYmd } = get()
     const closed = allTrades.filter((t) => !t.isOpen && t.closedAt != null)
@@ -322,12 +350,13 @@ export const useTrades = create<State>((set, get) => {
    *  the union of their notes, read-only (ambiguous which account to write to). */
   const recomputeNotesView = (): void => {
     const { allDayNotes, selectedAccounts, accounts } = get()
-    const ids = selectedAccounts.length > 0 ? selectedAccounts : accounts.map((a) => a.id)
+    const active = activeAccounts(accounts)
+    const ids = selectedAccounts.length > 0 ? selectedAccounts : active.map((a) => a.id)
     const single =
       selectedAccounts.length === 1
         ? selectedAccounts[0]
-        : selectedAccounts.length === 0 && accounts.length === 1
-          ? accounts[0].id
+        : selectedAccounts.length === 0 && active.length === 1
+          ? active[0].id
           : null
     const merged: Record<string, string> = {}
     for (const id of ids) {
@@ -449,10 +478,16 @@ export const useTrades = create<State>((set, get) => {
     setImportAccount: (id) => set({ importAccount: id }),
 
     toggleAccount: (id) => {
-      const cur = get().selectedAccounts
+      const { selectedAccounts: cur, accounts } = get()
       const has = cur.includes(id)
-      // never allow an empty selection → fall back to all accounts
-      const next = has ? cur.filter((x) => x !== id) : [...cur, id]
+      const isArchived = accounts.find((a) => a.id === id)?.archived === true
+      // checking an archived account while "All accounts" is on ADDS it to all
+      // the active ones (that's how its metrics get included); an empty
+      // selection falls back to "All accounts"
+      let next = has ? cur.filter((x) => x !== id) : cur.length === 0 && isArchived ? [...activeAccounts(accounts).map((a) => a.id), id] : [...cur, id]
+      // exactly every active account checked (and nothing archived) is just "All accounts"
+      const active = activeAccounts(accounts).map((a) => a.id)
+      if (next.length === active.length && active.length > 1 && active.every((x) => next.includes(x))) next = []
       set({ selectedAccounts: next })
       recompute(get().allExecutions, next)
       recomputeNotesView()
@@ -461,6 +496,24 @@ export const useTrades = create<State>((set, get) => {
       set({ selectedAccounts: [] })
       recompute(get().allExecutions, [])
       recomputeNotesView()
+    },
+
+    setAccountArchived: async (id, archived) => {
+      const res = (await invoke('accounts-archive', { id, archived })) as Res & { accounts?: Account[] }
+      if (res.ok !== true) {
+        set({ error: (res as Err).error ?? (archived ? 'Could not archive the account.' : 'Could not un-archive the account.') })
+        return
+      }
+      // archiving takes the account out of view; un-archiving puts it back in "All accounts"
+      let sel = get().selectedAccounts
+      if (archived) {
+        sel = sel.filter((x) => x !== id)
+        const active = activeAccounts(res.accounts ?? []).map((a) => a.id)
+        // "every active account" explicitly checked is the same as All accounts
+        if (sel.length && sel.length === active.length && active.every((x) => sel.includes(x))) sel = []
+      }
+      set({ accounts: res.accounts ?? get().accounts, selectedAccounts: sel })
+      await get().refreshAccounts()
     },
 
     setRange: (preset, startYmd, endYmd) => {
@@ -510,14 +563,15 @@ export const useTrades = create<State>((set, get) => {
       const res = (await invoke('accounts-list')) as Res & { accounts?: Account[] }
       if (res.ok === true) {
         const accounts = res.accounts ?? []
-        // keep importAccount valid
-        const importAccount = accounts.some((a) => a.id === get().importAccount)
+        // keep importAccount valid — new imports never land in an archived account
+        const importAccount = accounts.some((a) => a.id === get().importAccount && !a.archived)
           ? get().importAccount
-          : accounts[0]?.id ?? 'default'
+          : (activeAccounts(accounts)[0]?.id ?? accounts[0]?.id ?? 'default')
         // drop any selected ids that no longer exist
         const validSel = get().selectedAccounts.filter((id) => accounts.some((a) => a.id === id))
         set({ accounts, importAccount, selectedAccounts: validSel })
-        if (validSel.length !== get().selectedAccounts.length) recompute(get().allExecutions, validSel)
+        // the archived set decides what "All accounts" covers, so always rebuild
+        recompute(get().allExecutions, validSel)
         recomputeNotesView() // account set/selection may have changed
       }
     },
@@ -724,7 +778,7 @@ export const useTrades = create<State>((set, get) => {
       const text = raw.trim()
       const { chatBusy, stats, metrics, trades, accounts, selectedAccounts, rangeLabel, dayNotes } = get()
       if (!text || chatBusy || !stats) return
-      const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
+      const viewed = viewedAccounts(accounts, selectedAccounts)
       // rebuilt every message, so a different account/date range mid-chat is picked up
       const system = buildChatContext({
         stats,
@@ -743,7 +797,7 @@ export const useTrades = create<State>((set, get) => {
 
       // first message of a new conversation → it gets an id, title and scope
       if (!get().activeChatId) {
-        const scope = `${viewed.length === accounts.length && accounts.length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')} · ${rangeLabel || 'Lifetime'}`
+        const scope = scopeLabel(accounts, selectedAccounts, rangeLabel)
         set({
           activeChatId: `c${newId()}`,
           activeChatTitle: (opts.title ?? opts.display ?? text).replace(/\s+/g, ' ').slice(0, 80),
@@ -897,8 +951,7 @@ export const useTrades = create<State>((set, get) => {
       // the analysis on screen wins; otherwise the latest one this session
       const lastAnalysis = [...chat].reverse().find((m) => m.role === 'assistant' && m.kind === 'analysis' && !m.pending && m.content.trim())
       const analysis = lastAnalysis ? replyChainOf(chat, lastAnalysis.id).content : aiText
-      const viewed = selectedAccounts.length > 0 ? accounts.filter((a) => selectedAccounts.includes(a.id)) : accounts
-      const scope = `${viewed.length === accounts.length && accounts.length > 1 ? 'All accounts' : viewed.map((a) => a.name).join(', ')} · ${rangeLabel || 'Lifetime'}`
+      const scope = scopeLabel(accounts, selectedAccounts, rangeLabel)
       const html = reportToHtml('Trading report', scope, tradingReportMarkdown(analysis), get().chartInputs())
       const res = (await invoke('chat-pdf', { html, title: 'Trading report', mode: 'dialog' })) as Res
       if (res.ok === true || (res as Err).cancelled) return null

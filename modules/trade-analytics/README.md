@@ -239,6 +239,18 @@ If data from an older build ended up in more than one account, a **"Clean up
 duplicates"** banner appears — it keeps each fill in a single account (the
 earliest-created named account that holds it) and removes the extra copies, which
 also fixes inflated open-position counts.
+
+**Archived accounts.** In **Manage Accounts**, each account has an **Archive**
+button. Archiving keeps every trade but moves the account into a collapsible
+**Archived accounts** section (with its archive date, **Un-archive** and delete),
+and leaves it **out of "All accounts"** — every tab, the AI Coach, the Export
+Account Summary and the MCP "all accounts" views count active accounts only. To
+include an archived account, tick it under **Viewing → Archived accounts** (from
+"All accounts" that stacks it on top of all active accounts, shown as "All
+accounts + <name>"). **Un-archive** puts it back in the active list and in All
+accounts. The last active account can't be archived (add another first), and
+imports never target an archived account. Stored as `accounts.archivedAt`
+(epoch ms, `0` = active; IPC `accounts-archive {id, archived}`).
 - **Breakdown** — market-open / power-hour cells, a full-width **weekday ×
   15-minute heatmap** (ET close time; hour headers, day totals, an "All days"
   row, hover for P&L · trades · W/L — `weekdayQuarter*` in `lib/metrics.ts`),
@@ -294,7 +306,7 @@ also fixes inflated open-position counts.
   AI verdict) for a timeframe preset or custom dates. **Tick any combination of
   accounts** (it starts from the accounts you're viewing); several are combined
   into one report, each account's positions still FIFO-matched on their own.
-  Built in main (`export-summary`, `accounts: string[]`, `[]` = all) and printed
+  Built in main (`export-summary`, `accounts: string[]`, `[]` = all active) and printed
   with the shell's `printHtmlToPdf`.
 
 Charts are hand-rolled SVG (no chart dependency) using the shell theme tokens, so
@@ -305,11 +317,12 @@ they track light/dark automatically.
 - Data: `%APPDATA%/WICKED-Suite/modules/trade-analytics/trades.db` (SQLite; picked
   up by the shell's Backup & Restore automatically).
 - MCP tools (read-only unless noted):
-  - `trade-analytics__accounts` — list accounts (id, name, execution count) to scope the others.
+  - `trade-analytics__accounts` — list accounts (id, name, execution count, `archived`) to scope the others.
   - `trade-analytics__summary` — **precise, UI-matching P&L + stats** (realized P&L,
     win rate, profit factor, expectancy, per-symbol P&L, open positions), computed with
     the same FIFO engine as the dashboard. Optional `account` (id or name); omit for every
-    account + a combined view. This is the tool an agent should use for P&L — **not** raw
+    account + a combined view of the **active** accounts (archived ones are listed, flagged,
+    but left out of the combined numbers). This is the tool an agent should use for P&L — **not** raw
     executions.
   - `trade-analytics__trades` — matched round-trip trades / open positions with entry, exit,
     realized P&L, % return, hold time and status. Optional `account`, `status`, `limit`.
