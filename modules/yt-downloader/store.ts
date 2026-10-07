@@ -59,6 +59,8 @@ export interface Probe {
   canChooseSingle: boolean
   /** title of just the track, when canChooseSingle */
   singleTitle: string | null
+  /** how many of its videos are already in the downloaded-songs list */
+  alreadyHave?: number
 }
 
 export interface Progress {
@@ -91,6 +93,9 @@ export interface DownloadJob {
   /** "Fix missing song info" totals (audio jobs) */
   fixTags?: boolean
   tags?: TagSummary | null
+  /** songs skipped because they were downloaded before: by video id (before
+   *  downloading) and as the same song under another video (after) */
+  dupes?: { before: number; after: number } | null
 }
 
 export interface DriveJobInfo {
@@ -161,6 +166,11 @@ interface State {
   fixTags: boolean
   /** setting: with fixTags, swap in the official album cover */
   officialArt: boolean
+  /** setting: music downloads skip songs already downloaded before */
+  skipDuplicates: boolean
+  /** how many songs are on the downloaded-songs list */
+  libraryCount: number
+  libraryOpen: boolean
   /** songs waiting for the user (MusicBrainz couldn't identify them) */
   reviewItems: ReviewItem[]
   /** the "Song info needed" window: null = closed; jobId narrows it to one download */
@@ -183,6 +193,9 @@ interface State {
   setCombineClips: (v: boolean) => Promise<void>
   setCombineShuffle: (v: boolean) => Promise<void>
   clearMusicOverride: () => void
+  setSkipDuplicates: (v: boolean) => Promise<void>
+  loadLibraryCount: () => Promise<void>
+  setLibraryOpen: (v: boolean) => void
   setFixTags: (v: boolean) => Promise<void>
   setOfficialArt: (v: boolean) => Promise<void>
   loadReview: () => Promise<void>
@@ -227,6 +240,9 @@ export const useYt = create<State>((set, get) => ({
   drive: null,
   fixTags: true,
   officialArt: true,
+  skipDuplicates: true,
+  libraryCount: 0,
+  libraryOpen: false,
   reviewItems: [],
   reviewOpen: null,
 
@@ -287,6 +303,18 @@ export const useYt = create<State>((set, get) => ({
     set({ musicOverride: false, quality: musicFormat })
   },
 
+  setSkipDuplicates: async (v) => {
+    set({ skipDuplicates: v })
+    await invoke('prefs-set', { skipDuplicates: v })
+  },
+
+  loadLibraryCount: async () => {
+    const res = await invoke<Res & { total?: number }>('library-list', { limit: 1 }).catch(() => null)
+    if (res?.ok) set({ libraryCount: Number((res as unknown as { total?: number }).total) || 0 })
+  },
+
+  setLibraryOpen: (v) => set({ libraryOpen: v }),
+
   setFixTags: async (v) => {
     set({ fixTags: v })
     await invoke('prefs-set', { fixTags: v })
@@ -325,7 +353,7 @@ export const useYt = create<State>((set, get) => ({
   dismissError: () => set({ error: '' }),
 
   loadPrefs: async () => {
-    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean; combineShuffle?: boolean; fixTags?: boolean; officialArt?: boolean }>('prefs-get')
+    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean; combineShuffle?: boolean; fixTags?: boolean; officialArt?: boolean; skipDuplicates?: boolean }>('prefs-get')
     if (res.ok)
       set({
         musicAudioOnly: res.musicAudioOnly !== false,
@@ -333,7 +361,8 @@ export const useYt = create<State>((set, get) => ({
         combineClips: res.combineClips === true,
         combineShuffle: res.combineShuffle === true,
         fixTags: res.fixTags !== false,
-        officialArt: res.officialArt !== false
+        officialArt: res.officialArt !== false,
+        skipDuplicates: res.skipDuplicates !== false
       })
   },
 
@@ -411,7 +440,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, fixTags, officialArt, jobs } = get()
+    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, fixTags, officialArt, skipDuplicates, jobs } = get()
     if (!url.trim()) return
     if (jobs.filter(isJobActive).length >= MAX_JOBS) {
       set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
@@ -444,7 +473,8 @@ export const useYt = create<State>((set, get) => ({
       toDrive,
       drive: null,
       fixTags: fixTags && isAudioPreset(quality),
-      tags: null
+      tags: null,
+      dupes: null
     }
     // new card on top; keep the finished-card history bounded. The form resets
     // so the next task can be set up while this one runs.
@@ -469,6 +499,7 @@ export const useYt = create<State>((set, get) => ({
       toDrive,
       fixTags,
       officialArt,
+      skipDuplicates,
       title: probe?.title ?? ''
     }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
 
@@ -517,6 +548,9 @@ export const useYt = create<State>((set, get) => ({
       combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
       drive?: DriveJobInfo | null
       tags?: TagSummary | null
+      dupes?: { before: number; after: number } | null
+      before?: number
+      after?: number
       // tag extras (kind: 'tags')
       fixed?: number
       complete?: number
@@ -544,6 +578,8 @@ export const useYt = create<State>((set, get) => ({
         message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
       }))
+    } else if (p.kind === 'dupes') {
+      patchJob(() => ({ dupes: { before: Number(p.before) || 0, after: Number(p.after) || 0 } }))
     } else if (p.kind === 'tags') {
       patchJob(() => ({
         tags: {
@@ -612,14 +648,18 @@ export const useYt = create<State>((set, get) => ({
         : ''
       const drivePatch = {
         ...(d ? { drive: { ...d, pending: 0, current: null, percent: 0, done: true } } : {}),
-        ...(p.tags ? { tags: { ...p.tags, pending: 0, current: null } } : {})
+        ...(p.tags ? { tags: { ...p.tags, pending: 0, current: null } } : {}),
+        ...(p.dupes ? { dupes: p.dupes } : {})
       }
       if (p.cancelled) {
         patchJob(() => ({ state: 'cancelled', message: 'Download cancelled.', progress: null }))
       } else if (p.ok === true && !p.warning) {
         patchJob(() => ({
           state: (c && !c.ok && !c.cancelled) || (d && d.failed > 0) ? 'warning' : 'done',
-          message: d ? `Done —${driveMsg}${combineMsg}` : `Done — downloaded ${Number(p.completed) || ''} item(s).${combineMsg}`,
+          message:
+            p.dupes && p.dupes.before + p.dupes.after > 0 && !(Number(p.completed) || 0) && !(d?.uploaded ?? 0)
+              ? `Nothing new — all ${p.dupes.before + p.dupes.after} song(s) were already downloaded.`
+              : `${d ? `Done —${driveMsg}` : `Done — downloaded ${Number(p.completed) || ''} item(s).`}${p.dupes && p.dupes.before + p.dupes.after > 0 ? ` ${p.dupes.before + p.dupes.after} already downloaded before (skipped).` : ''}${combineMsg}`,
           combinedInfo,
           progress: null,
           ...drivePatch

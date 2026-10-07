@@ -288,7 +288,7 @@ export function parseProgressLine(line: string): Progress | { note: string } | n
   const m = s.match(/^\[(download|Merger|ExtractAudio|youtube:tab|info)\]\s+(.*)$/)
   if (m) {
     const msg = m[2]
-    if (/Destination:|Downloading item|Merging|Extracting audio|Downloading \d+ items/.test(msg))
+    if (/Destination:|Downloading item|Merging|Extracting audio|Downloading \d+ items|has already been recorded in the archive|has already been downloaded/.test(msg))
       return { note: msg }
   }
   return null

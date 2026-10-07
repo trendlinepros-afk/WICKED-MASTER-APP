@@ -50,6 +50,10 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           .optional()
           .describe('Stitch in RANDOM order (default false = oldest → newest / playlist order). File names stay numbered oldest-first either way.'),
         title: z.string().optional().describe('Optional title used to name the combined movie file.'),
+        skipDuplicates: z
+          .boolean()
+          .optional()
+          .describe('Music: skip songs already downloaded before (same video, or the same song under another video) — default: the app setting, normally on. See yt-downloader__downloaded-songs.'),
         fixTags: z
           .boolean()
           .optional()
@@ -78,6 +82,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           shuffle: args.randomize === true,
           toDrive: args.toDrive === true,
           fixTags: typeof args.fixTags === 'boolean' ? args.fixTags : undefined,
+          skipDuplicates: typeof args.skipDuplicates === 'boolean' ? args.skipDuplicates : undefined,
           officialArt: typeof args.officialArt === 'boolean' ? args.officialArt : undefined,
           title: args.title
         })
@@ -96,6 +101,33 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         'Cancel running downloads (up to 3 can run at once; this cancels all of them). Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:cancel`)
+    },
+    {
+      name: `${ID}__downloaded-songs`,
+      description:
+        'The list of songs already downloaded (from any playlist, to this PC or Google Drive) — what music downloads skip as duplicates. Each has the video id, the title/artist it is saved as, the original YouTube name, playlist, where it lives and when. Optional search query. Read-only.',
+      inputSchema: {
+        query: z.string().optional().describe('Search title, artist, album, original name, playlist or file name.'),
+        limit: z.number().int().min(1).max(500).optional()
+      },
+      handler: (args) => ctx.invoke(`${ID}:library-list`, { query: args.query ?? '', limit: args.limit ?? 50 })
+    },
+    {
+      name: `${ID}__forget-downloaded-songs`,
+      description:
+        'Remove songs from the downloaded-songs list so they can be downloaded again (files are NOT deleted). Pass video ids, or all=true for the whole list. Requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        videoIds: z.array(z.string()).optional(),
+        all: z.boolean().optional(),
+        confirm: z.boolean().optional().describe('Set true to proceed.')
+      },
+      handler: (args) => {
+        const ids = Array.isArray(args.videoIds) ? (args.videoIds as string[]) : []
+        const gate = ctx.confirm(args.confirm as boolean | undefined, args.all ? 'Forget EVERY downloaded song, so any of them can be downloaded again (files stay).' : `Forget ${ids.length} downloaded song(s) so they can be downloaded again (files stay).`)
+        if (gate) return gate
+        return ctx.invoke(`${ID}:library-forget`, args.all ? { all: true } : { videoIds: ids })
+      }
     },
     {
       name: `${ID}__songs-needing-info`,

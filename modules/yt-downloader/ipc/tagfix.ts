@@ -28,12 +28,20 @@ export interface TagFixDeps {
   write: (path: string, probed: ProbedSong, tags: SongTags, art: Art | null) => Promise<void>
 }
 
+export interface ReadyInfo {
+  tags: SongTags
+  /** as downloaded, before any fix */
+  original: SongTags
+  recordingId?: string
+  durationMs: number | null
+}
+
 export interface TagFixOpts {
   officialArt: boolean
   isHeld: (path: string) => boolean
   hold: (path: string, info: Pick<ReviewItem, 'current' | 'guess' | 'hasArt' | 'durationMs'>) => void
-  /** the song is done (fixed, complete, skipped) — pass it on */
-  onReady: (path: string) => void
+  /** the song is done (fixed, complete, skipped) — pass it on, with its final tags when known */
+  onReady: (path: string, info?: ReadyInfo) => void
   onProgress: (s: TagSummary) => void
   /** persisted list of handled paths, so a resumed job doesn't redo them */
   processedFile?: string
@@ -141,10 +149,11 @@ export class TagFixer {
       return
     }
     const a = assessTags(probed.tags)
+    const asIs: ReadyInfo = { tags: probed.tags, original: probed.tags, durationMs: probed.durationMs }
     if (a.complete && !this.opts.officialArt) {
       this.s.complete++
       this.markDone(path)
-      this.opts.onReady(path)
+      this.opts.onReady(path, asIs)
       return
     }
 
@@ -155,7 +164,7 @@ export class TagFixer {
       // MusicBrainz down / offline: don't hold the song hostage
       this.s.skipped++
       this.s.note = err instanceof MbUnavailable ? err.message : `Lookup failed: ${err instanceof Error ? err.message : String(err)}`
-      this.opts.onReady(path) // not marked done — a resume tries again
+      this.opts.onReady(path, asIs) // not marked done — a resume tries again
       return
     }
     if (this.aborted) return
@@ -164,7 +173,7 @@ export class TagFixer {
       this.markDone(path)
       if (a.complete) {
         this.s.complete++
-        this.opts.onReady(path)
+        this.opts.onReady(path, asIs)
       } else {
         this.s.needsInfo++
         this.opts.hold(path, { current: probed.tags, guess: a.guess, hasArt: probed.hasArt, durationMs: probed.durationMs })
@@ -188,6 +197,7 @@ export class TagFixer {
         /* keep YouTube's cover */
       }
     if (this.aborted) return
+    let final = next
     if (!art && tagsEqual(probed.tags, next)) this.s.complete++
     else
       try {
@@ -196,9 +206,10 @@ export class TagFixer {
       } catch (err) {
         this.s.skipped++
         this.s.note = err instanceof Error ? err.message : String(err)
+        final = probed.tags
       }
     this.markDone(path)
-    this.opts.onReady(path)
+    this.opts.onReady(path, { tags: final, original: probed.tags, recordingId: best.recordingId, durationMs: probed.durationMs })
   }
 }
 

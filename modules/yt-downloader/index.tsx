@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CloudUpload,
+  CopyCheck,
   Download,
   ExternalLink,
   Film,
@@ -30,6 +31,7 @@ import {
 } from './store'
 import { JobProgress } from './progress'
 import { ReviewModal } from './review'
+import { LibraryModal } from './library'
 import type { ReviewItem } from './lib/songinfo'
 
 function fmtDuration(sec: number | null): string {
@@ -54,6 +56,7 @@ function wireDownloadEvents(): void {
   window.wicked.on(`${ID}:progress`, (p) => useYt.getState()._onProgress(p))
   window.wicked.on(`${ID}:status-msg`, (m) => useYt.getState()._onStatusMsg(m))
   window.wicked.on(`${ID}:review`, (items) => useYt.setState({ reviewItems: (items as ReviewItem[]) ?? [] }))
+  window.wicked.on(`${ID}:library-count`, (n) => useYt.setState({ libraryCount: Number(n) || 0 }))
 }
 
 export default function YtDownloader(): React.JSX.Element {
@@ -66,6 +69,7 @@ export default function YtDownloader(): React.JSX.Element {
     void s.loadPrefs()
     void s.loadDrive()
     void s.loadReview()
+    void s.loadLibraryCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -131,6 +135,13 @@ export default function YtDownloader(): React.JSX.Element {
         <div className="flex items-center gap-2">
           {binReady && (
             <>
+              <button
+                onClick={() => s.setLibraryOpen(true)}
+                className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
+                title="Every song downloaded so far — music downloads skip these"
+              >
+                <CopyCheck size={14} /> Downloaded songs <span className="text-muted">{s.libraryCount.toLocaleString()}</span>
+              </button>
               <button
                 onClick={() => void s.openFolder()}
                 className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
@@ -246,6 +257,21 @@ export default function YtDownloader(): React.JSX.Element {
                       {s.probe.uploader && <div className="truncate text-xs text-muted">{s.probe.uploader}</div>}
                     </div>
                   </div>
+                  {(s.probe.alreadyHave ?? 0) > 0 && musicMode && (
+                    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${s.skipDuplicates ? 'border-ok/40 bg-ok/10' : 'border-warn/40 bg-warn/10'}`}>
+                      <CopyCheck size={14} className={`mt-px shrink-0 ${s.skipDuplicates ? 'text-ok' : 'text-warn'}`} />
+                      <span>
+                        <strong>
+                          {s.probe.kind === 'playlist' ? `${s.probe.alreadyHave} of ${s.probe.count}` : 'This song'} already downloaded
+                        </strong>
+                        {s.skipDuplicates
+                          ? s.probe.kind === 'playlist'
+                            ? ` — they'll be skipped; ${Math.max(0, s.probe.count - (s.probe.alreadyHave ?? 0))} new to download.`
+                            : ' — it will be skipped.'
+                          : ' — "Skip songs I\'ve already downloaded" is off, so they\'ll download again.'}
+                      </span>
+                    </div>
+                  )}
 
                   {/* track vs whole playlist — YT Music song links carry an
                       auto-radio/album list, so make the choice explicit */}
@@ -425,6 +451,34 @@ export default function YtDownloader(): React.JSX.Element {
               </p>
             </div>
 
+            {/* skip songs downloaded before (music downloads) */}
+            {musicMode && (
+              <div className="rounded-xl border border-edge bg-surface p-4">
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={s.skipDuplicates}
+                    onChange={(e) => void s.setSkipDuplicates(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      <CopyCheck size={14} className="text-accent" />
+                      Skip songs I&apos;ve already downloaded
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted">
+                      Every downloaded song is kept on a list ({s.libraryCount.toLocaleString()} so far) — with the name it was
+                      downloaded as and the name it was saved as. Songs on it are skipped before downloading, and the same song
+                      from a different video (lyric video, re-upload) is caught once its info is known.{' '}
+                      <button type="button" className="font-medium text-accent hover:underline" onClick={() => s.setLibraryOpen(true)}>
+                        View the list
+                      </button>
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+
             {/* fix missing song info (music downloads) */}
             {musicMode && (
               <div className="rounded-xl border border-edge bg-surface p-4">
@@ -579,6 +633,7 @@ export default function YtDownloader(): React.JSX.Element {
         </div>
       </div>
       {s.reviewOpen && <ReviewModal jobId={s.reviewOpen.jobId} onClose={s.closeReview} />}
+      {s.libraryOpen && <LibraryModal onClose={() => s.setLibraryOpen(false)} />}
     </div>
   )
 }
@@ -673,6 +728,17 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
           ) : (
             <div className="mt-1 text-muted">Each file uploads as soon as it finishes downloading.</div>
           )}
+        </div>
+      )}
+
+      {/* songs skipped because they were downloaded before */}
+      {job.dupes && job.dupes.before + job.dupes.after > 0 && (
+        <div className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-edge bg-raised/30 px-3 py-2 text-xs">
+          <CopyCheck size={13} className="text-ok" />
+          <span className="font-medium">{job.dupes.before + job.dupes.after} already downloaded</span>
+          <span className="text-muted">
+            — skipped{job.dupes.after ? ` (${job.dupes.after} found as the same song under another video)` : ''}
+          </span>
         </div>
       )}
 

@@ -154,6 +154,36 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
   some were skipped.
 - Re-downloading is safe — yt-dlp skips files already present.
 
+## Downloaded songs + skipping duplicates (music downloads)
+
+Every audio file this module downloads is recorded in
+`modules/yt-downloader/downloaded-songs.json` (`ipc/library.ts: SongLibrary`):
+YouTube video id (from the `[<id>]` in the file name), the title/artist it was
+**downloaded as** and the title/artist/album it was **saved as** (after "Fix
+missing song info" or a manual edit — `renamedAt`), MusicBrainz recording id,
+length, playlist, where it lives (this PC path / Drive file id / *pending* while
+uploading or waiting for info) and when. Header button **Downloaded songs (N)**
+opens the list: search, **Forget** a song (or **Forget all…**) so it can be
+downloaded again — files are never touched — and **Add songs already
+downloaded** (scans the download folder and `WICKED Vault/YouTube Downloads` in
+Drive for `[<id>]` audio files; the download folder is also scanned once on the
+first launch with the list, when no download is running).
+
+With **Skip songs I've already downloaded** (music setting, on by default):
+
+- **Before downloading**: every known video id (and alias) is written into the
+  job's yt-dlp `--download-archive` file, so yt-dlp skips them without
+  downloading. **Check** shows "N of M already downloaded".
+- **Same song, different video** (official audio vs lyric video, a re-upload):
+  each finished song is checked against the list *before* the MusicBrainz lookup
+  (its own title/artist + length) and again *after* (fixed info, MusicBrainz
+  recording id). A match = same recording id, or same cleaned title + main
+  artist + length within 3 s (`findSame`; remixes, live versions and other
+  lengths don't match). The copy is deleted (not uploaded) and its video id kept
+  as an **alias**, so the next playlist skips it up front.
+- The job card shows "**N already downloaded** — skipped"; a playlist with
+  nothing new says so. Video downloads (and combine) are unaffected.
+
 ## Fix missing song info (music downloads)
 
 A setting shown in Music mode, **on by default**, with a sub-option **Use the
@@ -252,7 +282,9 @@ connected.
 - MCP: `yt-downloader__status` / `__probe` (read-only; status includes
   `googleDrive.connected`), `__download` (destructive, confirm-gated — writes
   files, can run long; optional `combine`, `toDrive`, `fixTags`, `officialArt`),
-  `__update`, `__cancel`; song info: `__songs-needing-info` and
+  `__update`, `__cancel`; downloaded songs: `__downloaded-songs` (read-only,
+  searchable) and `__forget-downloaded-songs` (confirm-gated); download also takes
+  `skipDuplicates`; song info: `__songs-needing-info` and
   `__search-song-info` (read-only), `__save-song-info` and `__save-songs-as-is`
   (destructive, confirm-gated).
 

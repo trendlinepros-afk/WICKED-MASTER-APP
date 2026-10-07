@@ -25,11 +25,12 @@ import {
 import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/combine'
 import { DRIVE_ROOT_NAME, DriveSink, leftoverMedia, readDoneList, type DriveProgress } from './ipc/drive'
 import { getDriveProvider } from '../file-vault/ipc/shared'
-import { findByName, findOrCreateSubfolder, md5File, resumableUpload } from '../file-vault/ipc/gdrive'
+import { findByName, findOrCreateSubfolder, listFolder, md5File, resumableUpload } from '../file-vault/ipc/gdrive'
 import { MusicBrainz, mbUserAgent } from './ipc/musicbrainz'
 import { extractArt, probeSong, readImage, writeSongTags, type Art } from './ipc/tagio'
-import { ReviewStore, TagFixer, type TagFixDeps } from './ipc/tagfix'
-import { sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
+import { ReviewStore, TagFixer, type ReadyInfo, type TagFixDeps } from './ipc/tagfix'
+import { SongLibrary, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT } from './ipc/library'
+import { assessTags, emptyTags, sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
 
 /* ------------------------------------------------------------------------ *
  *  YT DOWNLOADER — main process.
@@ -58,6 +59,7 @@ const COMBINE_KEY = `${ID}.combineClips`
 const COMBINE_SHUFFLE_KEY = `${ID}.combineShuffle`
 const FIX_TAGS_KEY = `${ID}.fixTags`
 const OFFICIAL_ART_KEY = `${ID}.officialArt`
+const SKIP_DUPES_KEY = `${ID}.skipDuplicates`
 const PROBE_TIMEOUT_MS = 90_000
 const MAX_JOBS = 3
 const RESUME_DELAY_MS = 8000
@@ -75,6 +77,8 @@ interface PendingJob {
   /** "Fix missing song info" (MusicBrainz) for audio downloads */
   fixTags?: boolean
   officialArt?: boolean
+  /** music: skip songs already in the downloaded-songs list */
+  skipDuplicates?: boolean
   title: string
   startedAt: number
   attempts: number
@@ -131,6 +135,8 @@ export default function register(ctx: ModuleIpcContext): void {
   const review = new ReviewStore(join(moduleDir(), 'review.json'), (items) => send(`${ID}:review`, items))
   // one shared client: MusicBrainz allows 1 request/second per app
   const mb = new MusicBrainz(mbUserAgent(ctx.app.getVersion()))
+  // every song ever downloaded (so the same song is never downloaded twice)
+  const library = new SongLibrary(join(moduleDir(), 'downloaded-songs.json'), (total) => send(`${ID}:library-count`, total))
 
   // Drive jobs download into <temp>/WICKED YouTube to Drive/<jobId>; a folder
   // whose job isn't about to resume (and holds no song waiting for review) is
@@ -249,7 +255,7 @@ export default function register(ctx: ModuleIpcContext): void {
    * link is a song, so grabbing video is almost never what's wanted.
    * ---------------------------------------------------------------------- */
 
-  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean; combineShuffle: boolean; fixTags: boolean; officialArt: boolean } => {
+  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean; combineShuffle: boolean; fixTags: boolean; officialArt: boolean; skipDuplicates: boolean } => {
     const fmt = ctx.storeGet<string>(MUSIC_FORMAT_KEY, 'audio')
     return {
       musicAudioOnly: ctx.storeGet<boolean>(MUSIC_AUDIO_ONLY_KEY, true) !== false,
@@ -258,7 +264,8 @@ export default function register(ctx: ModuleIpcContext): void {
       combineShuffle: ctx.storeGet<boolean>(COMBINE_SHUFFLE_KEY, false) === true,
       // "Fix missing song info" + official album art: ON by default for music
       fixTags: ctx.storeGet<boolean>(FIX_TAGS_KEY, true) !== false,
-      officialArt: ctx.storeGet<boolean>(OFFICIAL_ART_KEY, true) !== false
+      officialArt: ctx.storeGet<boolean>(OFFICIAL_ART_KEY, true) !== false,
+      skipDuplicates: ctx.storeGet<boolean>(SKIP_DUPES_KEY, true) !== false
     }
   }
 
@@ -273,6 +280,7 @@ export default function register(ctx: ModuleIpcContext): void {
     if (typeof r.combineShuffle === 'boolean') ctx.storeSet(COMBINE_SHUFFLE_KEY, r.combineShuffle)
     if (typeof r.fixTags === 'boolean') ctx.storeSet(FIX_TAGS_KEY, r.fixTags)
     if (typeof r.officialArt === 'boolean') ctx.storeSet(OFFICIAL_ART_KEY, r.officialArt)
+    if (typeof r.skipDuplicates === 'boolean') ctx.storeSet(SKIP_DUPES_KEY, r.skipDuplicates)
     return { ok: true, ...prefs() }
   })
 
@@ -362,6 +370,83 @@ export default function register(ctx: ModuleIpcContext): void {
 
   const dataUrl = (a: Art): string => `data:${a.mime};base64,${a.data.toString('base64')}`
 
+  /** Delete a duplicate song and its same-name cover thumbnail. */
+  function removeSongFile(path: string): void {
+    rmSync(path, { force: true })
+    const stem = basename(path).replace(/\.[^.]+$/, '')
+    try {
+      for (const n of readdirSync(dirname(path)))
+        if (n.startsWith(`${stem}.`) && /\.(jpe?g|png|webp)$/i.test(n)) rmSync(join(dirname(path), n), { force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /* --------------------------- downloaded songs --------------------------- */
+
+  /** Add songs already on disk / in Drive (from before the list existed). */
+  async function scanExisting(includeDrive: boolean): Promise<{ local: number; drive: number; error?: string }> {
+    let local = 0
+    let drive = 0
+    for (const f of findDownloadedSongs(downloadDir())) {
+      if (library.has(f.videoId)) continue
+      const { artist, title } = parseSongFileName(f.fileName)
+      library.record({ videoId: f.videoId, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.fileName, location: 'local', path: f.path, driveFileId: '', playlist: basename(dirname(f.path)), jobId: '', downloadedAt: Date.now() })
+      local++
+    }
+    const d = includeDrive ? getDriveProvider() : null
+    if (d?.status().connected)
+      try {
+        const token = await d.getToken()
+        const root = await findOrCreateSubfolder(token, DRIVE_ROOT_NAME, await d.vaultFolderId())
+        const walk = async (folderId: string, folderName: string, depth: number): Promise<void> => {
+          if (depth > 4) return
+          for (const f of await listFolder(token, folderId)) {
+            if (f.mimeType === 'application/vnd.google-apps.folder') await walk(f.id, f.name, depth + 1)
+            else {
+              const id = videoIdOf(f.name)
+              const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
+              if (!id || !AUDIO_EXT.has(ext) || library.has(id)) continue
+              const { artist, title } = parseSongFileName(f.name)
+              library.record({ videoId: id, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.name, location: 'drive', path: '', driveFileId: f.id, playlist: folderName, jobId: '', downloadedAt: Date.now() })
+              drive++
+            }
+          }
+        }
+        await walk(root, DRIVE_ROOT_NAME, 0)
+      } catch (err) {
+        library.flush()
+        return { local, drive, error: `Couldn’t read Google Drive: ${errMsg(err)}` }
+      }
+    library.flush()
+    return { local, drive }
+  }
+  // first run with the list: pick up what's already in the download folder —
+  // once no download is running (a running job lists its own songs properly)
+  if (library.fresh) {
+    const firstScan = (): void => {
+      if (jobs.size > 0) return void setTimeout(firstScan, 30_000)
+      void scanExisting(false)
+    }
+    setTimeout(firstScan, 4000)
+  }
+
+  ctx.ipcMain.handle(`${ID}:library-list`, (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { query?: unknown; limit?: unknown; offset?: unknown }
+    const limit = Math.max(1, Math.min(1000, Number(r.limit) || 200))
+    return { ok: true, ...library.list(typeof r.query === 'string' ? r.query : '', limit, Math.max(0, Number(r.offset) || 0)) }
+  })
+
+  /** forget songs (or all) so they can be downloaded again — files are not touched */
+  ctx.ipcMain.handle(`${ID}:library-forget`, (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { videoIds?: unknown; all?: unknown }
+    const n = r.all === true ? library.forgetAll() : Array.isArray(r.videoIds) ? library.forget(r.videoIds.map(String)) : 0
+    library.flush()
+    return { ok: true, forgotten: n, total: library.size }
+  })
+
+  ctx.ipcMain.handle(`${ID}:library-scan`, async () => ({ ok: true, ...(await scanExisting(true)), total: library.size }))
+
   /**
    * Finish a held song: optionally write the user's tags (+ cover), then upload
    * it if it came from a Drive job; drop it from the list once it's safe.
@@ -381,6 +466,7 @@ export default function register(ctx: ModuleIpcContext): void {
         if (write.art.kind === 'release') art = await mb.coverArt(write.art.releaseId, write.art.releaseGroupId, 500)
         else if (write.art.kind === 'file') art = readImage(write.art.path)
         await writeSongTags(ffmpeg, item.path, probed, write.tags, art)
+        library.update(videoIdOf(item.fileName), { title: write.tags.title, artist: write.tags.artist, album: write.tags.album })
       }
       if (item.toDrive) {
         const drive = getDriveProvider()
@@ -389,7 +475,9 @@ export default function register(ctx: ModuleIpcContext): void {
         s.add(item.path)
         await s.drain()
         if (s.failed.length) throw new Error(`Upload to Google Drive failed: ${s.failed[0].error}`)
-      }
+        library.update(videoIdOf(item.fileName), { location: 'drive', driveFileId: s.uploaded[0]?.id ?? '', path: '' })
+      } else library.update(videoIdOf(item.fileName), { location: 'local', path: item.path })
+      library.flush()
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
       review.update(item.id, { error })
@@ -581,6 +669,12 @@ export default function register(ctx: ModuleIpcContext): void {
       title: String(j.title ?? j.id ?? 'Untitled'),
       uploader: String(j.uploader ?? j.channel ?? j.artist ?? ''),
       count: isPlaylist ? entries.length : 1,
+      // songs already in the downloaded-songs list (skipped when "skip duplicates" is on)
+      alreadyHave: isPlaylist
+        ? entries.filter((e) => library.has(String((e as { id?: unknown })?.id ?? ''))).length
+        : library.has(String(j.id ?? ''))
+          ? 1
+          : 0,
       duration: typeof j.duration === 'number' ? j.duration : null,
       thumbnail: typeof j.thumbnail === 'string' ? j.thumbnail : null,
       id: String(j.id ?? ''),
@@ -607,6 +701,8 @@ export default function register(ctx: ModuleIpcContext): void {
     /** audio only: look songs up on MusicBrainz and fill missing tags (+ official cover) */
     fixTags: boolean
     officialArt: boolean
+    /** music: skip songs already downloaded (by video id, and the same song under another video) */
+    skipDuplicates: boolean
     title: string
     /** original start time — preserved across a crash resume for the combine */
     startedAt: number
@@ -643,6 +739,7 @@ export default function register(ctx: ModuleIpcContext): void {
       toDrive: p.toDrive,
       fixTags: p.fixTags,
       officialArt: p.officialArt,
+      skipDuplicates: p.skipDuplicates,
       title: p.title,
       startedAt: p.startedAt,
       attempts: p.attempts
@@ -688,7 +785,16 @@ export default function register(ctx: ModuleIpcContext): void {
       const fixTags = p.fixTags && isAudioQuality(p.quality) && !!ffmpeg && !!ffprobe
       // yt-dlp appends each finished file here — the Drive uploader and the tag
       // fixer pick songs up from it as they complete
-      const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : fixTags ? join(moduleDir(), `done-${jobId}.txt`) : undefined
+      const isMusic = isAudioQuality(p.quality)
+      const dedupe = p.skipDuplicates && isMusic
+      const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : fixTags || isMusic ? join(moduleDir(), `done-${jobId}.txt`) : undefined
+      const archivePath = p.toDrive ? join(dir, '.wicked-archive.txt') : dedupe ? join(moduleDir(), `archive-${jobId}.txt`) : undefined
+      // known songs go into this job's yt-dlp archive, so they're skipped before downloading
+      if (dedupe && archivePath) {
+        const have = new Set(existsSync(archivePath) ? readFileSync(archivePath, 'utf8').split(/\r?\n/) : [])
+        const add = library.archiveLines().filter((l) => !have.has(l))
+        if (add.length) writeFileSync(archivePath, [...have].filter(Boolean).concat(add).join('\n') + '\n', 'utf8')
+      }
       // "Combine clips" only makes sense for a multi-item VIDEO download and needs
       // ffmpeg. It's ignored for single videos and audio jobs.
       const wantCombine = p.combine && p.isPlaylist && !isAudioQuality(p.quality) && !!ffmpeg
@@ -702,7 +808,7 @@ export default function register(ctx: ModuleIpcContext): void {
         downloadDir: dir,
         manifestPath,
         doneListPath,
-        archivePath: p.toDrive ? join(dir, '.wicked-archive.txt') : undefined
+        archivePath
       }
       const args = buildDownloadArgs(req, ffmpeg)
 
@@ -710,13 +816,86 @@ export default function register(ctx: ModuleIpcContext): void {
         sink = new DriveSink(dir, driveDeps(drive), (prog: DriveProgress) => sendP({ kind: 'drive', ...prog }))
         sendP({ kind: 'note', note: `Saving to Google Drive (${drive.status().email || 'File Vault'}) → WICKED Vault/${DRIVE_ROOT_NAME} — nothing is kept on this PC.` })
       }
+      let dupesBefore = 0
+      let dupesAfter = 0
+      const finalizing = new Set<Promise<void>>()
+      const track = (pr: Promise<void>): void => {
+        finalizing.add(pr)
+        void pr.finally(() => finalizing.delete(pr))
+      }
+      const recordSong = (path: string, info: ReadyInfo, location: 'local' | 'pending'): void => {
+        const vid = videoIdOf(basename(path))
+        if (!vid) return
+        library.record({
+          videoId: vid,
+          title: info.tags.title,
+          artist: info.tags.artist,
+          album: info.tags.album,
+          originalTitle: info.original.title,
+          originalArtist: info.original.artist,
+          recordingId: info.recordingId ?? '',
+          durationMs: info.durationMs,
+          fileName: basename(path),
+          location,
+          path,
+          driveFileId: '',
+          playlist: p.title || 'Download',
+          jobId,
+          downloadedAt: Date.now()
+        })
+      }
+      /** a finished song: drop it if it's one we already have, else list it and pass it on */
+      /** the same song is already downloaded: keep its video id as an alias, delete this copy */
+      const dropDuplicate = (path: string, vid: string, same: { videoId: string; title: string; fileName: string; playlist: string }): void => {
+        library.addAlias(same.videoId, vid)
+        removeSongFile(path)
+        dupesAfter++
+        sendP({ kind: 'dupes', before: dupesBefore, after: dupesAfter })
+        sendP({ kind: 'note', note: `Already downloaded: ${basename(path)} is the same song as “${same.title || same.fileName}” (${same.playlist}) — not kept.` })
+      }
+      const finalized = new Set<string>()
+      const finalizeSong = async (path: string, info?: ReadyInfo): Promise<void> => {
+        if (finalized.has(path)) return
+        finalized.add(path)
+        const vid = videoIdOf(basename(path))
+        if (!vid || !existsSync(path)) {
+          sink?.add(path)
+          return
+        }
+        let t = info
+        if (!t) {
+          let tags = { title: '', artist: '', album: '', albumArtist: '', date: '', track: '', genre: '' }
+          let durationMs: number | null = null
+          try {
+            if (ffprobe) ({ tags, durationMs } = await probeSong(ffprobe, path))
+          } catch {
+            /* fall back to the file name */
+          }
+          if (!tags.title) tags = { ...tags, ...parseSongFileName(basename(path)) }
+          t = { tags, original: tags, durationMs }
+        }
+        if (dedupe) {
+          const sameId = library.get(vid)
+          const same =
+            library.findSame({ title: t.tags.title, artist: t.tags.artist, recordingId: t.recordingId, durationMs: t.durationMs }, vid) ??
+            (sameId && sameId.jobId !== jobId && relative(sameId.path || '.', path) !== '' ? sameId : null)
+          if (same) return dropDuplicate(path, vid, same)
+        }
+        recordSong(path, t, p.toDrive ? 'pending' : 'local')
+        sink?.add(path)
+      }
+
       if (fixTags && ffmpeg && ffprobe) {
         const s = sink
         fixer = new TagFixer(tagDeps(ffmpeg, ffprobe), {
           officialArt: p.officialArt,
           isHeld: (f) => review.isHeld(f),
-          hold: (f, info) => review.add({ jobId, jobTitle: p.title || 'Download', path: f, fileName: basename(f), toDrive: p.toDrive, ...info }),
-          onReady: (f) => s?.add(f),
+          hold: (f, info) => {
+            review.add({ jobId, jobTitle: p.title || 'Download', path: f, fileName: basename(f), toDrive: p.toDrive, ...info })
+            // on the list already, so the song isn't downloaded again while it waits
+            recordSong(f, { tags: info.current, original: info.current, durationMs: info.durationMs }, p.toDrive ? 'pending' : 'local')
+          },
+          onReady: (f, info) => track(finalizeSong(f, info)),
           onProgress: (sum: TagSummary) => sendP({ kind: 'tags', ...sum }),
           processedFile: p.toDrive ? join(dir, '.wicked-tagged.txt') : join(moduleDir(), `tagged-${jobId}.txt`)
         })
@@ -731,9 +910,36 @@ export default function register(ctx: ModuleIpcContext): void {
             s?.abort()
           }
       }
-      // every finished file: tag fixer first (it passes songs on), else straight to Drive
-      const feed = (path: string): void => {
+      // every finished file: duplicate check → tag fixer (it passes songs on) →
+      // the downloaded-songs list (+ a second duplicate check with the fixed
+      // info) → Drive. Video files go straight to Drive.
+      const prechecked = new Set<string>()
+      const precheck = async (path: string): Promise<void> => {
+        if (prechecked.has(path)) return
+        prechecked.add(path)
+        const vid = videoIdOf(basename(path))
+        if (dedupe && vid && existsSync(path)) {
+          let tags: SongTags = emptyTags()
+          let durationMs: number | null = null
+          try {
+            if (ffprobe) ({ tags, durationMs } = await probeSong(ffprobe, path))
+          } catch {
+            /* fall back to the file name */
+          }
+          if (!tags.title) tags = { ...tags, ...parseSongFileName(basename(path)) }
+          const q = assessTags(tags).query
+          const sameId = library.get(vid)
+          const same =
+            (sameId && sameId.jobId !== jobId && relative(sameId.path || '.', path) !== '' ? sameId : null) ??
+            library.findSame({ title: tags.title, artist: tags.artist, durationMs }, vid) ??
+            library.findSame({ title: q.title, artist: q.artist, durationMs }, vid)
+          if (same) return dropDuplicate(path, vid, same)
+        }
         if (fixer) fixer.add(path)
+        else await finalizeSong(path)
+      }
+      const feed = (path: string): void => {
+        if (isMusic) track(precheck(path))
         else sink?.add(path)
       }
       // a stitched movie needs every clip on disk first, so combine jobs upload at the end
@@ -756,6 +962,10 @@ export default function register(ctx: ModuleIpcContext): void {
           if ('note' in prog) {
             if (/Downloading item|Destination|Merging|Extracting/.test(prog.note)) sendP({ kind: 'note', note: prog.note })
             if (/has already been downloaded/.test(prog.note)) completed++
+            if (/has already been recorded in the archive/.test(prog.note) && dedupe) {
+              dupesBefore++
+              sendP({ kind: 'dupes', before: dupesBefore, after: dupesAfter })
+            }
           } else {
             if (prog.percent >= 100) completed++
             sendP({ kind: 'progress', ...prog })
@@ -818,10 +1028,18 @@ export default function register(ctx: ModuleIpcContext): void {
         for (const l of readDoneList(doneListPath)) feed(l)
         // anything the list missed, plus clips + the stitched movie of a combine job
         if (sink) for (const f of leftoverMedia(dir)) if (!review.isHeld(f)) feed(f)
-        if (fixer) await fixer.drain()
+        // duplicate checks feed the fixer, the fixer feeds the list — settle both
+        for (;;) {
+          while (finalizing.size) await Promise.all([...finalizing])
+          if (fixer) await fixer.drain()
+          if (!finalizing.size) break
+        }
         if (job.cancelRequested) return finish({ ok: false, cancelled: true })
         if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
       }
+      const dupes = dedupe ? { before: dupesBefore, after: dupesAfter } : null
+      if (dupes && dupes.before + dupes.after > 0)
+        sendP({ kind: 'note', note: `${dupes.before + dupes.after} song${dupes.before + dupes.after === 1 ? ' was' : 's were'} already downloaded before — skipped.` })
       const tags = fixer ? fixer.summary() : null
       if (tags) {
         sendP({ kind: 'tags', ...tags, pending: 0, current: null })
@@ -852,6 +1070,8 @@ export default function register(ctx: ModuleIpcContext): void {
             /* still in staging; reported below */
           }
         }
+        for (const u of sink.uploaded) library.update(videoIdOf(u.name), { location: 'drive', driveFileId: u.id, path: '' })
+        for (const k of kept) library.update(videoIdOf(basename(k)), { location: 'local', path: k })
         const pr = sink.progress()
         drived = {
           uploaded: pr.uploaded,
@@ -874,9 +1094,9 @@ export default function register(ctx: ModuleIpcContext): void {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
         // treat as a soft warning when at least something downloaded.
-        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined, drive: drived, tags })
+        return finish({ ok: completed > 0 || dupesBefore > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined, drive: drived, tags, dupes })
       }
-      return finish({ ok: true, completed, combined, drive: drived, tags })
+      return finish({ ok: true, completed, combined, drive: drived, tags, dupes })
     } finally {
       if (poll) clearInterval(poll)
       jobs.delete(jobId)
@@ -884,12 +1104,17 @@ export default function register(ctx: ModuleIpcContext): void {
       if (!quitting) removePending(jobId)
       if (!quitting) {
         fixer?.abort()
-        for (const f of [`done-${jobId}.txt`, `tagged-${jobId}.txt`]) rmSync(join(moduleDir(), f), { force: true })
+        for (const f of [`done-${jobId}.txt`, `tagged-${jobId}.txt`, `archive-${jobId}.txt`]) rmSync(join(moduleDir(), f), { force: true })
       }
+      library.flush()
       if (p.toDrive && !quitting) {
         sink?.abort()
-        // a cancelled job's staged songs are deleted, so their review entries go too
-        if (job.cancelRequested) review.removeJob(jobId)
+        // a cancelled job's staged songs are deleted, so their review entries
+        // and not-yet-uploaded list entries go too
+        if (job.cancelRequested) {
+          review.removeJob(jobId)
+          library.forget(library.list('', Number.MAX_SAFE_INTEGER).items.filter((x) => x.jobId === jobId && x.location === 'pending').map((x) => x.videoId))
+        }
         // songs waiting for the user stay staged (only them); otherwise clear it all
         if (review.forJob(jobId).length) pruneStaging(jobId)
         else
@@ -948,6 +1173,7 @@ export default function register(ctx: ModuleIpcContext): void {
       toDrive: r.toDrive === true,
       fixTags: typeof r.fixTags === 'boolean' ? r.fixTags : prefs().fixTags,
       officialArt: typeof r.officialArt === 'boolean' ? r.officialArt : prefs().officialArt,
+      skipDuplicates: typeof r.skipDuplicates === 'boolean' ? r.skipDuplicates : prefs().skipDuplicates,
       title: typeof r.title === 'string' ? r.title : '',
       startedAt: Date.now(),
       attempts: 0,
@@ -971,6 +1197,7 @@ export default function register(ctx: ModuleIpcContext): void {
           toDrive: p.toDrive === true,
           fixTags: p.fixTags === true,
           officialArt: p.officialArt !== false,
+          skipDuplicates: p.skipDuplicates !== false,
           attempts: p.attempts + 1,
           resumed: true
         })
@@ -999,6 +1226,7 @@ export default function register(ctx: ModuleIpcContext): void {
   // launch picks them back up.
   ctx.app.on('before-quit', () => {
     quitting = true
+    library.flush()
     for (const j of jobs.values()) if (j.child) treeKill(j.child)
   })
 
