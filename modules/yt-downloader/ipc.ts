@@ -61,7 +61,9 @@ const FIX_TAGS_KEY = `${ID}.fixTags`
 const OFFICIAL_ART_KEY = `${ID}.officialArt`
 const SKIP_DUPES_KEY = `${ID}.skipDuplicates`
 const PROBE_TIMEOUT_MS = 90_000
-const MAX_JOBS = 3
+const MAX_JOBS = 2
+const WATCH_EVERY_MS = 48 * 3600 * 1000
+const WATCH_TICK_MS = 15 * 60 * 1000
 const RESUME_DELAY_MS = 8000
 const MAX_RESUME_ATTEMPTS = 3
 
@@ -79,6 +81,8 @@ interface PendingJob {
   officialArt?: boolean
   /** music: skip songs already in the downloaded-songs list */
   skipDuplicates?: boolean
+  /** started by a watched playlist (its own persistent yt-dlp archive) */
+  watchId?: string
   title: string
   startedAt: number
   attempts: number
@@ -508,14 +512,15 @@ export default function register(ctx: ModuleIpcContext): void {
     s.location === 'drive' ? `in Google Drive · ${s.playlist}` : s.location === 'pending' ? 'still uploading / waiting for info' : s.device && s.device !== DEVICE_ID ? `on another PC · ${s.playlist}` : `on this PC · ${s.playlist}`
 
   /** Video ids a URL will download (flat playlist read; [] if it can't be read). */
-  async function idsForUrl(url: string, isPlaylist: boolean): Promise<string[]> {
+  async function readUrl(url: string, isPlaylist: boolean): Promise<{ ids: string[]; title: string }> {
     const ud = userData()
-    if (!hasYtDlp(ud)) return []
+    if (!hasYtDlp(ud)) return { ids: [], title: '' }
     const r = await probeJson(ud, url, isPlaylist ? [] : ['--no-playlist'])
-    if (!r.ok) return []
+    if (!r.ok) return { ids: [], title: '' }
     const j = r.json
-    if (Array.isArray(j.entries)) return (j.entries as { id?: unknown }[]).map((e) => String(e?.id ?? '')).filter(Boolean)
-    return j.id ? [String(j.id)] : []
+    const title = String(j.title ?? '')
+    if (Array.isArray(j.entries)) return { ids: (j.entries as { id?: unknown }[]).map((e) => String(e?.id ?? '')).filter(Boolean), title }
+    return { ids: j.id ? [String(j.id)] : [], title }
   }
 
   /** Which of these ids are already downloaded — after dropping stale entries. */
@@ -910,6 +915,8 @@ export default function register(ctx: ModuleIpcContext): void {
     officialArt: boolean
     /** music: skip songs already downloaded (by video id, and the same song under another video) */
     skipDuplicates: boolean
+    /** a watched playlist's check */
+    watchId?: string
     title: string
     /** original start time — preserved across a crash resume for the combine */
     startedAt: number
@@ -947,6 +954,7 @@ export default function register(ctx: ModuleIpcContext): void {
       fixTags: p.fixTags,
       officialArt: p.officialArt,
       skipDuplicates: p.skipDuplicates,
+      watchId: p.watchId,
       title: p.title,
       startedAt: p.startedAt,
       attempts: p.attempts
@@ -954,6 +962,8 @@ export default function register(ctx: ModuleIpcContext): void {
     sendP({
       kind: 'job-start',
       title: p.title || p.url,
+      req: { url: p.url, quality: p.quality, isPlaylist: p.isPlaylist, combine: p.combine, shuffle: p.shuffle, toDrive: p.toDrive, fixTags: p.fixTags, officialArt: p.officialArt, skipDuplicates: p.skipDuplicates, title: p.title },
+      watchId: p.watchId,
       quality: p.quality,
       isPlaylist: p.isPlaylist,
       combine: p.combine,
@@ -995,14 +1005,21 @@ export default function register(ctx: ModuleIpcContext): void {
       const isMusic = isAudioQuality(p.quality)
       const dedupe = p.skipDuplicates && isMusic
       const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : fixTags || isMusic ? join(moduleDir(), `done-${jobId}.txt`) : undefined
-      const archivePath = p.toDrive ? join(dir, '.wicked-archive.txt') : dedupe ? join(moduleDir(), `archive-${jobId}.txt`) : undefined
+      // a watched playlist keeps ONE archive across all its checks, so only new videos download
+      const archivePath = p.watchId ? join(moduleDir(), `watch-${p.watchId}.archive.txt`) : p.toDrive ? join(dir, '.wicked-archive.txt') : dedupe ? join(moduleDir(), `archive-${jobId}.txt`) : undefined
       // known songs go into this job's yt-dlp archive, so they're skipped before
       // downloading — including what your other PCs downloaded (shared via Drive)
       if (dedupe) {
         await syncListQuick()
         // make sure every listed song in THIS playlist really still exists —
         // a deleted/never-uploaded one is taken off the list and downloaded again
-        const { known, stale } = await checkKnown(await idsForUrl(p.url, p.isPlaylist))
+        const read = await readUrl(p.url, p.isPlaylist)
+        if (!p.title && read.title) {
+          p.title = read.title
+          sendP({ kind: 'title', title: read.title })
+          setItemTitle(jobId, read.title, p.watchId)
+        }
+        const { known, stale } = await checkKnown(read.ids)
         if (stale.length)
           sendP({
             kind: 'note',
@@ -1380,55 +1397,372 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   }
 
-  ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
-    const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
-    const jobId =
-      typeof r.jobId === 'string' && r.jobId
-        ? r.jobId
-        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-    const url = typeof r.url === 'string' ? r.url.trim() : ''
-    if (!/^https?:\/\//i.test(url)) return { ok: false, jobId, error: 'A YouTube URL is required.' }
-    return performJob({
-      jobId,
-      url,
-      quality: typeof r.quality === 'string' ? r.quality : 'best',
-      isPlaylist: r.isPlaylist === true,
-      combine: r.combine === true,
-      shuffle: r.shuffle === true,
-      toDrive: r.toDrive === true,
-      fixTags: typeof r.fixTags === 'boolean' ? r.fixTags : prefs().fixTags,
-      officialArt: typeof r.officialArt === 'boolean' ? r.officialArt : prefs().officialArt,
-      skipDuplicates: typeof r.skipDuplicates === 'boolean' ? r.skipDuplicates : prefs().skipDuplicates,
-      title: typeof r.title === 'string' ? r.title : '',
-      startedAt: Date.now(),
-      attempts: 0,
-      resumed: false
-    })
-  })
+  /* --------------------------- queue + watched playlists --------------------------- *
+   * Every download goes through ONE saved queue (queue.json): paste as many links
+   * as you like, at most MAX_JOBS (2) run at a time, the rest wait in order. The
+   * queue is on disk, so after a restart / update / power loss it carries on:
+   * interrupted jobs (pending-jobs.json) resume first, then the waiting ones.
+   * Watched playlists (watches.json) get a check queued every 48 h (wall clock,
+   * so a PC that was off longer checks as soon as it starts) — only new videos
+   * download (each watch has its own persistent yt-dlp archive, and music also
+   * skips anything on the downloaded-songs list).
+   * ---------------------------------------------------------------------- */
 
-  // Resume jobs the last session never finished (crash, power loss, app close).
-  if (survivors.length > 0) {
-    setTimeout(() => {
-      for (const p of survivors) {
-        if (p.attempts >= MAX_RESUME_ATTEMPTS) {
-          console.error(`[${ID}] giving up on job ${p.jobId} after ${p.attempts} resume attempts`)
-          removePending(p.jobId)
-          continue
-        }
-        console.log(`[${ID}] resuming interrupted job: ${p.title || p.url}`)
-        void performJob({
-          ...p,
+  type ItemState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  interface QueueItem {
+    id: string
+    url: string
+    quality: string
+    isPlaylist: boolean
+    combine: boolean
+    shuffle: boolean
+    toDrive: boolean
+    fixTags: boolean
+    officialArt: boolean
+    skipDuplicates: boolean
+    title: string
+    watchId?: string
+    state: ItemState
+    addedAt: number
+    startedAt?: number
+    endedAt?: number
+    attempts: number
+    /** has run before (so the next run is a resume) */
+    started?: boolean
+    message?: string
+  }
+  interface Watch {
+    id: string
+    url: string
+    title: string
+    quality: string
+    toDrive: boolean
+    fixTags: boolean
+    officialArt: boolean
+    addedAt: number
+    lastCheckedAt: number
+    lastResult: string
+    enabled: boolean
+  }
+
+  const queueFile = (): string => join(moduleDir(), 'queue.json')
+  const watchFile = (): string => join(moduleDir(), 'watches.json')
+  const readJson = <T,>(f: string, fallback: T): T => {
+    try {
+      return JSON.parse(readFileSync(f, 'utf8')) as T
+    } catch {
+      return fallback
+    }
+  }
+  const writeJson = (f: string, v: unknown): void => {
+    mkdirSync(dirname(f), { recursive: true })
+    const tmp = `${f}.tmp`
+    writeFileSync(tmp, JSON.stringify(v, null, 2), 'utf8')
+    renameSync(tmp, f)
+  }
+  let queue: QueueItem[] = readJson<{ items?: QueueItem[] }>(queueFile(), {}).items ?? []
+  let watches: Watch[] = readJson<{ watches?: Watch[] }>(watchFile(), {}).watches ?? []
+  const saveQueue = (): void => {
+    // keep the last 40 finished items for the list
+    const finished = queue.filter((q) => q.state !== 'queued' && q.state !== 'running')
+    if (finished.length > 40) {
+      const drop = new Set(finished.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0)).slice(0, finished.length - 40).map((q) => q.id))
+      queue = queue.filter((q) => !drop.has(q.id))
+    }
+    try {
+      writeJson(queueFile(), { items: queue })
+    } catch {
+      /* next save retries */
+    }
+    send(`${ID}:queue`, queue)
+  }
+  const saveWatches = (): void => {
+    try {
+      writeJson(watchFile(), { watches })
+    } catch {
+      /* next save retries */
+    }
+    send(`${ID}:watches`, watches)
+  }
+  function setItemTitle(jobId: string, title: string, watchId?: string): void {
+    const it = queue.find((q) => q.id === jobId)
+    if (it && !it.title) {
+      it.title = title
+      saveQueue()
+    }
+    const w = watchId ? watches.find((x) => x.id === watchId) : undefined
+    if (w && !w.title) {
+      w.title = title
+      saveWatches()
+    }
+  }
+
+  /** Is this URL a whole playlist/album? (A song link with an auto-radio list is just the song.) */
+  const playlistOf = (url: string): boolean => {
+    const i = parseYtUrl(url)
+    return !!i.listId && !(i.hasBoth && i.playlistKind === 'mix')
+  }
+  const newId = (): string => `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+
+  // after a restart: whatever was running resumes (first in line), the rest waits as before
+  let queueReady = false
+  {
+    const journal = readPending()
+    for (const it of queue) if (it.state === 'running') it.state = 'queued'
+    for (const p of journal) {
+      const it = queue.find((q) => q.id === p.jobId)
+      if (it) {
+        it.started = true
+        it.attempts = p.attempts
+      } else
+        queue.unshift({
+          id: p.jobId,
+          url: p.url,
+          quality: p.quality,
+          isPlaylist: p.isPlaylist,
+          combine: p.combine,
           shuffle: p.shuffle === true,
           toDrive: p.toDrive === true,
           fixTags: p.fixTags === true,
           officialArt: p.officialArt !== false,
           skipDuplicates: p.skipDuplicates !== false,
-          attempts: p.attempts + 1,
-          resumed: true
+          watchId: p.watchId,
+          title: p.title,
+          state: 'queued',
+          addedAt: p.startedAt,
+          startedAt: p.startedAt,
+          attempts: p.attempts,
+          started: true
         })
-      }
-    }, RESUME_DELAY_MS)
+    }
+    // resumed jobs go first
+    queue.sort((a, b) => Number(b.state === 'queued' && !!b.started) - Number(a.state === 'queued' && !!a.started))
+    // give an interrupted job's yt-dlp/ffmpeg a moment to be gone before resuming;
+    // with nothing to resume the queue is ready right away
+    setTimeout(
+      () => {
+        queueReady = true
+        saveQueue()
+        pumpQueue()
+      },
+      journal.length ? RESUME_DELAY_MS : 0
+    )
   }
+
+  /** Start waiting items while a slot (of MAX_JOBS) is free. */
+  function pumpQueue(): void {
+    if (!queueReady || quitting) return
+    for (const it of queue) {
+      if (jobs.size >= MAX_JOBS) break
+      if (it.state !== 'queued' || jobs.has(it.id)) continue
+      const resumed = !!it.started
+      if (resumed && it.attempts >= MAX_RESUME_ATTEMPTS) {
+        console.error(`[${ID}] giving up on ${it.title || it.url} after ${it.attempts} resume attempts`)
+        removePending(it.id)
+        it.state = 'failed'
+        it.message = `Gave up after ${it.attempts} tries to resume.`
+        it.endedAt = Date.now()
+        continue
+      }
+      if (resumed) it.attempts++
+      it.state = 'running'
+      it.started = true
+      it.startedAt = it.startedAt ?? Date.now()
+      saveQueue()
+      void performJob({
+        jobId: it.id,
+        url: it.url,
+        quality: it.quality,
+        isPlaylist: it.isPlaylist,
+        combine: it.combine,
+        shuffle: it.shuffle,
+        toDrive: it.toDrive,
+        fixTags: it.fixTags,
+        officialArt: it.officialArt,
+        skipDuplicates: it.skipDuplicates || !!it.watchId,
+        watchId: it.watchId,
+        title: it.title,
+        startedAt: it.startedAt,
+        attempts: it.attempts,
+        resumed
+      })
+        .catch((err) => ({ ok: false, started: true, error: errMsg(err) }) as Record<string, unknown>)
+        .then((res) => {
+          if (quitting) {
+            // stays journaled → resumes on next launch; still answer anyone waiting
+            waiters.get(it.id)?.forEach((r) => r(res))
+            waiters.delete(it.id)
+            return
+          }
+          if (res.started !== true) {
+            it.state = 'queued' // lost a slot race — try again shortly
+            setTimeout(pumpQueue, 1500)
+          } else {
+            it.state = res.cancelled ? 'cancelled' : res.ok ? 'done' : 'failed'
+            it.endedAt = Date.now()
+            it.message = typeof res.error === 'string' ? res.error.slice(0, 300) : ''
+            const w = it.watchId ? watches.find((x) => x.id === it.watchId) : undefined
+            if (w) {
+              const n = Number(res.completed) || 0
+              const d = (res.drive as { uploaded?: number } | null)?.uploaded
+              w.lastResult = res.cancelled ? 'Check cancelled.' : res.ok ? `${typeof d === 'number' ? d : n} new` : `Check failed: ${it.message}`
+              saveWatches()
+            }
+          }
+          saveQueue()
+          if (res.started === true) {
+            waiters.get(it.id)?.forEach((r) => r(res))
+            waiters.delete(it.id)
+          }
+          pumpQueue()
+        })
+    }
+    saveQueue()
+  }
+  /** callers of the single-link `download` channel wait for their own result */
+  const waiters = new Map<string, ((res: Record<string, unknown>) => void)[]>()
+
+  interface AddOpts {
+    quality?: string
+    toDrive?: boolean
+    fixTags?: boolean
+    officialArt?: boolean
+    skipDuplicates?: boolean
+    combine?: boolean
+    shuffle?: boolean
+  }
+  function enqueue(url: string, o: AddOpts, extra: { isPlaylist?: boolean; title?: string; watchId?: string; id?: string } = {}): QueueItem {
+    const it: QueueItem = {
+      id: extra.id || newId(),
+      url,
+      quality: typeof o.quality === 'string' ? o.quality : 'best',
+      isPlaylist: typeof extra.isPlaylist === 'boolean' ? extra.isPlaylist : playlistOf(url),
+      combine: o.combine === true,
+      shuffle: o.shuffle === true,
+      toDrive: o.toDrive === true,
+      fixTags: typeof o.fixTags === 'boolean' ? o.fixTags : prefs().fixTags,
+      officialArt: typeof o.officialArt === 'boolean' ? o.officialArt : prefs().officialArt,
+      skipDuplicates: typeof o.skipDuplicates === 'boolean' ? o.skipDuplicates : prefs().skipDuplicates,
+      title: extra.title ?? '',
+      watchId: extra.watchId,
+      state: 'queued',
+      addedAt: Date.now(),
+      attempts: 0
+    }
+    queue.push(it)
+    return it
+  }
+
+  /** Add links (one per line in the UI). `watch` also watches each playlist link. */
+  ctx.ipcMain.handle(`${ID}:queue-add`, (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { items?: { url?: unknown; isPlaylist?: unknown; title?: unknown }[]; opts?: AddOpts; watch?: unknown }
+    const o = r.opts ?? {}
+    const added: QueueItem[] = []
+    const skipped: { url: string; error: string }[] = []
+    let watched = 0
+    for (const x of r.items ?? []) {
+      const url = String(x?.url ?? '').trim()
+      if (!url) continue
+      if (!/^https?:\/\//i.test(url)) {
+        skipped.push({ url, error: 'Not a link (needs https://…)' })
+        continue
+      }
+      if (parseYtUrl(url).needsAuth) {
+        skipped.push({ url, error: 'Liked Music / personal library lists need a sign-in — use the playlist’s own share link.' })
+        continue
+      }
+      if (queue.some((q) => q.url === url && (q.state === 'queued' || q.state === 'running'))) {
+        skipped.push({ url, error: 'Already in the queue' })
+        continue
+      }
+      const isPlaylist = typeof x?.isPlaylist === 'boolean' ? x.isPlaylist : playlistOf(url)
+      let watchId: string | undefined
+      if (r.watch === true && isPlaylist) {
+        const listId = parseYtUrl(url).listId
+        let w = watches.find((y) => parseYtUrl(y.url).listId === listId)
+        if (!w) {
+          w = { id: newId().replace(/^job-/, 'watch-'), url, title: typeof x?.title === 'string' ? x.title : '', quality: o.quality ?? 'audio', toDrive: o.toDrive === true, fixTags: o.fixTags !== false, officialArt: o.officialArt !== false, addedAt: Date.now(), lastCheckedAt: Date.now(), lastResult: '', enabled: true }
+          watches.push(w)
+          watched++
+        }
+        w.lastCheckedAt = Date.now() // this download is its first check
+        watchId = w.id
+      }
+      added.push(enqueue(url, o, { isPlaylist, title: typeof x?.title === 'string' ? x.title : '', watchId }))
+    }
+    if (watched) saveWatches()
+    saveQueue()
+    pumpQueue()
+    return { ok: true, added: added.length, skipped, watched, ids: added.map((a) => a.id) }
+  })
+
+  // Kept for MCP / older callers: one link → the same queue (returns once it's queued).
+  ctx.ipcMain.handle(`${ID}:download`, async (_e, rawReq: unknown) => {
+    const r = (typeof rawReq === 'object' && rawReq !== null ? rawReq : {}) as Record<string, unknown>
+    const url = typeof r.url === 'string' ? r.url.trim() : ''
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'A YouTube URL is required.' }
+    const it = enqueue(url, r as AddOpts, { isPlaylist: r.isPlaylist === true, title: typeof r.title === 'string' ? r.title : '', id: typeof r.jobId === 'string' && r.jobId ? r.jobId : undefined })
+    // resolves with the job's result once it has had its turn and finished (as before the queue)
+    const done = new Promise<Record<string, unknown>>((resolve) => waiters.set(it.id, [...(waiters.get(it.id) ?? []), resolve]))
+    saveQueue()
+    pumpQueue()
+    return done
+  })
+
+  ctx.ipcMain.handle(`${ID}:queue-list`, () => ({ ok: true, items: queue, maxJobs: MAX_JOBS }))
+  ctx.ipcMain.handle(`${ID}:queue-remove`, (_e, raw: unknown) => {
+    const id = String((raw as { id?: unknown })?.id ?? '')
+    queue = queue.filter((q) => !(q.id === id && q.state === 'queued'))
+    saveQueue()
+    return { ok: true }
+  })
+  ctx.ipcMain.handle(`${ID}:queue-clear-finished`, () => {
+    queue = queue.filter((q) => q.state === 'queued' || q.state === 'running')
+    saveQueue()
+    return { ok: true }
+  })
+
+  /** Queue a check for every watched playlist that's due (or `force` one now). */
+  function checkWatches(forceId?: string): number {
+    let n = 0
+    for (const w of watches) {
+      if (!w.enabled && w.id !== forceId) continue
+      const due = w.id === forceId || Date.now() - (w.lastCheckedAt || 0) >= WATCH_EVERY_MS
+      if (!due) continue
+      if (queue.some((q) => q.watchId === w.id && (q.state === 'queued' || q.state === 'running'))) continue
+      enqueue(w.url, { quality: w.quality, toDrive: w.toDrive, fixTags: w.fixTags, officialArt: w.officialArt, skipDuplicates: true }, { isPlaylist: true, title: w.title, watchId: w.id })
+      w.lastCheckedAt = Date.now()
+      w.lastResult = 'Checking…'
+      n++
+    }
+    if (n) {
+      saveWatches()
+      saveQueue()
+      pumpQueue()
+    }
+    return n
+  }
+  setTimeout(() => checkWatches(), RESUME_DELAY_MS + 5000)
+  setInterval(() => checkWatches(), WATCH_TICK_MS)
+
+  ctx.ipcMain.handle(`${ID}:watch-list`, () => ({ ok: true, watches, everyHours: WATCH_EVERY_MS / 3600e3 }))
+  ctx.ipcMain.handle(`${ID}:watch-remove`, (_e, raw: unknown) => {
+    const id = String((raw as { id?: unknown })?.id ?? '')
+    watches = watches.filter((w) => w.id !== id)
+    rmSync(join(moduleDir(), `watch-${id}.archive.txt`), { force: true })
+    saveWatches()
+    return { ok: true }
+  })
+  ctx.ipcMain.handle(`${ID}:watch-set`, (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { id?: unknown; enabled?: unknown; toDrive?: unknown }
+    const w = watches.find((x) => x.id === String(r.id ?? ''))
+    if (!w) return { ok: false, error: 'Not watched.' }
+    if (typeof r.enabled === 'boolean') w.enabled = r.enabled
+    if (typeof r.toDrive === 'boolean') w.toDrive = r.toDrive
+    saveWatches()
+    return { ok: true }
+  })
+  ctx.ipcMain.handle(`${ID}:watch-check-now`, (_e, raw: unknown) => ({ ok: true, queued: checkWatches(String((raw as { id?: unknown })?.id ?? '')) }))
 
   // Cancel one job (jobId) or, with no argument, all running jobs — the latter
   // keeps the MCP cancel tool and any older callers working unchanged.

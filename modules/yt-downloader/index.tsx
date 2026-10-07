@@ -7,6 +7,7 @@ import {
   CloudUpload,
   CopyCheck,
   Download,
+  Eye,
   ExternalLink,
   Film,
   FolderOpen,
@@ -23,6 +24,7 @@ import {
 import {
   ID,
   MAX_JOBS,
+  linksIn,
   QUALITIES,
   isAudioPreset,
   isJobActive,
@@ -57,6 +59,8 @@ function wireDownloadEvents(): void {
   window.wicked.on(`${ID}:status-msg`, (m) => useYt.getState()._onStatusMsg(m))
   window.wicked.on(`${ID}:review`, (items) => useYt.setState({ reviewItems: (items as ReviewItem[]) ?? [] }))
   window.wicked.on(`${ID}:library-count`, (n) => useYt.setState({ libraryCount: Number(n) || 0 }))
+  window.wicked.on(`${ID}:queue`, (q) => useYt.setState({ queue: (q as never[]) ?? [] }))
+  window.wicked.on(`${ID}:watches`, (w) => useYt.setState({ watches: (w as never[]) ?? [] }))
 }
 
 export default function YtDownloader(): React.JSX.Element {
@@ -70,10 +74,14 @@ export default function YtDownloader(): React.JSX.Element {
     void s.loadDrive()
     void s.loadReview()
     void s.loadLibraryCount()
+    void s.loadQueue()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const status = s.status
+  const linkCount = linksIn(s.url).length
+  const playlistLinks = linksIn(s.url).filter((l) => /[?&]list=/.test(l)).length
+  const waiting = s.queue.filter((q) => q.state === 'queued')
   const binReady = status?.binReady ?? false
   const activeJobs = s.jobs.filter(isJobActive).length
   /** the audio-only setting is actively governing the current URL */
@@ -205,19 +213,18 @@ export default function YtDownloader(): React.JSX.Element {
                 YouTube / YouTube Music URL — video, track, playlist or album
               </label>
               <div className="mt-2 flex gap-2">
-                <input
+                <textarea
                   value={s.url}
                   onChange={(e) => s.setUrl(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void s.doProbe()
-                  }}
-                  placeholder="youtube.com/watch?v=…  ·  music.youtube.com/playlist?list=OLAK5uy_…"
+                  rows={6}
+                  placeholder={'Paste one or more links — one per line:\nmusic.youtube.com/playlist?list=…\nyoutube.com/watch?v=…'}
                   spellCheck={false}
-                  className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-3 py-2 text-sm outline-none focus:border-accent"
+                  className="min-h-[9rem] min-w-0 flex-1 resize-y rounded-lg border border-edge bg-raised px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-accent"
                 />
                 <button
                   onClick={() => void s.doProbe()}
-                  disabled={s.probing || !s.url.trim() || !binReady}
+                  disabled={s.probing || linkCount !== 1 || !binReady}
+                  title={linkCount > 1 ? 'Check works on one link at a time' : 'Read the link: playlist size, already-downloaded songs…'}
                   className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
                 >
                   {s.probing ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -374,6 +381,61 @@ export default function YtDownloader(): React.JSX.Element {
                     Combining needs every clip on disk first, so this run uploads the clips and the stitched movie
                     when the combine finishes.
                   </p>
+                )}
+              </div>
+            )}
+
+            {/* watch the pasted playlist(s) + the watched list */}
+            {(playlistLinks > 0 || s.watches.length > 0) && (
+              <div className={`rounded-xl border bg-surface p-4 ${s.watchPlaylist ? 'border-accent/60' : 'border-edge'}`}>
+                {playlistLinks > 0 && (
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input type="checkbox" checked={s.watchPlaylist} onChange={(e) => s.setWatchPlaylist(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]" />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5 text-sm font-medium">
+                        <Eye size={14} className="text-accent" />
+                        Watch {playlistLinks === 1 ? 'this playlist' : `these ${playlistLinks} playlists`}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Every 48 hours the app checks {playlistLinks === 1 ? 'it' : 'them'} for new songs and downloads only what&apos;s new — with these
+                        same settings{s.toDrive ? ' (to Google Drive)' : ''}. If the PC was off, it checks as soon as WICKED starts.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {s.watches.length > 0 && (
+                  <div className={playlistLinks > 0 ? 'mt-3 border-t border-edge pt-3' : ''}>
+                    <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-muted">
+                      <Eye size={12} /> Watched playlists ({s.watches.length})
+                    </div>
+                    <ul className="space-y-1.5">
+                      {s.watches.map((w) => {
+                        const next = w.lastCheckedAt + 48 * 3600e3
+                        const checking = s.queue.some((q) => q.watchId === w.id && (q.state === 'queued' || q.state === 'running'))
+                        return (
+                          <li key={w.id} className="rounded-lg bg-raised/40 px-2.5 py-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <input type="checkbox" checked={w.enabled} onChange={(e) => void s.setWatchEnabled(w.id, e.target.checked)} className="h-3.5 w-3.5 accent-[rgb(var(--wk-accent))]" title="Watching on/off" />
+                              <span className="min-w-0 flex-1 truncate font-medium" title={w.url}>
+                                {w.title || w.url}
+                              </span>
+                              <button disabled={checking} onClick={() => void s.checkWatchNow(w.id)} className="shrink-0 text-accent hover:underline disabled:opacity-40">
+                                {checking ? 'Checking…' : 'Check now'}
+                              </button>
+                              <button onClick={() => void s.removeWatch(w.id)} className="shrink-0 text-muted hover:text-danger" title="Stop watching (downloaded songs stay)">
+                                <X size={13} />
+                              </button>
+                            </div>
+                            <div className="mt-0.5 pl-5 text-[11px] text-muted">
+                              {w.toDrive ? '→ Google Drive · ' : ''}
+                              {w.enabled ? `next check ${next <= Date.now() ? 'soon' : new Date(next).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'paused'}
+                              {w.lastResult ? ` · last: ${w.lastResult}` : ''}
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
                 )}
               </div>
             )}
@@ -604,22 +666,18 @@ export default function YtDownloader(): React.JSX.Element {
             <div className="rounded-xl border border-edge bg-surface p-4">
               <button
                 onClick={() => void s.download()}
-                disabled={!binReady || !s.url.trim() || activeJobs >= MAX_JOBS}
+                disabled={!binReady || linkCount === 0}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-accent-ink hover:opacity-90 disabled:opacity-40"
               >
                 <Download size={16} />
-                Download {downloadTargetLabel()} in {QUALITIES.find((q) => q.id === s.quality)?.label}
+                {linkCount > 1 ? `Add ${linkCount} links to the queue` : `Download ${downloadTargetLabel()}`} in {QUALITIES.find((q) => q.id === s.quality)?.label}
                 {willCombine ? ' · then combine' : ''}
                 {s.toDrive ? ' → Google Drive' : ''}
               </button>
-              {activeJobs >= MAX_JOBS ? (
-                <p className="mt-2 flex items-start gap-1.5 text-xs text-warn">
-                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                  All {MAX_JOBS} download slots are busy — wait for one to finish or cancel one.
-                </p>
-              ) : (
-                <p className="mt-2 text-xs text-muted">{s.statusMsg}</p>
-              )}
+              <p className="mt-2 text-xs text-muted">
+                {s.statusMsg}
+                {activeJobs >= MAX_JOBS ? ` ${MAX_JOBS} are running now — new links wait in line and start automatically.` : ''}
+              </p>
             </div>
           </div>
 
@@ -643,12 +701,36 @@ export default function YtDownloader(): React.JSX.Element {
                 </button>
               </div>
             )}
+            {waiting.length > 0 && (
+              <div className="rounded-xl border border-edge bg-surface p-3">
+                <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold">
+                  <ListVideo size={13} className="text-accent" /> Up next · {waiting.length} waiting
+                  <span className="font-normal text-muted">— {MAX_JOBS} run at a time; saved, so a restart or power cut carries on</span>
+                </div>
+                <ol className="max-h-56 space-y-1 overflow-y-auto">
+                  {waiting.map((q, i) => (
+                    <li key={q.id} className="flex items-center gap-2 rounded-md bg-raised/40 px-2.5 py-1.5 text-xs">
+                      <span className="w-5 shrink-0 text-right tabular-nums text-muted">{i + 1}.</span>
+                      <span className="min-w-0 flex-1 truncate" title={q.url}>
+                        {q.title || q.url}
+                      </span>
+                      {q.started && <span className="shrink-0 rounded bg-warn/15 px-1.5 text-[10px] text-warn">resuming</span>}
+                      {q.watchId && <Eye size={12} className="shrink-0 text-muted" />}
+                      {q.toDrive && <CloudUpload size={12} className="shrink-0 text-muted" />}
+                      <button onClick={() => void s.removeQueued(q.id)} className="shrink-0 text-muted hover:text-danger" title="Take it out of the queue">
+                        <X size={13} />
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
             {s.jobs.length === 0 ? (
               <div className="rounded-xl border border-dashed border-edge p-10 text-center text-sm text-muted">
                 <Download size={24} className="mx-auto mb-3 opacity-40" />
-                Started downloads appear here as cards — up to {MAX_JOBS} can run at the same time.
+                Downloads appear here as cards — {MAX_JOBS} run at a time.
                 <br />
-                Kick one off on the left, then paste the next URL while it runs.
+                Paste as many links as you like on the left; the rest wait in line.
               </div>
             ) : (
               s.jobs.map((job) => <JobCard key={job.id} job={job} />)

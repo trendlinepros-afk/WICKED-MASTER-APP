@@ -154,6 +154,26 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
   some were skipped.
 - Re-downloading is safe — yt-dlp skips files already present.
 
+## Many links, a queue, watched playlists
+
+- **Paste box** takes any number of links (one per line). **Check** works when
+  there's one link; **Download** adds them all to the **queue** (`queue.json`,
+  `queue-add`). At most **2** download at once (`MAX_JOBS`); the rest wait in
+  order ("Up next", removable). Pasting a playlist link ticks **Download to
+  Google Drive** when Drive is connected.
+- **Resume**: the queue is on disk. After a restart, update or power loss, jobs
+  that were running (`pending-jobs.json`) go first as resumes (after an 8 s pause
+  so the old yt-dlp/ffmpeg is gone; with nothing to resume the queue starts at
+  once), then the waiting ones. Up to 3 resume attempts per job.
+- **Watch this playlist** (left menu, shown for playlist links): every watched
+  playlist (`watches.json`) gets a check queued when 48 h have passed since the
+  last one (wall clock, checked every 15 min and at startup — a PC that was off
+  longer checks right away). A watch has its own persistent yt-dlp archive
+  (`watch-<id>.archive.txt`), so only new videos download; music also skips the
+  downloaded-songs list. Watched list: on/off, **Check now**, remove.
+- The single-link `download` channel (MCP) also goes through the queue and still
+  returns once its job has finished.
+
 ## Downloaded songs + skipping duplicates (music downloads)
 
 Every audio file this module downloads is recorded in

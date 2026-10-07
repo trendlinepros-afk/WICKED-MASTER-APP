@@ -149,7 +149,35 @@ export interface DriveStatus {
   folder: string
 }
 
-export const MAX_JOBS = 3
+export const MAX_JOBS = 2
+
+/** Links in the paste box (one per line, or several pasted on one line). */
+export const linksIn = (text: string): string[] => [...new Set((text.match(/https?:\/\/\S+/gi) ?? []).map((u) => u.replace(/[),.;]+$/, '')))]
+
+export interface QueueItem {
+  id: string
+  url: string
+  title: string
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  watchId?: string
+  toDrive: boolean
+  quality: string
+  addedAt: number
+  started?: boolean
+  message?: string
+}
+
+export interface WatchItem {
+  id: string
+  url: string
+  title: string
+  quality: string
+  toDrive: boolean
+  addedAt: number
+  lastCheckedAt: number
+  lastResult: string
+  enabled: boolean
+}
 
 export const isJobActive = (j: DownloadJob): boolean =>
   j.state === 'running' || j.state === 'combining'
@@ -209,6 +237,17 @@ interface State {
   reviewOpen: { jobId?: string } | null
   /** this link only: upload to Google Drive instead of saving here (resets per URL) */
   toDrive: boolean
+  /** watch the pasted playlist link(s): re-check every 48 h for new songs */
+  watchPlaylist: boolean
+  /** the saved download queue (main) — waiting + recent */
+  queue: QueueItem[]
+  watches: WatchItem[]
+  setWatchPlaylist: (v: boolean) => void
+  loadQueue: () => Promise<void>
+  removeQueued: (id: string) => Promise<void>
+  removeWatch: (id: string) => Promise<void>
+  setWatchEnabled: (id: string, v: boolean) => Promise<void>
+  checkWatchNow: (id: string) => Promise<void>
   /** File Vault's Google Drive connection (null until loaded) */
   drive: DriveStatus | null
 
@@ -271,6 +310,9 @@ export const useYt = create<State>((set, get) => ({
   urlIsMusic: false,
   musicOverride: false,
   toDrive: false,
+  watchPlaylist: false,
+  queue: [],
+  watches: [],
   drive: null,
   fixTags: true,
   officialArt: true,
@@ -288,14 +330,20 @@ export const useYt = create<State>((set, get) => ({
   setUrl: (v) => {
     // Detect a music link as it's typed/pasted — no network call needed — so
     // the audio-only setting visibly applies before Check or Download.
-    const isMusic = parseYtUrl(v).isMusic
-    const { musicAudioOnly, musicFormat, quality } = get()
+    const links = linksIn(v)
+    const isMusic = links.length > 0 && links.every((l) => parseYtUrl(l).isMusic)
+    const { musicAudioOnly, musicFormat, quality, drive } = get()
+    const hadPlaylist = linksIn(get().url).some((l) => !!parseYtUrl(l).listId)
+    const hasPlaylist = links.some((l) => !!parseYtUrl(l).listId)
+    const same = v.trim() === get().url.trim()
     set({
       url: v,
       probe: null,
       urlIsMusic: isMusic,
       musicOverride: false, // a new URL starts fresh
-      toDrive: v.trim() === get().url.trim() ? get().toDrive : false, // an option per link, never a standing rule
+      // pasting a playlist ticks "Download to Google Drive" (when Drive is connected) — untick it if you like
+      toDrive: same ? get().toDrive : hasPlaylist && !hadPlaylist && drive?.connected ? true : hasPlaylist ? get().toDrive : false,
+      watchPlaylist: hasPlaylist ? get().watchPlaylist : false,
       quality: isMusic && musicAudioOnly ? musicFormat : quality
     })
   },
@@ -353,18 +401,35 @@ export const useYt = create<State>((set, get) => ({
   redownload: async (jobId) => {
     const old = get().jobs.find((j) => j.id === jobId)
     if (!old?.req || !old.dupeItems?.length) return
-    if (get().jobs.filter(isJobActive).length >= MAX_JOBS) {
-      set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
-      return
-    }
     await invoke('library-forget', { videoIds: old.dupeItems.map((d) => d.videoId) })
-    const newId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-    const job: DownloadJob = { ...old, id: newId, state: 'running', progress: null, log: [], message: 'Starting download…', combinedInfo: null, startedAt: Date.now(), drive: null, tags: null, dupes: null, dupeItems: undefined }
-    set((s) => ({ jobs: [job, ...s.jobs] }))
-    const res = (await invoke('download', { jobId: newId, ...old.req }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
-    if (res.started !== true && res.ok !== true)
-      set((s) => ({ jobs: s.jobs.map((j) => (j.id === newId ? { ...j, state: 'error' as JobState, message: (res as Err).error ?? 'Download failed.' } : j)) }))
+    // queue it (don't wait for it to finish — its card appears when it starts)
+    const res = (await invoke('queue-add', { items: [{ url: old.req.url, isPlaylist: old.req.isPlaylist, title: old.req.title }], opts: old.req }).catch((e) => ({ ok: false, error: String(e) }))) as Res
+    if (res.ok !== true) set({ error: (res as Err).error ?? 'Couldn’t queue it.' })
+    void get().loadQueue()
+  },
+
+  setWatchPlaylist: (v) => set({ watchPlaylist: v }),
+
+  loadQueue: async () => {
+    const q = await invoke<Res & { items?: QueueItem[] }>('queue-list').catch(() => null)
+    if (q?.ok) set({ queue: ((q as unknown as { items?: QueueItem[] }).items ?? []) as QueueItem[] })
+    const w = await invoke<Res & { watches?: WatchItem[] }>('watch-list').catch(() => null)
+    if (w?.ok) set({ watches: ((w as unknown as { watches?: WatchItem[] }).watches ?? []) as WatchItem[] })
+  },
+  removeQueued: async (id) => {
+    await invoke('queue-remove', { id })
+  },
+  removeWatch: async (id) => {
+    await invoke('watch-remove', { id })
+    await get().loadQueue()
+  },
+  setWatchEnabled: async (id, v) => {
+    await invoke('watch-set', { id, enabled: v })
+    await get().loadQueue()
+  },
+  checkWatchNow: async (id) => {
+    await invoke('watch-check-now', { id })
+    await get().loadQueue()
   },
 
   setFixTags: async (v) => {
@@ -458,7 +523,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   doProbe: async () => {
-    const url = get().url.trim()
+    const url = linksIn(get().url)[0] ?? get().url.trim()
     if (!url || get().probing) return
     set({ probing: true, error: '', probe: null, statusMsg: 'Reading URL…' })
     try {
@@ -492,80 +557,32 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, fixTags, officialArt, skipDuplicates, jobs } = get()
-    if (!url.trim()) return
-    if (jobs.filter(isJobActive).length >= MAX_JOBS) {
-      set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
-      return
-    }
-    // For a track+list URL the user's choice wins; otherwise follow the probe.
-    // With no probe yet, fall back to the URL shape so a pasted playlist link
-    // still downloads the playlist.
-    const isPlaylist = probe
-      ? probe.canChooseSingle
-        ? wholePlaylist
-        : probe.kind === 'playlist'
-      : /[?&]list=/.test(url)
-    const willCombine = combineClips && isPlaylist && !isAudioPreset(quality)
-    const jobId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-    const qLabel = QUALITIES.find((q) => q.id === quality)?.label ?? quality
-    const job: DownloadJob = {
-      id: jobId,
-      title: probe?.title ?? url.trim(),
-      detail: `${qLabel}${isPlaylist ? ' · playlist' : ''}${willCombine ? ' · combine' : ''}${toDrive ? ' · → Google Drive' : ''}`,
-      state: 'running',
-      progress: null,
-      log: [],
-      message: 'Starting download…',
-      combinedInfo: null,
-      startedAt: Date.now(),
-      toDrive,
-      drive: null,
-      fixTags: fixTags && isAudioPreset(quality),
-      tags: null,
-      dupes: null,
-      req: { url: url.trim(), quality, isPlaylist, combine: combineClips, shuffle: combineShuffle, toDrive, fixTags, officialArt, skipDuplicates, title: probe?.title ?? '' }
-    }
-    // new card on top; keep the finished-card history bounded. The form resets
-    // so the next task can be set up while this one runs.
-    set((s) => ({
-      jobs: [job, ...s.jobs.filter(isJobActive), ...s.jobs.filter((j) => !isJobActive(j)).slice(0, 8)],
-      error: '',
+    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, fixTags, officialArt, skipDuplicates, watchPlaylist } = get()
+    const links = linksIn(url)
+    if (!links.length) return
+    // a single checked link keeps the track-vs-playlist choice; the rest follow the URL shape
+    const items = links.map((u) => {
+      if (links.length === 1 && probe) return { url: u, isPlaylist: probe.canChooseSingle ? wholePlaylist : probe.kind === 'playlist', title: probe.title }
+      return { url: u }
+    })
+    const res = (await invoke('queue-add', {
+      items,
+      watch: watchPlaylist,
+      opts: { quality, combine: combineClips, shuffle: combineShuffle, toDrive, fixTags, officialArt, skipDuplicates }
+    }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { added?: number; skipped?: { url: string; error: string }[]; watched?: number }
+    if (res.ok !== true) return set({ error: (res as Err).error ?? 'Couldn’t add the links.' })
+    const r = res as unknown as { added: number; skipped: { url: string; error: string }[]; watched: number }
+    set({
+      error: r.skipped.length ? `${r.skipped.length} link(s) not added: ${r.skipped.map((x) => `${x.url.slice(0, 60)} — ${x.error}`).join('; ')}` : '',
       url: '',
       probe: null,
       urlIsMusic: false,
       musicOverride: false,
       toDrive: false,
-      statusMsg: 'Download started — watch its card on the right. Paste another URL to queue the next one.'
-    }))
-
-    const res = (await invoke('download', {
-      jobId,
-      url: url.trim(),
-      quality,
-      isPlaylist,
-      combine: combineClips,
-      shuffle: combineShuffle,
-      toDrive,
-      fixTags,
-      officialArt,
-      skipDuplicates,
-      title: probe?.title ?? ''
-    }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
-
-    // Once a job claims a slot (started), its lifecycle arrives as job-start /
-    // job-end events — which also cover crash-resumed jobs the UI never
-    // invoked. Only pre-claim rejections (slots full, bad URL) are handled here.
-    if (res.started !== true && res.ok !== true) {
-      set((s) => ({
-        jobs: s.jobs.map((j) =>
-          j.id === jobId ? { ...j, state: 'error' as JobState, message: (res as Err).error ?? 'Download failed.', progress: null } : j
-        )
-      }))
-    }
+      watchPlaylist: false,
+      statusMsg: `Added ${r.added} link${r.added === 1 ? '' : 's'} to the queue — ${MAX_JOBS} run at a time, the rest wait their turn.${r.watched ? ` Watching ${r.watched} playlist${r.watched === 1 ? '' : 's'} for new songs.` : ''}`
+    })
+    void get().loadQueue()
   },
 
   cancel: async (jobId) => {
@@ -631,6 +648,8 @@ export const useYt = create<State>((set, get) => ({
         message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
       }))
+    } else if (p.kind === 'title') {
+      patchJob(() => ({ title: String(p.title ?? '') }))
     } else if (p.kind === 'dupe-items') {
       patchJob(() => ({ dupeItems: ((p as unknown as { items?: AlreadyItem[] }).items ?? []) as AlreadyItem[] }))
     } else if (p.kind === 'dupes') {
@@ -681,9 +700,10 @@ export const useYt = create<State>((set, get) => ({
           toDrive: p.toDrive === true,
           drive: null,
           fixTags: p.fixTags === true,
-          tags: null
+          tags: null,
+          req: (p as unknown as { req?: DownloadReq }).req
         }
-        set((s) => ({ jobs: [job, ...s.jobs] }))
+        set((s) => ({ jobs: [job, ...s.jobs.filter(isJobActive), ...s.jobs.filter((j) => !isJobActive(j)).slice(0, 12)] }))
       }
     } else if (p.kind === 'job-end') {
       const c = p.combined
