@@ -199,6 +199,26 @@ while; they also leave the list). Per song: **Remove from list** and a trash
 icon. Songs still uploading / waiting for song info can't be deleted yet. The
 footer shows the backup/sync state and the last Drive sync.
 
+**A listed song must still exist to be skipped** (`findStale` in ipc.ts). The
+list is only trusted for songs that are really there — otherwise one stale entry
+(an upload that never finished, a file deleted in Drive or on this PC) would
+block that song forever. Before every music download (and on **Check**) the
+playlist's ids are read (`yt-dlp -J --flat-playlist`) and each listed one is
+verified: a **Drive** song's file id must exist and not be trashed
+(`getFileMeta`; Drive errors → trust the list); a **this-PC** song's file must
+exist (entries carry `device` = hash of computer + Windows user, so files on
+another PC are trusted, not checked; older entries without it are judged only
+if their folder exists here); a **pending** song is stale unless its job is
+running, journaled for resume, or waiting for song info (these are also swept
+~70 s after launch). Stale songs come off the list (tombstoned, so the fix
+reaches your other PCs) and download again — Check shows "N songs were on your
+downloaded list but missing", the job notes them. Skipped songs are named with
+**where** they are ("in Google Drive · Road Trip", "on this PC · …", "on
+another PC · …"); the job card has **Show them** (the list window filtered to
+those songs) and **Download them again** (takes them off the list and runs the
+same download). The list window has **Check for missing files** for the whole
+list.
+
 With **Skip songs I've already downloaded** (music setting, on by default):
 
 - **Before downloading**: every known video id (and alias) is written into the

@@ -25,6 +25,7 @@
  */
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs'
+import { hostname, userInfo } from 'os'
 import { basename, dirname, extname, join } from 'path'
 import { cleanTitle, normalize, searchTitle } from '../lib/songinfo'
 
@@ -52,7 +53,21 @@ export interface LibrarySong {
   renamedAt: number
   /** last change to this entry — newest wins when two PCs' lists merge */
   updatedAt: number
+  /** which PC a 'local' / 'pending' song lives on (DEVICE_ID) — only that PC
+   *  can check its file still exists; '' for entries from before this existed */
+  device?: string
 }
+
+/** This PC (computer name + Windows user), so a song's file is only checked on the PC that has it. */
+export const DEVICE_ID = ((): string => {
+  let user = ''
+  try {
+    user = userInfo().username
+  } catch {
+    /* no user info */
+  }
+  return createHash('sha1').update(`${hostname()}|${user}`).digest('hex').slice(0, 12)
+})()
 
 /** What's stored (and shared between PCs). */
 export interface ListDoc {
@@ -270,10 +285,11 @@ export class SongLibrary {
   }
 
   /** Newest first; `query` matches title, artist, album, original name, playlist, file. */
-  list(query = '', limit = 200, offset = 0): { total: number; matched: number; items: LibrarySong[] } {
+  list(query = '', limit = 200, offset = 0, ids?: string[]): { total: number; matched: number; items: LibrarySong[] } {
     const q = normalize(query)
     const all = [...this.songs.values()].sort((a, b) => b.downloadedAt - a.downloadedAt)
-    const hits = q ? all.filter((s) => normalize([s.title, s.artist, s.album, s.originalTitle, s.originalArtist, s.playlist, s.fileName].join(' ')).includes(q)) : all
+    const only = ids?.length ? new Set(ids.map((id) => this.get(id)?.videoId ?? id)) : null
+    const hits = all.filter((s) => (!only || only.has(s.videoId)) && (!q || normalize([s.title, s.artist, s.album, s.originalTitle, s.originalArtist, s.playlist, s.fileName].join(' ')).includes(q)))
     return { total: all.length, matched: hits.length, items: hits.slice(offset, offset + limit) }
   }
 

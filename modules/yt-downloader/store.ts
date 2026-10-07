@@ -59,8 +59,34 @@ export interface Probe {
   canChooseSingle: boolean
   /** title of just the track, when canChooseSingle */
   singleTitle: string | null
-  /** how many of its videos are already in the downloaded-songs list */
+  /** how many of its videos are already in the downloaded-songs list (verified still there) */
   alreadyHave?: number
+  alreadyItems?: AlreadyItem[]
+  /** listed songs found missing (deleted / never uploaded) and taken off the list */
+  missingRemoved?: number
+}
+
+/** A song that will be / was skipped because it's already downloaded. */
+export interface AlreadyItem {
+  videoId: string
+  title: string
+  artist: string
+  /** e.g. "in Google Drive · Gym Mix" */
+  where: string
+}
+
+/** What a download was started with (to run it again). */
+export interface DownloadReq {
+  url: string
+  quality: string
+  isPlaylist: boolean
+  combine: boolean
+  shuffle: boolean
+  toDrive: boolean
+  fixTags: boolean
+  officialArt: boolean
+  skipDuplicates: boolean
+  title: string
 }
 
 export interface Progress {
@@ -96,6 +122,10 @@ export interface DownloadJob {
   /** songs skipped because they were downloaded before: by video id (before
    *  downloading) and as the same song under another video (after) */
   dupes?: { before: number; after: number } | null
+  /** which songs it found already downloaded, and where */
+  dupeItems?: AlreadyItem[]
+  /** the request (absent for a job resumed after a restart) */
+  req?: DownloadReq
 }
 
 export interface DriveJobInfo {
@@ -171,6 +201,8 @@ interface State {
   /** how many songs are on the downloaded-songs list */
   libraryCount: number
   libraryOpen: boolean
+  /** open the list showing only these songs (null = all) */
+  libraryIds: string[] | null
   /** songs waiting for the user (MusicBrainz couldn't identify them) */
   reviewItems: ReviewItem[]
   /** the "Song info needed" window: null = closed; jobId narrows it to one download */
@@ -195,7 +227,9 @@ interface State {
   clearMusicOverride: () => void
   setSkipDuplicates: (v: boolean) => Promise<void>
   loadLibraryCount: () => Promise<void>
-  setLibraryOpen: (v: boolean) => void
+  setLibraryOpen: (v: boolean, ids?: string[]) => void
+  /** take a job's skipped songs off the list and run the same download again */
+  redownload: (jobId: string) => Promise<void>
   setFixTags: (v: boolean) => Promise<void>
   setOfficialArt: (v: boolean) => Promise<void>
   loadReview: () => Promise<void>
@@ -243,6 +277,7 @@ export const useYt = create<State>((set, get) => ({
   skipDuplicates: true,
   libraryCount: 0,
   libraryOpen: false,
+  libraryIds: null,
   reviewItems: [],
   reviewOpen: null,
 
@@ -313,7 +348,24 @@ export const useYt = create<State>((set, get) => ({
     if (res?.ok) set({ libraryCount: Number((res as unknown as { total?: number }).total) || 0 })
   },
 
-  setLibraryOpen: (v) => set({ libraryOpen: v }),
+  setLibraryOpen: (v, ids) => set({ libraryOpen: v, libraryIds: v && ids?.length ? ids : null }),
+
+  redownload: async (jobId) => {
+    const old = get().jobs.find((j) => j.id === jobId)
+    if (!old?.req || !old.dupeItems?.length) return
+    if (get().jobs.filter(isJobActive).length >= MAX_JOBS) {
+      set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
+      return
+    }
+    await invoke('library-forget', { videoIds: old.dupeItems.map((d) => d.videoId) })
+    const newId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    const job: DownloadJob = { ...old, id: newId, state: 'running', progress: null, log: [], message: 'Starting download…', combinedInfo: null, startedAt: Date.now(), drive: null, tags: null, dupes: null, dupeItems: undefined }
+    set((s) => ({ jobs: [job, ...s.jobs] }))
+    const res = (await invoke('download', { jobId: newId, ...old.req }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
+    if (res.started !== true && res.ok !== true)
+      set((s) => ({ jobs: s.jobs.map((j) => (j.id === newId ? { ...j, state: 'error' as JobState, message: (res as Err).error ?? 'Download failed.' } : j)) }))
+  },
 
   setFixTags: async (v) => {
     set({ fixTags: v })
@@ -474,7 +526,8 @@ export const useYt = create<State>((set, get) => ({
       drive: null,
       fixTags: fixTags && isAudioPreset(quality),
       tags: null,
-      dupes: null
+      dupes: null,
+      req: { url: url.trim(), quality, isPlaylist, combine: combineClips, shuffle: combineShuffle, toDrive, fixTags, officialArt, skipDuplicates, title: probe?.title ?? '' }
     }
     // new card on top; keep the finished-card history bounded. The form resets
     // so the next task can be set up while this one runs.
@@ -578,6 +631,8 @@ export const useYt = create<State>((set, get) => ({
         message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
       }))
+    } else if (p.kind === 'dupe-items') {
+      patchJob(() => ({ dupeItems: ((p as unknown as { items?: AlreadyItem[] }).items ?? []) as AlreadyItem[] }))
     } else if (p.kind === 'dupes') {
       patchJob(() => ({ dupes: { before: Number(p.before) || 0, after: Number(p.after) || 0 } }))
     } else if (p.kind === 'tags') {

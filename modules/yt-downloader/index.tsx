@@ -258,6 +258,17 @@ export default function YtDownloader(): React.JSX.Element {
                       {s.probe.uploader && <div className="truncate text-xs text-muted">{s.probe.uploader}</div>}
                     </div>
                   </div>
+                  {(s.probe.missingRemoved ?? 0) > 0 && musicMode && (
+                    <div className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-xs">
+                      <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
+                      <span>
+                        <strong>
+                          {s.probe.missingRemoved} song{s.probe.missingRemoved === 1 ? ' was' : 's were'} on your downloaded list but missing
+                        </strong>{' '}
+                        (deleted, or the upload never finished) — taken off the list, so {s.probe.missingRemoved === 1 ? 'it' : 'they'} will download again.
+                      </span>
+                    </div>
+                  )}
                   {(s.probe.alreadyHave ?? 0) > 0 && musicMode && (
                     <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${s.skipDuplicates ? 'border-ok/40 bg-ok/10' : 'border-warn/40 bg-warn/10'}`}>
                       <CopyCheck size={14} className={`mt-px shrink-0 ${s.skipDuplicates ? 'text-ok' : 'text-warn'}`} />
@@ -270,6 +281,18 @@ export default function YtDownloader(): React.JSX.Element {
                             ? ` — they'll be skipped; ${Math.max(0, s.probe.count - (s.probe.alreadyHave ?? 0))} new to download.`
                             : ' — it will be skipped.'
                           : ' — "Skip songs I\'ve already downloaded" is off, so they\'ll download again.'}
+                        {s.probe.alreadyItems?.length ? (
+                          <span className="mt-0.5 block text-muted">
+                            {s.probe.alreadyItems
+                              .slice(0, 3)
+                              .map((a) => `${a.title} (${a.where})`)
+                              .join(', ')}
+                            {s.probe.alreadyItems.length > 3 ? ` +${s.probe.alreadyItems.length - 3} more` : ''} ·{' '}
+                            <button type="button" className="font-medium text-accent hover:underline" onClick={() => s.setLibraryOpen(true, s.probe?.alreadyItems?.map((a) => a.videoId))}>
+                              Show them
+                            </button>
+                          </span>
+                        ) : null}
                       </span>
                     </div>
                   )}
@@ -634,7 +657,7 @@ export default function YtDownloader(): React.JSX.Element {
         </div>
       </div>
       {s.reviewOpen && <ReviewModal jobId={s.reviewOpen.jobId} onClose={s.closeReview} />}
-      {s.libraryOpen && <LibraryModal onClose={() => s.setLibraryOpen(false)} />}
+      {s.libraryOpen && <LibraryModal ids={s.libraryIds ?? undefined} onClose={() => s.setLibraryOpen(false)} />}
     </div>
   )
 }
@@ -656,6 +679,8 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
   const openFolder = useYt((st) => st.openFolder)
   const openDrive = useYt((st) => st.openDrive)
   const openReview = useYt((st) => st.openReview)
+  const setLibraryOpen = useYt((st) => st.setLibraryOpen)
+  const redownload = useYt((st) => st.redownload)
   const waiting = useYt((st) => st.reviewItems.filter((i) => i.jobId === job.id).length)
   const active = isJobActive(job)
   const d = job.drive
@@ -734,12 +759,39 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
 
       {/* songs skipped because they were downloaded before */}
       {job.dupes && job.dupes.before + job.dupes.after > 0 && (
-        <div className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-edge bg-raised/30 px-3 py-2 text-xs">
-          <CopyCheck size={13} className="text-ok" />
-          <span className="font-medium">{job.dupes.before + job.dupes.after} already downloaded</span>
-          <span className="text-muted">
-            — skipped{job.dupes.after ? ` (${job.dupes.after} found as the same song under another video)` : ''}
-          </span>
+        <div className="mt-2.5 rounded-lg border border-edge bg-raised/30 px-3 py-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <CopyCheck size={13} className="text-ok" />
+            <span className="font-medium">{job.dupes.before + job.dupes.after} already downloaded</span>
+            <span className="text-muted">
+              — skipped{job.dupes.after ? ` (${job.dupes.after} found as the same song under another video)` : ''}
+            </span>
+            {job.dupeItems?.length ? (
+              <span className="ml-auto flex gap-1.5">
+                <button onClick={() => setLibraryOpen(true, job.dupeItems?.map((d) => d.videoId))} className="rounded-md border border-edge px-2 py-0.5 font-medium hover:border-accent">
+                  Show them
+                </button>
+                {!active && job.req && (
+                  <button
+                    onClick={() => void redownload(job.id)}
+                    className="rounded-md bg-accent/15 px-2 py-0.5 font-semibold text-accent hover:bg-accent/25"
+                    title="Take these songs off the downloaded list and download them again"
+                  >
+                    Download them again
+                  </button>
+                )}
+              </span>
+            ) : null}
+          </div>
+          {job.dupeItems?.length ? (
+            <div className="mt-1 text-muted">
+              {job.dupeItems
+                .slice(0, 3)
+                .map((d) => `${d.title} (${d.where})`)
+                .join(', ')}
+              {job.dupeItems.length > 3 ? ` +${job.dupeItems.length - 3} more` : ''}
+            </div>
+          ) : null}
         </div>
       )}
 

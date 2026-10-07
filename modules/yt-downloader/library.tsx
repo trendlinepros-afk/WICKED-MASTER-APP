@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cloud, CloudOff, CopyCheck, HardDrive, Hourglass, Loader2, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Cloud, CloudOff, CopyCheck, FileSearch, HardDrive, Hourglass, Loader2, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import { ID, useYt } from './store'
 
 /* ---------------------------------------------------------------------------
@@ -71,8 +71,11 @@ const ago = (ms: number): string => {
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function LibraryModal({ ids, onClose }: { ids?: string[]; onClose: () => void }): React.JSX.Element {
   const total = useYt((st) => st.libraryCount)
+  /** opened from a job / Check: only those songs, until "Show all" */
+  const [only, setOnly] = useState<string[] | null>(ids?.length ? ids : null)
+  const [checking, setChecking] = useState(false)
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<Song[]>([])
   const [matched, setMatched] = useState(0)
@@ -92,7 +95,7 @@ export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.El
   const load = async (q = query, lim = limit): Promise<void> => {
     const my = ++seq.current
     setLoading(true)
-    const r = await inv<ListRes>('library-list', { query: q, limit: lim })
+    const r = await inv<ListRes>('library-list', { query: q, limit: lim, ids: only ?? undefined })
     if (my !== seq.current) return // a newer search won
     setLoading(false)
     if (r.ok) {
@@ -106,7 +109,7 @@ export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.El
     const t = setTimeout(() => void load(query, limit), 200)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, limit, total])
+  }, [query, limit, total, only])
 
   // opening the list pulls in what your other PCs downloaded
   useEffect(() => {
@@ -161,6 +164,21 @@ export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.El
     setMsg({ text: `Removed all ${r.forgotten ?? 0} songs from the list — it starts fresh (your files are untouched).`, tone: 'ok' })
   }
 
+  /** find listed songs whose file is gone (deleted, never uploaded) and take them off */
+  const checkMissing = async (): Promise<void> => {
+    setChecking(true)
+    setMsg(null)
+    const r = await inv<{ ok: boolean; checked?: number; removed?: number; items?: { title: string; artist: string; reason: string }[] }>('library-check')
+    setChecking(false)
+    const n = r.removed ?? 0
+    setMsg(
+      n
+        ? { text: `${n} song${n === 1 ? ' was' : 's were'} missing and ${n === 1 ? 'is' : 'are'} off the list now, so ${n === 1 ? 'it' : 'they'} will download again: ${(r.items ?? []).slice(0, 4).map((i) => `“${i.title}” (${i.reason})`).join(', ')}${n > 4 ? ` +${n - 4} more` : ''}.`, tone: 'ok' }
+        : { text: `Checked ${r.checked ?? 0} songs — every one is still there.`, tone: 'ok' }
+    )
+    void load()
+  }
+
   const scan = async (): Promise<void> => {
     setScanning(true)
     setMsg(null)
@@ -203,6 +221,14 @@ export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.El
               className="w-full rounded-lg border border-edge bg-raised py-1.5 pl-8 pr-2.5 text-sm outline-none focus:border-accent"
             />
           </div>
+          <button
+            onClick={() => void checkMissing()}
+            disabled={checking}
+            className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-xs font-medium hover:border-accent disabled:opacity-40"
+            title="Make sure every listed song still exists (in Google Drive / on this PC) — missing ones come off the list and will download again"
+          >
+            {checking ? <Loader2 size={13} className="animate-spin" /> : <FileSearch size={13} />} Check for missing files
+          </button>
           <button
             onClick={() => void scan()}
             disabled={scanning}
@@ -252,6 +278,23 @@ export function LibraryModal({ onClose }: { onClose: () => void }): React.JSX.El
           </div>
         )}
 
+        {only && (
+          <div className="flex items-center gap-2 border-b border-edge bg-raised/40 px-5 py-2 text-xs">
+            <span className="text-muted">
+              Showing the {only.length} song{only.length === 1 ? '' : 's'} that {only.length === 1 ? 'was' : 'were'} already downloaded — tick them and{' '}
+              <strong>Remove from list</strong> to download them again.
+            </span>
+            <button
+              onClick={() => {
+                setOnly(null)
+                setSelected(new Set())
+              }}
+              className="ml-auto shrink-0 font-medium text-accent hover:underline"
+            >
+              Show all
+            </button>
+          </div>
+        )}
         {msg && <div className={`border-b border-edge px-5 py-2 text-xs ${msg.tone === 'err' ? 'bg-danger/10 text-danger' : 'bg-raised/40 text-muted'}`}>{msg.text}</div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto">

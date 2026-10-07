@@ -25,11 +25,11 @@ import {
 import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/combine'
 import { DRIVE_ROOT_NAME, DriveSink, leftoverMedia, readDoneList, type DriveProgress } from './ipc/drive'
 import { getDriveProvider } from '../file-vault/ipc/shared'
-import { findByName, findOrCreateSubfolder, listFolder, md5File, resumableUpload, trashFile } from '../file-vault/ipc/gdrive'
+import { DriveApiError, findByName, findOrCreateSubfolder, getFileMeta, listFolder, md5File, resumableUpload, trashFile } from '../file-vault/ipc/gdrive'
 import { MusicBrainz, mbUserAgent } from './ipc/musicbrainz'
 import { extractArt, probeSong, readImage, writeSongTags, type Art } from './ipc/tagio'
 import { ReviewStore, TagFixer, type ReadyInfo, type TagFixDeps } from './ipc/tagfix'
-import { SongLibrary, docSignature, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT, type ListDoc } from './ipc/library'
+import { DEVICE_ID, SongLibrary, docSignature, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT, type LibrarySong, type ListDoc } from './ipc/library'
 import { assessTags, emptyTags, sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
 
 /* ------------------------------------------------------------------------ *
@@ -394,7 +394,7 @@ export default function register(ctx: ModuleIpcContext): void {
     for (const f of findDownloadedSongs(downloadDir())) {
       if (skip(f.videoId)) continue
       const { artist, title } = parseSongFileName(f.fileName)
-      library.record({ videoId: f.videoId, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.fileName, location: 'local', path: f.path, driveFileId: '', playlist: basename(dirname(f.path)), jobId: '', downloadedAt: Date.now() })
+      library.record({ videoId: f.videoId, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.fileName, location: 'local', path: f.path, driveFileId: '', playlist: basename(dirname(f.path)), jobId: '', downloadedAt: Date.now(), device: DEVICE_ID })
       local++
     }
     const d = includeDrive ? getDriveProvider() : null
@@ -435,9 +435,10 @@ export default function register(ctx: ModuleIpcContext): void {
   }
 
   ctx.ipcMain.handle(`${ID}:library-list`, (_e, raw: unknown) => {
-    const r = (raw ?? {}) as { query?: unknown; limit?: unknown; offset?: unknown }
+    const r = (raw ?? {}) as { query?: unknown; limit?: unknown; offset?: unknown; ids?: unknown }
     const limit = Math.max(1, Math.min(1000, Number(r.limit) || 200))
-    return { ok: true, ...library.list(typeof r.query === 'string' ? r.query : '', limit, Math.max(0, Number(r.offset) || 0)), syncedAt: listSync.at, syncError: listSync.error }
+    const ids = Array.isArray(r.ids) ? r.ids.map(String) : undefined
+    return { ok: true, ...library.list(typeof r.query === 'string' ? r.query : '', limit, Math.max(0, Number(r.offset) || 0), ids), syncedAt: listSync.at, syncError: listSync.error }
   })
 
   /** forget songs (or all) so they can be downloaded again — files are not touched */
@@ -450,6 +451,94 @@ export default function register(ctx: ModuleIpcContext): void {
   })
 
   ctx.ipcMain.handle(`${ID}:library-scan`, async () => ({ ok: true, ...(await scanExisting(true)), total: library.size }))
+
+  /* ---- is a listed song really still there? (so a stale entry never blocks a download) ---- */
+
+  type StaleSong = LibrarySong & { reason: string }
+
+  /**
+   * Songs on the list whose file is gone: a Drive file that was deleted /
+   * trashed, a file on THIS PC that isn't there any more, or an upload that
+   * never finished (its job isn't running, journaled or waiting for song info).
+   * Songs on another PC can't be checked from here and are trusted.
+   */
+  async function findStale(entries: LibrarySong[]): Promise<StaleSong[]> {
+    const out: StaleSong[] = []
+    const journaled = new Set(readPending().map((x) => x.jobId))
+    const driveOnes: LibrarySong[] = []
+    for (const s of entries) {
+      if (s.location === 'pending') {
+        if (!jobs.has(s.jobId) && !journaled.has(s.jobId) && !(s.path && review.isHeld(s.path))) out.push({ ...s, reason: 'its upload never finished' })
+      } else if (s.location === 'local') {
+        // a path from before device ids: only judge it if its folder exists on this PC
+        const mine = s.device ? s.device === DEVICE_ID : !!s.path && existsSync(dirname(s.path))
+        if (mine && s.path && !existsSync(s.path)) out.push({ ...s, reason: 'it’s no longer on this PC' })
+      } else if (s.location === 'drive' && s.driveFileId) driveOnes.push(s)
+    }
+    const d = getDriveProvider()
+    if (driveOnes.length && d?.status().connected) {
+      const token = await d.getToken()
+      const queue = [...driveOnes]
+      const worker = async (): Promise<void> => {
+        for (let s = queue.shift(); s; s = queue.shift()) {
+          try {
+            const meta = await getFileMeta(token, s.driveFileId)
+            if (meta.trashed) out.push({ ...s, reason: 'it’s in Google Drive’s trash' })
+          } catch (err) {
+            if (err instanceof DriveApiError && err.status === 404) out.push({ ...s, reason: 'it’s no longer in Google Drive' })
+            /* other errors (offline, rate limit): trust the list */
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(8, driveOnes.length) }, worker))
+    }
+    return out
+  }
+
+  /** Take stale songs off the list (so they download again). */
+  function dropStale(stale: StaleSong[]): void {
+    if (!stale.length) return
+    library.forget(stale.map((s) => s.videoId))
+    library.flush()
+    void syncListWithDrive()
+  }
+
+  const songLabel = (s: LibrarySong): string => `“${s.title || s.fileName}”${s.artist ? ` — ${s.artist}` : ''}`
+  const whereIs = (s: LibrarySong): string =>
+    s.location === 'drive' ? `in Google Drive · ${s.playlist}` : s.location === 'pending' ? 'still uploading / waiting for info' : s.device && s.device !== DEVICE_ID ? `on another PC · ${s.playlist}` : `on this PC · ${s.playlist}`
+
+  /** Video ids a URL will download (flat playlist read; [] if it can't be read). */
+  async function idsForUrl(url: string, isPlaylist: boolean): Promise<string[]> {
+    const ud = userData()
+    if (!hasYtDlp(ud)) return []
+    const r = await probeJson(ud, url, isPlaylist ? [] : ['--no-playlist'])
+    if (!r.ok) return []
+    const j = r.json
+    if (Array.isArray(j.entries)) return (j.entries as { id?: unknown }[]).map((e) => String(e?.id ?? '')).filter(Boolean)
+    return j.id ? [String(j.id)] : []
+  }
+
+  /** Which of these ids are already downloaded — after dropping stale entries. */
+  async function checkKnown(ids: string[]): Promise<{ known: LibrarySong[]; stale: StaleSong[] }> {
+    const seen = new Set<string>()
+    const listed = ids.map((id) => library.get(id)).filter((s): s is LibrarySong => !!s && !seen.has(s.videoId) && !!seen.add(s.videoId))
+    const stale = await findStale(listed)
+    dropStale(stale)
+    const goneIds = new Set(stale.map((s) => s.videoId))
+    return { known: listed.filter((s) => !goneIds.has(s.videoId)), stale }
+  }
+
+  ctx.ipcMain.handle(`${ID}:library-check`, async () => {
+    const all = library.list('', Number.MAX_SAFE_INTEGER).items
+    const stale = await findStale(all)
+    dropStale(stale)
+    return { ok: true, checked: all.length, removed: stale.length, items: stale.slice(0, 50).map((s) => ({ videoId: s.videoId, title: s.title, artist: s.artist, playlist: s.playlist, reason: s.reason })), total: library.size }
+  })
+
+  // after crash-resumes have had their chance, clear uploads that will never finish
+  setTimeout(() => {
+    void findStale(library.list('', Number.MAX_SAFE_INTEGER).items.filter((s) => s.location === 'pending')).then(dropStale)
+  }, RESUME_DELAY_MS + 60_000)
 
   /* ---- shared through Google Drive: every PC with Drive connected sees every PC's downloads ---- */
 
@@ -498,7 +587,7 @@ export default function register(ctx: ModuleIpcContext): void {
             /* next sync tries again */
           }
         if (library.signature() !== remoteSig) {
-          const tmp = join(ctx.app.getPath('temp'), `wicked-downloaded-songs-${process.pid}.json`)
+          const tmp = join(ctx.app.getPath('temp'), `wicked-downloaded-songs-${process.pid}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.json`)
           mkdirSync(dirname(tmp), { recursive: true })
           writeFileSync(tmp, JSON.stringify(library.toDoc()), 'utf8')
           try {
@@ -782,18 +871,17 @@ export default function register(ctx: ModuleIpcContext): void {
       if (one.ok) singleTitle = String(one.json.title ?? '') || null
     }
 
+    const verified = await checkKnown(isPlaylist ? entries.map((e) => String((e as { id?: unknown })?.id ?? '')).filter(Boolean) : [String(j.id ?? '')])
     return {
       ok: true,
       kind: isPlaylist ? 'playlist' : 'video',
       title: String(j.title ?? j.id ?? 'Untitled'),
       uploader: String(j.uploader ?? j.channel ?? j.artist ?? ''),
       count: isPlaylist ? entries.length : 1,
-      // songs already in the downloaded-songs list (skipped when "skip duplicates" is on)
-      alreadyHave: isPlaylist
-        ? entries.filter((e) => library.has(String((e as { id?: unknown })?.id ?? ''))).length
-        : library.has(String(j.id ?? ''))
-          ? 1
-          : 0,
+      // songs already in the downloaded-songs list (verified to still exist — stale ones are dropped)
+      alreadyHave: verified.known.length,
+      alreadyItems: verified.known.slice(0, 200).map((s) => ({ videoId: s.videoId, title: s.title || s.fileName, artist: s.artist, where: whereIs(s) })),
+      missingRemoved: verified.stale.length,
       duration: typeof j.duration === 'number' ? j.duration : null,
       thumbnail: typeof j.thumbnail === 'string' ? j.thumbnail : null,
       id: String(j.id ?? ''),
@@ -910,7 +998,21 @@ export default function register(ctx: ModuleIpcContext): void {
       const archivePath = p.toDrive ? join(dir, '.wicked-archive.txt') : dedupe ? join(moduleDir(), `archive-${jobId}.txt`) : undefined
       // known songs go into this job's yt-dlp archive, so they're skipped before
       // downloading — including what your other PCs downloaded (shared via Drive)
-      if (dedupe) await syncListQuick()
+      if (dedupe) {
+        await syncListQuick()
+        // make sure every listed song in THIS playlist really still exists —
+        // a deleted/never-uploaded one is taken off the list and downloaded again
+        const { known, stale } = await checkKnown(await idsForUrl(p.url, p.isPlaylist))
+        if (stale.length)
+          sendP({
+            kind: 'note',
+            note: `${stale.length} song${stale.length === 1 ? ' was' : 's were'} on the downloaded list but ${stale.length === 1 ? 'is' : 'are'} missing (${stale[0].reason}) — downloading ${stale.length === 1 ? 'it' : 'them'} again: ${stale.slice(0, 3).map(songLabel).join(', ')}${stale.length > 3 ? ` +${stale.length - 3} more` : ''}.`
+          })
+        if (known.length) {
+          sendP({ kind: 'dupe-items', items: known.slice(0, 200).map((s) => ({ videoId: s.videoId, title: s.title || s.fileName, artist: s.artist, where: whereIs(s) })) })
+          sendP({ kind: 'note', note: `Already downloaded — will skip: ${known.slice(0, 4).map((s) => `${songLabel(s)} (${whereIs(s)})`).join(', ')}${known.length > 4 ? ` +${known.length - 4} more` : ''}.` })
+        }
+      }
       if (dedupe && archivePath) {
         const have = new Set(existsSync(archivePath) ? readFileSync(archivePath, 'utf8').split(/\r?\n/) : [])
         const add = library.archiveLines().filter((l) => !have.has(l))
@@ -962,7 +1064,8 @@ export default function register(ctx: ModuleIpcContext): void {
           driveFileId: '',
           playlist: p.title || 'Download',
           jobId,
-          downloadedAt: Date.now()
+          downloadedAt: Date.now(),
+          device: DEVICE_ID
         })
       }
       /** a finished song: drop it if it's one we already have, else list it and pass it on */
