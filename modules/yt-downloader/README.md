@@ -154,6 +154,43 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
   some were skipped.
 - Re-downloading is safe — yt-dlp skips files already present.
 
+## Download to Google Drive (per link)
+
+After you paste a link, a **Download to Google Drive** checkbox appears. It's an
+option for **that link only** — it resets for every new URL and is never a saved
+rule. It uses the Google Drive connected in **File Vault** (token only, via
+`getDriveProvider()` in `file-vault/ipc/shared.ts`; no second sign-in) and is
+disabled with a "Connect Google Drive in File Vault" link when Drive isn't
+connected.
+
+- **Where**: `WICKED Vault/YouTube Downloads/` + the same sub-folders a local
+  download gets (a playlist/album gets its own folder). It's inside the vault, so
+  File Vault shows the files too.
+- **How (`ipc/drive.ts`)**: yt-dlp must write real files (it merges streams and
+  embeds tags + cover art in place), so a Drive job downloads into a per-job
+  staging folder, `<OS temp>/WICKED YouTube to Drive/<jobId>`. yt-dlp appends
+  each finished file's final path to `.wicked-done.txt`
+  (`--print-to-file after_move:filepath`); main reads it every 1.5 s and hands
+  new files to a `DriveSink`, which uploads them one at a time with File Vault's
+  resumable `resumableUpload`, **MD5-verifies** against Drive's checksum, then
+  deletes the local file and its cover-art thumbnail. Staging only ever holds
+  the song(s) in flight; the thumbnails aren't uploaded (the art is embedded).
+- **End of job**: any media the list missed is swept from staging and uploaded,
+  the queue drains, and staging is deleted. A file that still won't upload after
+  3 tries is **moved to the normal download folder** (same sub-path) rather than
+  lost, and the card says so. Same-named files already in the Drive folder are
+  replaced in place (no "name (1)" copies).
+- **Combine + Drive**: stitching needs every clip on disk, so a combine job
+  uploads the clips and the movie after the combine.
+- **Crash / quit**: staging and the journal entry are kept (`toDrive` is
+  journaled); on the next launch the job resumes with
+  `--download-archive .wicked-archive.txt`, so tracks already downloaded (and
+  uploaded + deleted) are skipped, and anything still staged is uploaded. Quitting
+  no longer clears the resume journal for any job. Staging folders whose job isn't
+  resuming are swept at startup. **Cancel** aborts the upload and deletes staging.
+- The job card shows a **Google Drive** line (uploaded / waiting / failed + the
+  current file's upload bar) and **Open in Google Drive** when done.
+
 ## Data / MCP
 
 - Download folder defaults to `Downloads/WICKED YouTube` (changeable; can be a
@@ -162,9 +199,10 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
   save location from the Total Channel Downloader, so the two tools can target
   different folders. yt-dlp binary + module folder are shown in Settings →
   Modules.
-- MCP: `yt-downloader__status` / `__probe` (read-only), `__download`
-  (destructive, confirm-gated — writes files, can run long; takes an optional
-  `combine` flag), `__update`, `__cancel`.
+- MCP: `yt-downloader__status` / `__probe` (read-only; status includes
+  `googleDrive.connected`), `__download` (destructive, confirm-gated — writes
+  files, can run long; optional `combine` and `toDrive` flags), `__update`,
+  `__cancel`.
 
 ## Note
 

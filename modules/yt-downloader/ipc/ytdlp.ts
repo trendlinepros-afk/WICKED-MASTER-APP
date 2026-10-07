@@ -156,6 +156,12 @@ export interface DownloadRequest {
   downloadDir: string
   /** when set, yt-dlp appends each final file path here (for combine) */
   manifestPath?: string
+  /** "Download to Google Drive": each finished file's path is appended here as
+   *  it completes so it can be uploaded straight away */
+  doneListPath?: string
+  /** yt-dlp --download-archive file: a resumed Drive job skips items already
+   *  downloaded (and uploaded + deleted from staging) */
+  archivePath?: string
 }
 
 
@@ -243,6 +249,8 @@ export function buildDownloadArgs(req: DownloadRequest, ffmpeg: string | null): 
   // knows exactly which files this job produced. --print-to-file (unlike
   // --print) does not imply --simulate, so the download still happens.
   if (req.manifestPath) args.push('--print-to-file', 'after_move:filepath', req.manifestPath)
+  if (req.doneListPath && req.doneListPath !== req.manifestPath) args.push('--print-to-file', 'after_move:filepath', req.doneListPath)
+  if (req.archivePath) args.push('--download-archive', req.archivePath)
   if (ffmpeg) args.push('--ffmpeg-location', ffmpeg)
   args.push(req.url)
   return args

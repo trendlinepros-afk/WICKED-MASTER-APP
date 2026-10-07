@@ -33,6 +33,11 @@ into WICKED → Connect (browser sign-in).
   with PKCE + state, `prompt=consent` + `access_type=offline` for a refresh
   token. Full `drive` scope so files dropped into the vault folder from
   outside WICKED still show up (with `drive.file` they wouldn't).
+- **Shared with other modules** (`ipc/shared.ts`): only a token getter, the
+  connected/email status and `vaultFolderId()` (the vault folder, re-created if
+  it was deleted or trashed) cross the module boundary. Backup uses it for its
+  offsite copy; YouTube Downloader's "Download to Google Drive" saves into
+  `WICKED Vault/YouTube Downloads`, so those files show up here.
 - **Secrets**: client id is plaintext (public by design for installed apps);
   client secret + refresh token are `safeStorage` (DPAPI) encrypted in
   `modules/file-vault/auth.json`, which is **excluded from Backup & Cloud Sync**

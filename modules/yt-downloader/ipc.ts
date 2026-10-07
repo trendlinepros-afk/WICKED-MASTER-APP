@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { dirname, join } from 'path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
+import { dirname, join, relative } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import {
@@ -23,6 +23,9 @@ import {
   type DownloadRequest
 } from './ipc/ytdlp'
 import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/combine'
+import { DRIVE_ROOT_NAME, DriveSink, leftoverMedia, readDoneList, type DriveProgress } from './ipc/drive'
+import { getDriveProvider } from '../file-vault/ipc/shared'
+import { findByName, findOrCreateSubfolder, md5File, resumableUpload } from '../file-vault/ipc/gdrive'
 
 /* ------------------------------------------------------------------------ *
  *  YT DOWNLOADER — main process.
@@ -61,6 +64,8 @@ interface PendingJob {
   isPlaylist: boolean
   combine: boolean
   shuffle?: boolean
+  /** upload to Google Drive (File Vault's connection) instead of keeping files locally */
+  toDrive?: boolean
   title: string
   startedAt: number
   attempts: number
@@ -77,8 +82,12 @@ export default function register(ctx: ModuleIpcContext): void {
   interface Job {
     child: ChildProcess | null
     cancelRequested: boolean
+    /** extra cancel work (a Drive job aborts its in-flight upload) */
+    onCancel?: () => void
   }
   const jobs = new Map<string, Job>()
+  /** set on app quit: running jobs stay journaled (and Drive staging stays) for resume */
+  let quitting = false
 
   const userData = (): string => ctx.app.getPath('userData')
   const moduleDir = (): string => join(userData(), 'modules', ID)
@@ -107,6 +116,20 @@ export default function register(ctx: ModuleIpcContext): void {
   }
   const removePending = (jobId: string): void => {
     savePending(readPending().filter((x) => x.jobId !== jobId))
+  }
+
+  // Drive jobs download into <temp>/WICKED YouTube to Drive/<jobId>; a folder
+  // whose job isn't about to resume is leftover scratch.
+  const stagingRoot = (): string => join(ctx.app.getPath('temp'), 'WICKED YouTube to Drive')
+  const stagingDirFor = (jobId: string): string => join(stagingRoot(), jobId)
+  try {
+    const keep = new Set(survivorsForStaging().map((p) => p.jobId))
+    for (const name of readdirSync(stagingRoot())) if (!keep.has(name)) rmSync(join(stagingRoot(), name), { recursive: true, force: true })
+  } catch {
+    /* nothing staged */
+  }
+  function survivorsForStaging(): PendingJob[] {
+    return readPending().filter((p) => p.toDrive)
   }
 
   // Sweep ffmpeg scratch left by interrupted combines — but KEEP manifests that
@@ -174,7 +197,12 @@ export default function register(ctx: ModuleIpcContext): void {
       downloadDir: downloadDir(),
       busy: jobs.size > 0,
       activeJobs: jobs.size,
-      maxJobs: MAX_JOBS
+      maxJobs: MAX_JOBS,
+      // "Download to Google Drive" availability (File Vault's connection)
+      googleDrive: (() => {
+        const st = getDriveProvider()?.status() ?? { connected: false, email: '' }
+        return { connected: st.connected, email: st.email, folder: `WICKED Vault/${DRIVE_ROOT_NAME}` }
+      })()
     }
   })
 
@@ -247,6 +275,21 @@ export default function register(ctx: ModuleIpcContext): void {
     const dir = downloadDir()
     mkdirSync(dir, { recursive: true })
     await ctx.shell.openPath(dir)
+    return { ok: true }
+  })
+
+  /* ----------------------------- google drive ---------------------------- */
+
+  // "Download to Google Drive" uses File Vault's connection (token only).
+  ctx.ipcMain.handle(`${ID}:drive-status`, () => {
+    const d = getDriveProvider()
+    const st = d?.status() ?? { connected: false, email: '' }
+    return { ok: true, available: !!d, connected: st.connected, email: st.email, folder: `WICKED Vault/${DRIVE_ROOT_NAME}` }
+  })
+
+  ctx.ipcMain.handle(`${ID}:open-drive`, async (_e, raw: unknown) => {
+    const url = typeof raw === 'string' && /^https:\/\/drive\.google\.com\//.test(raw) ? raw : 'https://drive.google.com/drive/my-drive'
+    await ctx.shell.openExternal(url)
     return { ok: true }
   })
 
@@ -367,6 +410,8 @@ export default function register(ctx: ModuleIpcContext): void {
     combine: boolean
     /** true = stitch in random order; false = oldest → newest (file order) */
     shuffle: boolean
+    /** upload each finished file to Google Drive, keeping nothing locally */
+    toDrive: boolean
     title: string
     /** original start time — preserved across a crash resume for the combine */
     startedAt: number
@@ -400,6 +445,7 @@ export default function register(ctx: ModuleIpcContext): void {
       isPlaylist: p.isPlaylist,
       combine: p.combine,
       shuffle: p.shuffle,
+      toDrive: p.toDrive,
       title: p.title,
       startedAt: p.startedAt,
       attempts: p.attempts
@@ -410,6 +456,7 @@ export default function register(ctx: ModuleIpcContext): void {
       quality: p.quality,
       isPlaylist: p.isPlaylist,
       combine: p.combine,
+      toDrive: p.toDrive,
       resumed: p.resumed
     })
     if (p.resumed)
@@ -421,6 +468,8 @@ export default function register(ctx: ModuleIpcContext): void {
       return res
     }
 
+    let sink: DriveSink | null = null
+    let poll: ReturnType<typeof setInterval> | null = null
     try {
       const ud = userData()
       if (!hasYtDlp(ud)) {
@@ -428,8 +477,13 @@ export default function register(ctx: ModuleIpcContext): void {
         if (!dl.ok) return finish({ ok: false, error: 'yt-dlp is not installed: ' + (dl.error ?? '') })
       }
       await ensureJsRuntime()
-      const dir = downloadDir()
+      // "Download to Google Drive": stage in temp, upload each file as it finishes
+      const drive = p.toDrive ? getDriveProvider() : null
+      if (p.toDrive && !drive?.status().connected)
+        return finish({ ok: false, error: 'Google Drive isn’t connected — open File Vault and click Connect, or untick “Download to Google Drive”.' })
+      const dir = p.toDrive ? stagingDirFor(jobId) : downloadDir()
       mkdirSync(dir, { recursive: true })
+      const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : undefined
 
       const ffmpeg = resolveFfmpeg()
       // "Combine clips" only makes sense for a multi-item VIDEO download and needs
@@ -438,8 +492,43 @@ export default function register(ctx: ModuleIpcContext): void {
       const manifestPath = wantCombine ? manifestPathFor(jobId) : undefined
       if (manifestPath) mkdirSync(dirname(manifestPath), { recursive: true })
 
-      const req: DownloadRequest = { url: p.url, quality: p.quality, isPlaylist: p.isPlaylist, downloadDir: dir, manifestPath }
+      const req: DownloadRequest = {
+        url: p.url,
+        quality: p.quality,
+        isPlaylist: p.isPlaylist,
+        downloadDir: dir,
+        manifestPath,
+        doneListPath,
+        archivePath: p.toDrive ? join(dir, '.wicked-archive.txt') : undefined
+      }
       const args = buildDownloadArgs(req, ffmpeg)
+
+      if (drive && doneListPath) {
+        sink = new DriveSink(
+          dir,
+          {
+            getToken: drive.getToken,
+            vaultFolderId: drive.vaultFolderId,
+            findOrCreateSubfolder,
+            findByName,
+            upload: (o) => resumableUpload({ ...o, getToken: drive.getToken }),
+            md5File
+          },
+          (prog: DriveProgress) => sendP({ kind: 'drive', ...prog })
+        )
+        const s = sink
+        job.onCancel = () => s.abort()
+        sendP({ kind: 'note', note: `Saving to Google Drive (${drive.status().email || 'File Vault'}) → WICKED Vault/${DRIVE_ROOT_NAME} — nothing is kept on this PC.` })
+        // a stitched movie needs every clip on disk first, so combine jobs upload at the end
+        if (!wantCombine) {
+          let seenLines = 0
+          poll = setInterval(() => {
+            const lines = readDoneList(doneListPath)
+            for (const l of lines.slice(seenLines)) s.add(l)
+            seenLines = lines.length
+          }, 1500)
+        }
+      }
 
       let completed = 0
       const result = await spawnYtDlp(
@@ -461,8 +550,12 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       )
 
+      if (poll) clearInterval(poll)
+      poll = null
       // treeKill (taskkill) doesn't set child.killed, so check our flag too
       if (result.cancelled || job.cancelRequested) return finish({ ok: false, cancelled: true })
+      // app is closing: leave staging + the journal so the next launch resumes
+      if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
 
       // ---- combine phase (best-effort; never fails the download itself) ----
       // collectOutputs prefers the manifest, which survives a crash resume (the
@@ -504,16 +597,70 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       }
 
+      // ---- Google Drive: upload whatever is still staged, then report ----
+      let drived: Record<string, unknown> | null = null
+      if (sink && doneListPath) {
+        for (const l of readDoneList(doneListPath)) sink.add(l)
+        // anything the list missed, plus clips + the stitched movie of a combine job
+        for (const f of leftoverMedia(dir)) sink.add(f)
+        await sink.drain()
+        if (job.cancelRequested) return finish({ ok: false, cancelled: true })
+        if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
+        // a file that wouldn't upload is kept, not lost: moved to the normal downloads folder
+        const kept: string[] = []
+        for (const f of sink.failed) {
+          const dest = join(downloadDir(), relative(dir, f.path))
+          try {
+            mkdirSync(dirname(dest), { recursive: true })
+            try {
+              renameSync(f.path, dest)
+            } catch {
+              copyFileSync(f.path, dest) // temp and Downloads can be on different drives
+              rmSync(f.path, { force: true })
+            }
+            kept.push(dest)
+          } catch {
+            /* still in staging; reported below */
+          }
+        }
+        const pr = sink.progress()
+        drived = {
+          uploaded: pr.uploaded,
+          failed: sink.failed.length,
+          folderUrl: pr.folderUrl,
+          keptLocally: kept.length,
+          keptDir: kept.length ? downloadDir() : undefined,
+          error: sink.failed[0]?.error
+        }
+        sendP({ kind: 'drive', ...pr, pending: 0, current: null, done: true })
+        sendP({ kind: 'note', note: `Google Drive: ${pr.uploaded} file${pr.uploaded === 1 ? '' : 's'} uploaded to WICKED Vault/${DRIVE_ROOT_NAME}.` })
+        if (sink.failed.length)
+          sendP({
+            kind: 'note',
+            note: `${sink.failed.length} file${sink.failed.length === 1 ? '' : 's'} couldn’t be uploaded (${sink.failed[0].error}) — ${kept.length ? `saved to ${downloadDir()} instead` : 'left in the temp folder'}.`
+          })
+      }
+
       if (!result.ok) {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
         // treat as a soft warning when at least something downloaded.
-        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined })
+        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined, drive: drived })
       }
-      return finish({ ok: true, completed, combined })
+      return finish({ ok: true, completed, combined, drive: drived })
     } finally {
+      if (poll) clearInterval(poll)
       jobs.delete(jobId)
-      removePending(jobId)
+      // quitting keeps the journal entry so the job resumes on the next launch
+      if (!quitting) removePending(jobId)
+      if (p.toDrive && !quitting) {
+        sink?.abort()
+        try {
+          rmSync(stagingDirFor(jobId), { recursive: true, force: true })
+        } catch {
+          /* locked by a dying yt-dlp — swept on next launch */
+        }
+      }
       const manifest = manifestPathFor(jobId)
       if (existsSync(manifest)) {
         try {
@@ -526,7 +673,7 @@ export default function register(ctx: ModuleIpcContext): void {
       // half-downloaded files — sweep this job's .part/.ytdl leftovers. Only
       // when no other job is running (they share the folder and their own
       // partials must survive).
-      if (job.cancelRequested && jobs.size === 0) {
+      if (job.cancelRequested && jobs.size === 0 && !p.toDrive) {
         try {
           const dir = downloadDir()
           for (const name of readdirSync(dir)) {
@@ -560,6 +707,7 @@ export default function register(ctx: ModuleIpcContext): void {
       isPlaylist: r.isPlaylist === true,
       combine: r.combine === true,
       shuffle: r.shuffle === true,
+      toDrive: r.toDrive === true,
       title: typeof r.title === 'string' ? r.title : '',
       startedAt: Date.now(),
       attempts: 0,
@@ -577,7 +725,7 @@ export default function register(ctx: ModuleIpcContext): void {
           continue
         }
         console.log(`[${ID}] resuming interrupted job: ${p.title || p.url}`)
-        void performJob({ ...p, shuffle: p.shuffle === true, attempts: p.attempts + 1, resumed: true })
+        void performJob({ ...p, shuffle: p.shuffle === true, toDrive: p.toDrive === true, attempts: p.attempts + 1, resumed: true })
       }
     }, RESUME_DELAY_MS)
   }
@@ -591,10 +739,9 @@ export default function register(ctx: ModuleIpcContext): void {
     let killed = 0
     for (const j of targets) {
       j.cancelRequested = true
-      if (j.child) {
-        treeKill(j.child)
-        killed++
-      }
+      j.onCancel?.()
+      if (j.child) treeKill(j.child)
+      if (j.child || j.onCancel) killed++
     }
     return { ok: true, cancelled: killed > 0 }
   })
@@ -603,6 +750,7 @@ export default function register(ctx: ModuleIpcContext): void {
   // stay in the resume journal (cancelRequested is NOT set), so the next
   // launch picks them back up.
   ctx.app.on('before-quit', () => {
+    quitting = true
     for (const j of jobs.values()) if (j.child) treeKill(j.child)
   })
 

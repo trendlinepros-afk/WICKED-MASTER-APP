@@ -14,7 +14,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__status`,
       description:
-        'Report downloader readiness: whether yt-dlp is installed (and its version, and if it looks stale), whether ffmpeg is available, and the current download folder. Read-only.',
+        'Report downloader readiness: whether yt-dlp is installed (and its version, and if it looks stale), whether ffmpeg is available, the current download folder, and whether Google Drive is connected (googleDrive — needed for download toDrive). Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:status`)
     },
@@ -30,7 +30,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__download`,
       description:
-        'Download a YouTube / YouTube Music video, track, playlist or album to the configured folder at the chosen quality. Destructive: it writes files to disk and, for playlists, can run for a very long time and use significant bandwidth/space. quality is one of best|2160|1440|1080|720|480|360|audio|audio-native — "audio" = MP3 320k and "audio-native" = original opus/m4a (no re-encode); both embed artist/album tags and cover art. Set isPlaylist true to grab the whole playlist/album, false to take only the single track/video (important for YouTube Music song links, which usually carry an endless auto-radio list). Requires confirmation.',
+        'Download a YouTube / YouTube Music video, track, playlist or album to the configured folder at the chosen quality. Destructive: it writes files to disk and, for playlists, can run for a very long time and use significant bandwidth/space. quality is one of best|2160|1440|1080|720|480|360|audio|audio-native — "audio" = MP3 320k and "audio-native" = original opus/m4a (no re-encode); both embed artist/album tags and cover art. Set isPlaylist true to grab the whole playlist/album, false to take only the single track/video (important for YouTube Music song links, which usually carry an endless auto-radio list). Set toDrive true to save to Google Drive instead (via File Vault; WICKED Vault/YouTube Downloads — each file uploads as it finishes and nothing is kept locally); check yt-downloader__status first if unsure Drive is connected. Requires confirmation.',
       destructive: true,
       inputSchema: {
         url: z.string().describe('YouTube or YouTube Music video/track/playlist/album URL.'),
@@ -50,12 +50,16 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           .optional()
           .describe('Stitch in RANDOM order (default false = oldest → newest / playlist order). File names stay numbered oldest-first either way.'),
         title: z.string().optional().describe('Optional title used to name the combined movie file.'),
+        toDrive: z
+          .boolean()
+          .optional()
+          .describe('Upload to Google Drive (WICKED Vault/YouTube Downloads, via File Vault) instead of keeping files on this PC. Needs Google Drive connected in File Vault.'),
         confirm: z.boolean().optional().describe('Set true to actually start the download.')
       },
       handler: (args) => {
         const gate = ctx.confirm(
           args.confirm as boolean | undefined,
-          `Download ${args.isPlaylist ? 'the entire playlist' : 'the video'} at ${String(args.quality)} quality to the configured folder${args.combine ? ', then combine the clips into one movie' : ''}. This writes files to disk and may take a long time / a lot of space for playlists.`
+          `Download ${args.isPlaylist ? 'the entire playlist' : 'the video'} at ${String(args.quality)} quality ${args.toDrive ? 'to Google Drive (WICKED Vault/YouTube Downloads)' : 'to the configured folder'}${args.combine ? ', then combine the clips into one movie' : ''}. This writes files ${args.toDrive ? 'to your Drive' : 'to disk'} and may take a long time / a lot of space for playlists.`
         )
         if (gate) return gate
         return ctx.invoke(`${ID}:download`, {
@@ -64,6 +68,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           isPlaylist: args.isPlaylist === true,
           combine: args.combine === true,
           shuffle: args.randomize === true,
+          toDrive: args.toDrive === true,
           title: args.title
         })
       }

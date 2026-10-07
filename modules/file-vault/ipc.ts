@@ -139,12 +139,25 @@ export default function register(ctx: ModuleIpcContext): void {
     }
   }
 
-  // Let other modules (Backup's offsite copy) reuse this connection — token only.
+  // Let other modules reuse this connection — token only (Backup's offsite
+  // copy; YouTube Downloader's "Download to Google Drive" saves into the vault).
   setDriveProvider({
     getToken,
     status: () => {
       ensureAuthLoaded()
       return { connected: !!refreshToken && !!clientId, email }
+    },
+    vaultFolderId: async () => {
+      const token = await getToken()
+      const fid = await ensureVault(token)
+      try {
+        if (!(await getFileMeta(token, fid)).trashed) return fid
+      } catch (err) {
+        if (!(err instanceof DriveApiError && err.status === 404)) throw err
+      }
+      // the cached vault folder was deleted/trashed in Drive — make a fresh one
+      ctx.storeSet(`${ID}.folderId`, '')
+      return ensureVault(token)
     }
   })
 

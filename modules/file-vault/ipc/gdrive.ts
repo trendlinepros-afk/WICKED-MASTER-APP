@@ -38,7 +38,7 @@ const UPLOAD_CHUNK = 16 * 1024 * 1024
 const MAX_RETRIES = 5
 const OAUTH_TIMEOUT_MS = 5 * 60_000
 
-const FILE_FIELDS = 'id,name,size,mimeType,md5Checksum,modifiedTime,createdTime,webViewLink'
+const FILE_FIELDS = 'id,name,size,mimeType,md5Checksum,modifiedTime,createdTime,webViewLink,trashed'
 
 export interface DriveFileRaw {
   id: string
@@ -49,6 +49,7 @@ export interface DriveFileRaw {
   modifiedTime?: string
   createdTime?: string
   webViewLink?: string
+  trashed?: boolean
 }
 
 export class DriveApiError extends Error {

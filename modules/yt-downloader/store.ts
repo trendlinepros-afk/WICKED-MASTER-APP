@@ -84,6 +84,30 @@ export interface DownloadJob {
   message: string
   combinedInfo: { path: string; used: number; total: number } | null
   startedAt: number
+  /** "Download to Google Drive" job: upload progress / result */
+  toDrive?: boolean
+  drive?: DriveJobInfo | null
+}
+
+export interface DriveJobInfo {
+  uploaded: number
+  failed: number
+  pending: number
+  current: string | null
+  percent: number
+  folderUrl: string | null
+  /** set when the job ended */
+  done?: boolean
+  keptLocally?: number
+  keptDir?: string
+  error?: string
+}
+
+export interface DriveStatus {
+  available: boolean
+  connected: boolean
+  email: string
+  folder: string
 }
 
 export const MAX_JOBS = 3
@@ -129,6 +153,10 @@ interface State {
   urlIsMusic: boolean
   /** user explicitly picked a video quality for this music URL — respect it */
   musicOverride: boolean
+  /** this link only: upload to Google Drive instead of saving here (resets per URL) */
+  toDrive: boolean
+  /** File Vault's Google Drive connection (null until loaded) */
+  drive: DriveStatus | null
 
   /** active + recently finished downloads, newest first (each is a card) */
   jobs: DownloadJob[]
@@ -143,6 +171,9 @@ interface State {
   setCombineClips: (v: boolean) => Promise<void>
   setCombineShuffle: (v: boolean) => Promise<void>
   clearMusicOverride: () => void
+  setToDrive: (v: boolean) => void
+  loadDrive: () => Promise<void>
+  openDrive: (url?: string | null) => Promise<void>
   dismissError: () => void
 
   loadPrefs: () => Promise<void>
@@ -175,6 +206,8 @@ export const useYt = create<State>((set, get) => ({
   combineShuffle: false,
   urlIsMusic: false,
   musicOverride: false,
+  toDrive: false,
+  drive: null,
 
   jobs: [],
   statusMsg: 'Paste a YouTube video or playlist URL to begin.',
@@ -190,6 +223,7 @@ export const useYt = create<State>((set, get) => ({
       probe: null,
       urlIsMusic: isMusic,
       musicOverride: false, // a new URL starts fresh
+      toDrive: v.trim() === get().url.trim() ? get().toDrive : false, // an option per link, never a standing rule
       quality: isMusic && musicAudioOnly ? musicFormat : quality
     })
   },
@@ -230,6 +264,23 @@ export const useYt = create<State>((set, get) => ({
   clearMusicOverride: () => {
     const { musicFormat } = get()
     set({ musicOverride: false, quality: musicFormat })
+  },
+
+  setToDrive: (v) => {
+    set({ toDrive: v && get().drive?.connected === true })
+    if (v) void get().loadDrive() // re-check: Drive may have been connected/disconnected meanwhile
+  },
+
+  loadDrive: async () => {
+    const res = await invoke<Res & DriveStatus>('drive-status').catch(() => null)
+    if (!res || res.ok !== true) return
+    const d = res as unknown as DriveStatus
+    set({ drive: { available: d.available, connected: d.connected, email: d.email, folder: d.folder } })
+    if (!d.connected && get().toDrive) set({ toDrive: false })
+  },
+
+  openDrive: async (url) => {
+    await invoke('open-drive', url ?? '')
   },
 
   dismissError: () => set({ error: '' }),
@@ -319,7 +370,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, jobs } = get()
+    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, jobs } = get()
     if (!url.trim()) return
     if (jobs.filter(isJobActive).length >= MAX_JOBS) {
       set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
@@ -342,13 +393,15 @@ export const useYt = create<State>((set, get) => ({
     const job: DownloadJob = {
       id: jobId,
       title: probe?.title ?? url.trim(),
-      detail: `${qLabel}${isPlaylist ? ' · playlist' : ''}${willCombine ? ' · combine' : ''}`,
+      detail: `${qLabel}${isPlaylist ? ' · playlist' : ''}${willCombine ? ' · combine' : ''}${toDrive ? ' · → Google Drive' : ''}`,
       state: 'running',
       progress: null,
       log: [],
       message: 'Starting download…',
       combinedInfo: null,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      toDrive,
+      drive: null
     }
     // new card on top; keep the finished-card history bounded. The form resets
     // so the next task can be set up while this one runs.
@@ -359,6 +412,7 @@ export const useYt = create<State>((set, get) => ({
       probe: null,
       urlIsMusic: false,
       musicOverride: false,
+      toDrive: false,
       statusMsg: 'Download started — watch its card on the right. Paste another URL to queue the next one.'
     }))
 
@@ -369,6 +423,7 @@ export const useYt = create<State>((set, get) => ({
       isPlaylist,
       combine: combineClips,
       shuffle: combineShuffle,
+      toDrive,
       title: probe?.title ?? ''
     }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
 
@@ -405,6 +460,7 @@ export const useYt = create<State>((set, get) => ({
       quality?: string
       isPlaylist?: boolean
       combine?: boolean
+      toDrive?: boolean
       resumed?: boolean
       // job-end extras
       ok?: boolean
@@ -413,6 +469,13 @@ export const useYt = create<State>((set, get) => ({
       completed?: number
       error?: string
       combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
+      drive?: DriveJobInfo | null
+      // drive extras (kind: 'drive')
+      uploaded?: number
+      failed?: number
+      pending?: number
+      current?: string | null
+      folderUrl?: string | null
     } & Progress
     const jobId = p.jobId
     if (!jobId) return
@@ -429,6 +492,18 @@ export const useYt = create<State>((set, get) => ({
         message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
       }))
+    } else if (p.kind === 'drive') {
+      patchJob((j) => ({
+        drive: {
+          ...(j.drive ?? {}),
+          uploaded: Number(p.uploaded) || 0,
+          failed: Number(p.failed) || 0,
+          pending: Number(p.pending) || 0,
+          current: p.current ?? null,
+          percent: Number(p.percent) || 0,
+          folderUrl: p.folderUrl ?? j.drive?.folderUrl ?? null
+        }
+      }))
     } else if (p.kind === 'progress') {
       patchJob(() => ({
         progress: { index: p.index, total: p.total, percent: p.percent, speed: p.speed, eta: p.eta, title: p.title }
@@ -441,13 +516,15 @@ export const useYt = create<State>((set, get) => ({
         const job: DownloadJob = {
           id: jobId,
           title: String(p.title ?? 'Download'),
-          detail: `${qLabel}${p.isPlaylist ? ' · playlist' : ''}${p.combine ? ' · combine' : ''}`,
+          detail: `${qLabel}${p.isPlaylist ? ' · playlist' : ''}${p.combine ? ' · combine' : ''}${p.toDrive ? ' · → Google Drive' : ''}`,
           state: 'running',
           progress: null,
           log: [],
           message: p.resumed ? 'Resumed after restart — finished videos are skipped.' : 'Starting download…',
           combinedInfo: null,
-          startedAt: Date.now()
+          startedAt: Date.now(),
+          toDrive: p.toDrive === true,
+          drive: null
         }
         set((s) => ({ jobs: [job, ...s.jobs] }))
       }
@@ -460,23 +537,31 @@ export const useYt = create<State>((set, get) => ({
             ? ' (Combine cancelled.)'
             : ` (Couldn’t combine: ${c.error ?? 'unknown error'})`
         : ''
+      // a Drive job's movie lives in Drive, not at the (deleted) staging path
       const combinedInfo =
-        c?.ok && c.path ? { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } : null
+        c?.ok && c.path && !p.drive ? { path: c.path, used: Number(c.used) || 0, total: Number(c.total) || 0 } : null
+      const d = p.drive ?? null
+      const driveMsg = d
+        ? ` ${d.uploaded} uploaded to Google Drive.${d.failed ? ` ${d.failed} couldn’t be uploaded${d.keptLocally ? ` — saved to ${d.keptDir} instead` : ''}${d.error ? ` (${d.error})` : ''}.` : ''}`
+        : ''
+      const drivePatch = d ? { drive: { ...d, pending: 0, current: null, percent: 0, done: true } } : {}
       if (p.cancelled) {
         patchJob(() => ({ state: 'cancelled', message: 'Download cancelled.', progress: null }))
       } else if (p.ok === true && !p.warning) {
         patchJob(() => ({
-          state: c && !c.ok && !c.cancelled ? 'warning' : 'done',
-          message: `Done — downloaded ${Number(p.completed) || ''} item(s).${combineMsg}`,
+          state: (c && !c.ok && !c.cancelled) || (d && d.failed > 0) ? 'warning' : 'done',
+          message: d ? `Done —${driveMsg}${combineMsg}` : `Done — downloaded ${Number(p.completed) || ''} item(s).${combineMsg}`,
           combinedInfo,
-          progress: null
+          progress: null,
+          ...drivePatch
         }))
       } else if (p.warning) {
         patchJob(() => ({
           state: 'warning',
-          message: `Finished with some skips — ${Number(p.completed) || 0} downloaded.${combineMsg} ${p.error ?? ''}`.trim(),
+          message: `Finished with some skips — ${Number(p.completed) || 0} downloaded.${driveMsg}${combineMsg} ${p.error ?? ''}`.trim(),
           combinedInfo,
-          progress: null
+          progress: null,
+          ...drivePatch
         }))
       } else {
         patchJob(() => ({ state: 'error', message: p.error ?? 'Download failed.', progress: null }))

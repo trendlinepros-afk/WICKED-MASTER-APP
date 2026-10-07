@@ -1,9 +1,12 @@
 import { ModuleTitle } from '@/shell/moduleContext'
 import { useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
+  CloudUpload,
   Download,
+  ExternalLink,
   Film,
   FolderOpen,
   ListVideo,
@@ -51,11 +54,13 @@ function wireDownloadEvents(): void {
 
 export default function YtDownloader(): React.JSX.Element {
   const s = useYt()
+  const navigate = useNavigate()
 
   useEffect(() => {
     wireDownloadEvents()
     void s.loadStatus()
     void s.loadPrefs()
+    void s.loadDrive()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -276,6 +281,48 @@ export default function YtDownloader(): React.JSX.Element {
               )}
             </div>
 
+            {/* this link only: save to Google Drive instead of this PC */}
+            {s.url.trim() && (
+              <div className={`rounded-xl border bg-surface p-4 ${s.toDrive ? 'border-accent/60' : 'border-edge'}`}>
+                <label className={`flex items-start gap-2.5 ${s.drive?.connected ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                  <input
+                    type="checkbox"
+                    checked={s.toDrive}
+                    disabled={!s.drive?.connected}
+                    onChange={(e) => s.setToDrive(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))] disabled:opacity-40"
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      <CloudUpload size={14} className="text-accent" />
+                      Download to Google Drive
+                    </span>
+                    {s.drive?.connected ? (
+                      <span className="mt-0.5 block text-xs text-muted">
+                        For this link only: each file uploads to <strong>{s.drive.folder}</strong> in{' '}
+                        {s.drive.email || 'your Google Drive'} the moment it finishes, then is deleted here —
+                        nothing is kept on this PC. Shows up in File Vault too.
+                      </span>
+                    ) : (
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Uses the Google Drive you connect in File Vault.{' '}
+                        <button type="button" className="font-medium text-accent hover:underline" onClick={() => navigate('/m/file-vault')}>
+                          Connect Google Drive in File Vault
+                        </button>{' '}
+                        to turn this on.
+                      </span>
+                    )}
+                  </span>
+                </label>
+                {s.toDrive && willCombine && (
+                  <p className="mt-2 border-t border-edge pt-2 text-xs text-muted">
+                    Combining needs every clip on disk first, so this run uploads the clips and the stitched movie
+                    when the combine finishes.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* music setting */}
             <div className="rounded-xl border border-edge bg-surface p-4">
               <label className="flex cursor-pointer items-start gap-2.5">
@@ -437,6 +484,7 @@ export default function YtDownloader(): React.JSX.Element {
                 <Download size={16} />
                 Download {downloadTargetLabel()} in {QUALITIES.find((q) => q.id === s.quality)?.label}
                 {willCombine ? ' · then combine' : ''}
+                {s.toDrive ? ' → Google Drive' : ''}
               </button>
               {activeJobs >= MAX_JOBS ? (
                 <p className="mt-2 flex items-start gap-1.5 text-xs text-warn">
@@ -483,7 +531,9 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
   const cancel = useYt((st) => st.cancel)
   const dismissJob = useYt((st) => st.dismissJob)
   const openFolder = useYt((st) => st.openFolder)
+  const openDrive = useYt((st) => st.openDrive)
   const active = isJobActive(job)
+  const d = job.drive
   const st = STATE_STYLE[job.state]
 
   return (
@@ -529,6 +579,33 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
       {/* progress: overall project bar + current-item bar */}
       {active && <JobProgress state={job.state} progress={job.progress} />}
 
+      {/* Google Drive upload */}
+      {job.toDrive && active && (
+        <div className="mt-2.5 rounded-lg border border-edge bg-raised/30 px-3 py-2 text-xs">
+          <div className="flex items-center gap-1.5 font-medium">
+            <CloudUpload size={13} className="text-accent" />
+            Google Drive · {d?.uploaded ?? 0} uploaded
+            {d?.pending ? <span className="text-muted">· {d.pending} waiting</span> : null}
+            {d?.failed ? <span className="text-warn">· {d.failed} failed</span> : null}
+          </div>
+          {d?.current ? (
+            <div className="mt-1.5">
+              <div className="flex justify-between gap-2 text-muted">
+                <span className="truncate" title={d.current}>
+                  Uploading {d.current}
+                </span>
+                <span className="shrink-0 tabular-nums">{Math.round(d.percent)}%</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-raised">
+                <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${Math.max(2, d.percent)}%` }} />
+              </div>
+            </div>
+          ) : (
+            <div className="mt-1 text-muted">Each file uploads as soon as it finishes downloading.</div>
+          )}
+        </div>
+      )}
+
       {/* status line */}
       <p className={`mt-2.5 text-sm ${job.state === 'error' ? 'text-danger' : job.state === 'warning' ? 'text-warn' : active ? 'text-muted' : 'text-ink'}`}>
         {job.message}
@@ -543,8 +620,13 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
           </p>
         </div>
       )}
-      {job.state === 'done' && (
-        <button onClick={() => void openFolder()} className="mt-1.5 text-sm text-accent hover:underline">
+      {job.toDrive && d?.done && (d.uploaded > 0 || d.folderUrl) && (
+        <button onClick={() => void openDrive(d.folderUrl)} className="mt-1.5 flex items-center gap-1 text-sm text-accent hover:underline">
+          <ExternalLink size={13} /> Open in Google Drive
+        </button>
+      )}
+      {(job.state === 'done' || job.state === 'warning') && (!job.toDrive || (d?.keptLocally ?? 0) > 0) && (
+        <button onClick={() => void openFolder()} className="mt-1.5 block text-sm text-accent hover:underline">
           Open download folder
         </button>
       )}
