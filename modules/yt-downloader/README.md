@@ -154,6 +154,56 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
   some were skipped.
 - Re-downloading is safe — yt-dlp skips files already present.
 
+## Fix missing song info (music downloads)
+
+A setting shown in Music mode, **on by default**, with a sub-option **Use the
+official album art** (also on). Every finished audio file goes through
+`ipc/tagfix.ts` → `TagFixer` before it's handed on (to the Drive uploader, or
+nowhere for a local download):
+
+1. **Read** its tags with the bundled ffprobe (`ipc/tagio.ts`).
+2. **Assess** (`lib/songinfo.ts: assessTags`): YouTube Music tracks are
+   *trusted* (clean title/artist/album); a video upload — "Artist - Song
+   (Official Video)" by "ArtistVEVO" / "… - Topic" — is not. The title is cleaned
+   (Official Video, Lyrics, [4K]…), "Artist - Song" is split, and the channel
+   name is cleaned for the search. *Complete* = trusted + title, artist, album
+   and a year.
+3. **Look it up on MusicBrainz** (`ipc/musicbrainz.ts`; free, no key; a
+   descriptive User-Agent; **≤ 1 request/second** through one shared serial
+   queue, 503 back-off). Phrase search first, then a looser one. A match must be
+   *confident* (`isConfident`: title similarity ≥ 0.82, artist ≥ 0.6 or
+   contained, duration within 12 s — or within 4 s when the artist is unknown).
+   The recording's best release is the official original album (then EP,
+   single; compilations/live/bootlegs last; earliest).
+4. **Write** (`mergeMatch`): video-style title/artist/album/track are replaced;
+   trusted ones are only filled where empty; the **release date always comes
+   from the match** (the file's date is YouTube's upload date); genre (top
+   release-group genre) only if missing. With official art on, the Cover Art
+   Archive front cover (release, then release group, 500 px) replaces the
+   embedded thumbnail. Writes are lossless (`-c copy`) into a hidden temp file
+   that replaces the original: MP3 as ID3v2.3 (full YYYY-MM-DD kept), M4A atoms,
+   and Opus by rebuilding the whole Vorbis comment set + METADATA_BLOCK_PICTURE
+   from an ffmetadata file mapped onto the audio stream (a plain re-mux would
+   drop the cover).
+
+Counts go to the job card: **fixed · already complete · need info · skipped**.
+If MusicBrainz can't be reached the song is passed on unchanged ("skipped") —
+an outage never parks a playlist. Handled paths are journaled
+(`tagged-<jobId>.txt` / `.wicked-tagged.txt`) so a resumed job doesn't redo
+them.
+
+**Songs it can't identify** (missing info, no confident match) are **held** on
+`review.json` (survives restarts) and, for Drive jobs, kept in staging and *not
+uploaded*. Click **"N need info →"** on the card (or the banner) to open **Song
+info needed**: each song is prefilled with the cleaned guesses and shows what's
+in the file now; **Search** MusicBrainz with what you typed and **Use** a match
+to fill everything in; pick the cover (**keep current** / **album art from the
+match** / **choose an image**); then **Save** (Drive: **Save & upload**) or
+**Save as is**. **Ignore all — save as is** finishes every listed song
+untouched. A Drive song uploads when saved and its staging folder is cleared
+once nothing from that job is waiting; a cancelled Drive job drops its held
+songs.
+
 ## Download to Google Drive (per link)
 
 After you paste a link, a **Download to Google Drive** checkbox appears. It's an
@@ -201,8 +251,10 @@ connected.
   Modules.
 - MCP: `yt-downloader__status` / `__probe` (read-only; status includes
   `googleDrive.connected`), `__download` (destructive, confirm-gated — writes
-  files, can run long; optional `combine` and `toDrive` flags), `__update`,
-  `__cancel`.
+  files, can run long; optional `combine`, `toDrive`, `fixTags`, `officialArt`),
+  `__update`, `__cancel`; song info: `__songs-needing-info` and
+  `__search-song-info` (read-only), `__save-song-info` and `__save-songs-as-is`
+  (destructive, confirm-gated).
 
 ## Note
 

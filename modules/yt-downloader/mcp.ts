@@ -50,6 +50,14 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           .optional()
           .describe('Stitch in RANDOM order (default false = oldest → newest / playlist order). File names stay numbered oldest-first either way.'),
         title: z.string().optional().describe('Optional title used to name the combined movie file.'),
+        fixTags: z
+          .boolean()
+          .optional()
+          .describe('Audio only: look each song up on MusicBrainz and fill missing/wrong title, artist, album, release date, track # and genre (default: the app setting, normally on). Songs it cannot identify wait in yt-downloader__songs-needing-info.'),
+        officialArt: z
+          .boolean()
+          .optional()
+          .describe('With fixTags: replace the YouTube thumbnail with the official album cover from the Cover Art Archive (default: the app setting, normally on).'),
         toDrive: z
           .boolean()
           .optional()
@@ -69,6 +77,8 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
           combine: args.combine === true,
           shuffle: args.randomize === true,
           toDrive: args.toDrive === true,
+          fixTags: typeof args.fixTags === 'boolean' ? args.fixTags : undefined,
+          officialArt: typeof args.officialArt === 'boolean' ? args.officialArt : undefined,
           title: args.title
         })
       }
@@ -86,6 +96,68 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         'Cancel running downloads (up to 3 can run at once; this cancels all of them). Read-only.',
       inputSchema: {},
       handler: () => ctx.invoke(`${ID}:cancel`)
+    },
+    {
+      name: `${ID}__songs-needing-info`,
+      description:
+        'List downloaded songs that MusicBrainz could not identify and that are missing info — each with an id, file name, its current tags and cleaned-up guesses. Songs from a "Download to Google Drive" job are held (not uploaded) until saved. Read-only.',
+      inputSchema: {},
+      handler: () => ctx.invoke(`${ID}:review-list`)
+    },
+    {
+      name: `${ID}__search-song-info`,
+      description:
+        'Search MusicBrainz for a held song (or any title/artist) and return ranked candidates (title, artist, album, release date, track, releaseId, confidence). Nothing is written. Read-only.',
+      inputSchema: {
+        id: z.string().optional().describe('Held song id (from __songs-needing-info) — its duration improves ranking.'),
+        title: z.string().describe('Song title to search for.'),
+        artist: z.string().optional().describe('Artist, if known.')
+      },
+      handler: (args) => ctx.invoke(`${ID}:review-search`, { id: args.id, title: args.title, artist: args.artist ?? '' })
+    },
+    {
+      name: `${ID}__save-song-info`,
+      description:
+        'Write the given details into a held song file (title and artist required; empty fields are left as they are) and finish it — a Google Drive song is then uploaded and removed from this PC. Optionally use a MusicBrainz release cover (releaseId/releaseGroupId from __search-song-info). Destructive: rewrites the file’s tags. Requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        id: z.string().describe('Held song id from __songs-needing-info.'),
+        title: z.string(),
+        artist: z.string(),
+        album: z.string().optional(),
+        albumArtist: z.string().optional(),
+        date: z.string().optional().describe('YYYY or YYYY-MM-DD'),
+        track: z.string().optional().describe('"3" or "3/12"'),
+        genre: z.string().optional(),
+        releaseId: z.string().optional().describe('Use this release’s official cover art.'),
+        releaseGroupId: z.string().optional(),
+        confirm: z.boolean().optional().describe('Set true to write the tags.')
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(args.confirm as boolean | undefined, `Write "${String(args.title)}" by ${String(args.artist)} into the held song's tags${args.releaseId ? ' with the release cover' : ''}, then finish it (upload if it is a Google Drive download).`)
+        if (gate) return gate
+        return ctx.invoke(`${ID}:review-save`, {
+          id: args.id,
+          tags: { title: args.title, artist: args.artist, album: args.album, albumArtist: args.albumArtist, date: args.date, track: args.track, genre: args.genre },
+          art: args.releaseId ? { kind: 'release', releaseId: args.releaseId, releaseGroupId: args.releaseGroupId ?? '' } : { kind: 'keep' }
+        })
+      }
+    },
+    {
+      name: `${ID}__save-songs-as-is`,
+      description:
+        'Finish held songs WITHOUT changing their tags ("ignore") — the given ids, or every held song if none are given. Google Drive songs are uploaded and removed from this PC. Requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        ids: z.array(z.string()).optional().describe('Held song ids; omit for all.'),
+        confirm: z.boolean().optional().describe('Set true to proceed.')
+      },
+      handler: (args) => {
+        const ids = Array.isArray(args.ids) ? (args.ids as string[]) : undefined
+        const gate = ctx.confirm(args.confirm as boolean | undefined, `Save ${ids ? `${ids.length} held song(s)` : 'every held song'} as is (no tag changes); Google Drive songs are uploaded.`)
+        if (gate) return gate
+        return ctx.invoke(`${ID}:review-ignore`, { ids })
+      }
     }
   ]
 }

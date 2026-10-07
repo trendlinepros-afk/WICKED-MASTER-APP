@@ -14,6 +14,7 @@ import {
   Music,
   RefreshCw,
   Search,
+  Tags,
   Video,
   X,
   Youtube
@@ -28,6 +29,8 @@ import {
   type DownloadJob
 } from './store'
 import { JobProgress } from './progress'
+import { ReviewModal } from './review'
+import type { ReviewItem } from './lib/songinfo'
 
 function fmtDuration(sec: number | null): string {
   if (!sec || sec <= 0) return ''
@@ -50,6 +53,7 @@ function wireDownloadEvents(): void {
   eventsWired = true
   window.wicked.on(`${ID}:progress`, (p) => useYt.getState()._onProgress(p))
   window.wicked.on(`${ID}:status-msg`, (m) => useYt.getState()._onStatusMsg(m))
+  window.wicked.on(`${ID}:review`, (items) => useYt.setState({ reviewItems: (items as ReviewItem[]) ?? [] }))
 }
 
 export default function YtDownloader(): React.JSX.Element {
@@ -61,6 +65,7 @@ export default function YtDownloader(): React.JSX.Element {
     void s.loadStatus()
     void s.loadPrefs()
     void s.loadDrive()
+    void s.loadReview()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -420,6 +425,49 @@ export default function YtDownloader(): React.JSX.Element {
               </p>
             </div>
 
+            {/* fix missing song info (music downloads) */}
+            {musicMode && (
+              <div className="rounded-xl border border-edge bg-surface p-4">
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={s.fixTags}
+                    onChange={(e) => void s.setFixTags(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      <Tags size={14} className="text-accent" />
+                      Fix missing song info
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted">
+                      Looks every song up on <strong>MusicBrainz</strong> (a free music database) and fills in a missing or
+                      wrong title, artist, album, release date, track number and genre — good tags are left alone. Songs it
+                      can&apos;t identify wait for you to fill in (or save as is)
+                      {s.toDrive ? ' and are uploaded once you do' : ''}.
+                    </span>
+                  </span>
+                </label>
+                {s.fixTags && (
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5 border-t border-edge pt-3">
+                    <input
+                      type="checkbox"
+                      checked={s.officialArt}
+                      onChange={(e) => void s.setOfficialArt(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 accent-[rgb(var(--wk-accent))]"
+                    />
+                    <span className="min-w-0">
+                      <span className="text-sm font-medium">Use the official album art</span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Replace YouTube&apos;s thumbnail (often a video frame) with the album&apos;s real cover from the Cover
+                        Art Archive when one exists.
+                      </span>
+                    </span>
+                  </label>
+                )}
+              </div>
+            )}
+
             {/* combine clips into one movie */}
             {videoSelected && (
               <div className="rounded-xl border border-edge bg-surface p-4">
@@ -499,6 +547,24 @@ export default function YtDownloader(): React.JSX.Element {
 
           {/* task cards */}
           <div className="space-y-4">
+            {s.reviewItems.length > 0 && (
+              <div className="flex items-center gap-3 rounded-xl border border-warn/40 bg-warn/10 p-3">
+                <Tags size={16} className="shrink-0 text-warn" />
+                <div className="min-w-0 flex-1 text-sm">
+                  <span className="font-semibold">
+                    {s.reviewItems.length} song{s.reviewItems.length === 1 ? '' : 's'} need{s.reviewItems.length === 1 ? 's' : ''} info
+                  </span>
+                  <span className="text-muted">
+                    {' '}
+                    — MusicBrainz couldn&apos;t identify {s.reviewItems.length === 1 ? 'it' : 'them'}.
+                    {s.reviewItems.some((i) => i.toDrive) ? ' Google Drive songs upload once saved.' : ''}
+                  </span>
+                </div>
+                <button onClick={() => s.openReview()} className="shrink-0 rounded-lg bg-warn/20 px-3 py-1.5 text-xs font-semibold text-ink hover:bg-warn/30">
+                  Review
+                </button>
+              </div>
+            )}
             {s.jobs.length === 0 ? (
               <div className="rounded-xl border border-dashed border-edge p-10 text-center text-sm text-muted">
                 <Download size={24} className="mx-auto mb-3 opacity-40" />
@@ -512,6 +578,7 @@ export default function YtDownloader(): React.JSX.Element {
           </div>
         </div>
       </div>
+      {s.reviewOpen && <ReviewModal jobId={s.reviewOpen.jobId} onClose={s.closeReview} />}
     </div>
   )
 }
@@ -532,8 +599,11 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
   const dismissJob = useYt((st) => st.dismissJob)
   const openFolder = useYt((st) => st.openFolder)
   const openDrive = useYt((st) => st.openDrive)
+  const openReview = useYt((st) => st.openReview)
+  const waiting = useYt((st) => st.reviewItems.filter((i) => i.jobId === job.id).length)
   const active = isJobActive(job)
   const d = job.drive
+  const t = job.tags
   const st = STATE_STYLE[job.state]
 
   return (
@@ -602,6 +672,41 @@ function JobCard({ job }: { job: DownloadJob }): React.JSX.Element {
             </div>
           ) : (
             <div className="mt-1 text-muted">Each file uploads as soon as it finishes downloading.</div>
+          )}
+        </div>
+      )}
+
+      {/* fix missing song info */}
+      {job.fixTags && t && (
+        <div className="mt-2.5 rounded-lg border border-edge bg-raised/30 px-3 py-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Tags size={13} className="text-accent" />
+            <span className="font-medium">Song info</span>
+            <span className="rounded-full bg-ok/15 px-2 py-0.5 font-medium text-ok">{t.fixed} fixed</span>
+            <span className="rounded-full bg-raised px-2 py-0.5 text-muted">{t.complete} already complete</span>
+            {waiting > 0 ? (
+              <button
+                onClick={() => openReview(job.id)}
+                className="rounded-full bg-warn/15 px-2 py-0.5 font-semibold text-warn underline-offset-2 hover:bg-warn/25 hover:underline"
+                title="Fill in the details, or save as is"
+              >
+                {waiting} need{waiting === 1 ? 's' : ''} info →
+              </button>
+            ) : t.needsInfo > 0 ? (
+              <span className="rounded-full bg-raised px-2 py-0.5 text-muted">{t.needsInfo} filled in by you</span>
+            ) : null}
+            {t.skipped > 0 && (
+              <span className="rounded-full bg-raised px-2 py-0.5 text-muted" title={t.note}>
+                {t.skipped} skipped
+              </span>
+            )}
+          </div>
+          {active && t.current && <div className="mt-1 truncate text-muted">Checking {t.current}…</div>}
+          {!active && waiting > 0 && job.toDrive && (
+            <div className="mt-1 text-warn">
+              {waiting === 1 ? 'That song is' : 'Those songs are'} held on this PC until you save {waiting === 1 ? 'it' : 'them'} — then
+              {waiting === 1 ? ' it uploads' : ' they upload'} to Google Drive.
+            </div>
           )}
         </div>
       )}

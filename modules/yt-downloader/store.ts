@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { parseYtUrl } from './lib/url'
+import type { ReviewItem, TagSummary } from './lib/songinfo'
 
 export const ID = 'yt-downloader'
 
@@ -87,6 +88,9 @@ export interface DownloadJob {
   /** "Download to Google Drive" job: upload progress / result */
   toDrive?: boolean
   drive?: DriveJobInfo | null
+  /** "Fix missing song info" totals (audio jobs) */
+  fixTags?: boolean
+  tags?: TagSummary | null
 }
 
 export interface DriveJobInfo {
@@ -153,6 +157,14 @@ interface State {
   urlIsMusic: boolean
   /** user explicitly picked a video quality for this music URL — respect it */
   musicOverride: boolean
+  /** setting: look songs up on MusicBrainz and fill missing info (audio downloads) */
+  fixTags: boolean
+  /** setting: with fixTags, swap in the official album cover */
+  officialArt: boolean
+  /** songs waiting for the user (MusicBrainz couldn't identify them) */
+  reviewItems: ReviewItem[]
+  /** the "Song info needed" window: null = closed; jobId narrows it to one download */
+  reviewOpen: { jobId?: string } | null
   /** this link only: upload to Google Drive instead of saving here (resets per URL) */
   toDrive: boolean
   /** File Vault's Google Drive connection (null until loaded) */
@@ -171,6 +183,11 @@ interface State {
   setCombineClips: (v: boolean) => Promise<void>
   setCombineShuffle: (v: boolean) => Promise<void>
   clearMusicOverride: () => void
+  setFixTags: (v: boolean) => Promise<void>
+  setOfficialArt: (v: boolean) => Promise<void>
+  loadReview: () => Promise<void>
+  openReview: (jobId?: string) => void
+  closeReview: () => void
   setToDrive: (v: boolean) => void
   loadDrive: () => Promise<void>
   openDrive: (url?: string | null) => Promise<void>
@@ -208,6 +225,10 @@ export const useYt = create<State>((set, get) => ({
   musicOverride: false,
   toDrive: false,
   drive: null,
+  fixTags: true,
+  officialArt: true,
+  reviewItems: [],
+  reviewOpen: null,
 
   jobs: [],
   statusMsg: 'Paste a YouTube video or playlist URL to begin.',
@@ -266,6 +287,24 @@ export const useYt = create<State>((set, get) => ({
     set({ musicOverride: false, quality: musicFormat })
   },
 
+  setFixTags: async (v) => {
+    set({ fixTags: v })
+    await invoke('prefs-set', { fixTags: v })
+  },
+
+  setOfficialArt: async (v) => {
+    set({ officialArt: v })
+    await invoke('prefs-set', { officialArt: v })
+  },
+
+  loadReview: async () => {
+    const res = await invoke<Res & { items?: ReviewItem[] }>('review-list').catch(() => null)
+    if (res?.ok) set({ reviewItems: ((res as unknown as { items?: ReviewItem[] }).items ?? []) as ReviewItem[] })
+  },
+
+  openReview: (jobId) => set({ reviewOpen: jobId ? { jobId } : {} }),
+  closeReview: () => set({ reviewOpen: null }),
+
   setToDrive: (v) => {
     set({ toDrive: v && get().drive?.connected === true })
     if (v) void get().loadDrive() // re-check: Drive may have been connected/disconnected meanwhile
@@ -286,13 +325,15 @@ export const useYt = create<State>((set, get) => ({
   dismissError: () => set({ error: '' }),
 
   loadPrefs: async () => {
-    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean; combineShuffle?: boolean }>('prefs-get')
+    const res = await invoke<Res & { musicAudioOnly?: boolean; musicFormat?: string; combineClips?: boolean; combineShuffle?: boolean; fixTags?: boolean; officialArt?: boolean }>('prefs-get')
     if (res.ok)
       set({
         musicAudioOnly: res.musicAudioOnly !== false,
         musicFormat: res.musicFormat === 'audio-native' ? 'audio-native' : 'audio',
         combineClips: res.combineClips === true,
-        combineShuffle: res.combineShuffle === true
+        combineShuffle: res.combineShuffle === true,
+        fixTags: res.fixTags !== false,
+        officialArt: res.officialArt !== false
       })
   },
 
@@ -370,7 +411,7 @@ export const useYt = create<State>((set, get) => ({
   },
 
   download: async () => {
-    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, jobs } = get()
+    const { url, probe, quality, wholePlaylist, combineClips, combineShuffle, toDrive, fixTags, officialArt, jobs } = get()
     if (!url.trim()) return
     if (jobs.filter(isJobActive).length >= MAX_JOBS) {
       set({ error: `Up to ${MAX_JOBS} downloads can run at once — wait for one to finish or cancel one.` })
@@ -401,7 +442,9 @@ export const useYt = create<State>((set, get) => ({
       combinedInfo: null,
       startedAt: Date.now(),
       toDrive,
-      drive: null
+      drive: null,
+      fixTags: fixTags && isAudioPreset(quality),
+      tags: null
     }
     // new card on top; keep the finished-card history bounded. The form resets
     // so the next task can be set up while this one runs.
@@ -424,6 +467,8 @@ export const useYt = create<State>((set, get) => ({
       combine: combineClips,
       shuffle: combineShuffle,
       toDrive,
+      fixTags,
+      officialArt,
       title: probe?.title ?? ''
     }).catch((e) => ({ ok: false, error: String(e) }))) as Res & { started?: boolean }
 
@@ -461,6 +506,7 @@ export const useYt = create<State>((set, get) => ({
       isPlaylist?: boolean
       combine?: boolean
       toDrive?: boolean
+      fixTags?: boolean
       resumed?: boolean
       // job-end extras
       ok?: boolean
@@ -470,6 +516,12 @@ export const useYt = create<State>((set, get) => ({
       error?: string
       combined?: { ok: boolean; path?: string; used?: number; total?: number; error?: string; cancelled?: boolean } | null
       drive?: DriveJobInfo | null
+      tags?: TagSummary | null
+      // tag extras (kind: 'tags')
+      fixed?: number
+      complete?: number
+      needsInfo?: number
+      skipped?: number
       // drive extras (kind: 'drive')
       uploaded?: number
       failed?: number
@@ -491,6 +543,18 @@ export const useYt = create<State>((set, get) => ({
         state: 'combining',
         message: label,
         progress: { index: done, total, percent: total ? Math.min(100, (done / total) * 100) : 0, speed: '', eta: '', title: label }
+      }))
+    } else if (p.kind === 'tags') {
+      patchJob(() => ({
+        tags: {
+          fixed: Number(p.fixed) || 0,
+          complete: Number(p.complete) || 0,
+          needsInfo: Number(p.needsInfo) || 0,
+          skipped: Number(p.skipped) || 0,
+          pending: Number(p.pending) || 0,
+          current: p.current ?? null,
+          note: p.note
+        }
       }))
     } else if (p.kind === 'drive') {
       patchJob((j) => ({
@@ -524,7 +588,9 @@ export const useYt = create<State>((set, get) => ({
           combinedInfo: null,
           startedAt: Date.now(),
           toDrive: p.toDrive === true,
-          drive: null
+          drive: null,
+          fixTags: p.fixTags === true,
+          tags: null
         }
         set((s) => ({ jobs: [job, ...s.jobs] }))
       }
@@ -544,7 +610,10 @@ export const useYt = create<State>((set, get) => ({
       const driveMsg = d
         ? ` ${d.uploaded} uploaded to Google Drive.${d.failed ? ` ${d.failed} couldn’t be uploaded${d.keptLocally ? ` — saved to ${d.keptDir} instead` : ''}${d.error ? ` (${d.error})` : ''}.` : ''}`
         : ''
-      const drivePatch = d ? { drive: { ...d, pending: 0, current: null, percent: 0, done: true } } : {}
+      const drivePatch = {
+        ...(d ? { drive: { ...d, pending: 0, current: null, percent: 0, done: true } } : {}),
+        ...(p.tags ? { tags: { ...p.tags, pending: 0, current: null } } : {})
+      }
       if (p.cancelled) {
         patchJob(() => ({ state: 'cancelled', message: 'Download cancelled.', progress: null }))
       } else if (p.ok === true && !p.warning) {

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { dirname, join, relative } from 'path'
+import { basename, dirname, join, relative } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import {
@@ -26,6 +26,10 @@ import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/com
 import { DRIVE_ROOT_NAME, DriveSink, leftoverMedia, readDoneList, type DriveProgress } from './ipc/drive'
 import { getDriveProvider } from '../file-vault/ipc/shared'
 import { findByName, findOrCreateSubfolder, md5File, resumableUpload } from '../file-vault/ipc/gdrive'
+import { MusicBrainz, mbUserAgent } from './ipc/musicbrainz'
+import { extractArt, probeSong, readImage, writeSongTags, type Art } from './ipc/tagio'
+import { ReviewStore, TagFixer, type TagFixDeps } from './ipc/tagfix'
+import { sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
 
 /* ------------------------------------------------------------------------ *
  *  YT DOWNLOADER — main process.
@@ -52,6 +56,8 @@ const MUSIC_AUDIO_ONLY_KEY = `${ID}.musicAudioOnly`
 const MUSIC_FORMAT_KEY = `${ID}.musicFormat`
 const COMBINE_KEY = `${ID}.combineClips`
 const COMBINE_SHUFFLE_KEY = `${ID}.combineShuffle`
+const FIX_TAGS_KEY = `${ID}.fixTags`
+const OFFICIAL_ART_KEY = `${ID}.officialArt`
 const PROBE_TIMEOUT_MS = 90_000
 const MAX_JOBS = 3
 const RESUME_DELAY_MS = 8000
@@ -66,6 +72,9 @@ interface PendingJob {
   shuffle?: boolean
   /** upload to Google Drive (File Vault's connection) instead of keeping files locally */
   toDrive?: boolean
+  /** "Fix missing song info" (MusicBrainz) for audio downloads */
+  fixTags?: boolean
+  officialArt?: boolean
   title: string
   startedAt: number
   attempts: number
@@ -118,12 +127,18 @@ export default function register(ctx: ModuleIpcContext): void {
     savePending(readPending().filter((x) => x.jobId !== jobId))
   }
 
+  // Songs MusicBrainz couldn't identify wait here for the user (review.json).
+  const review = new ReviewStore(join(moduleDir(), 'review.json'), (items) => send(`${ID}:review`, items))
+  // one shared client: MusicBrainz allows 1 request/second per app
+  const mb = new MusicBrainz(mbUserAgent(ctx.app.getVersion()))
+
   // Drive jobs download into <temp>/WICKED YouTube to Drive/<jobId>; a folder
-  // whose job isn't about to resume is leftover scratch.
+  // whose job isn't about to resume (and holds no song waiting for review) is
+  // leftover scratch.
   const stagingRoot = (): string => join(ctx.app.getPath('temp'), 'WICKED YouTube to Drive')
   const stagingDirFor = (jobId: string): string => join(stagingRoot(), jobId)
   try {
-    const keep = new Set(survivorsForStaging().map((p) => p.jobId))
+    const keep = new Set([...survivorsForStaging().map((p) => p.jobId), ...review.list().filter((i) => i.toDrive).map((i) => i.jobId)])
     for (const name of readdirSync(stagingRoot())) if (!keep.has(name)) rmSync(join(stagingRoot(), name), { recursive: true, force: true })
   } catch {
     /* nothing staged */
@@ -234,13 +249,16 @@ export default function register(ctx: ModuleIpcContext): void {
    * link is a song, so grabbing video is almost never what's wanted.
    * ---------------------------------------------------------------------- */
 
-  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean; combineShuffle: boolean } => {
+  const prefs = (): { musicAudioOnly: boolean; musicFormat: string; combineClips: boolean; combineShuffle: boolean; fixTags: boolean; officialArt: boolean } => {
     const fmt = ctx.storeGet<string>(MUSIC_FORMAT_KEY, 'audio')
     return {
       musicAudioOnly: ctx.storeGet<boolean>(MUSIC_AUDIO_ONLY_KEY, true) !== false,
       musicFormat: fmt === 'audio-native' ? 'audio-native' : 'audio',
       combineClips: ctx.storeGet<boolean>(COMBINE_KEY, false) === true,
-      combineShuffle: ctx.storeGet<boolean>(COMBINE_SHUFFLE_KEY, false) === true
+      combineShuffle: ctx.storeGet<boolean>(COMBINE_SHUFFLE_KEY, false) === true,
+      // "Fix missing song info" + official album art: ON by default for music
+      fixTags: ctx.storeGet<boolean>(FIX_TAGS_KEY, true) !== false,
+      officialArt: ctx.storeGet<boolean>(OFFICIAL_ART_KEY, true) !== false
     }
   }
 
@@ -253,6 +271,8 @@ export default function register(ctx: ModuleIpcContext): void {
       ctx.storeSet(MUSIC_FORMAT_KEY, r.musicFormat)
     if (typeof r.combineClips === 'boolean') ctx.storeSet(COMBINE_KEY, r.combineClips)
     if (typeof r.combineShuffle === 'boolean') ctx.storeSet(COMBINE_SHUFFLE_KEY, r.combineShuffle)
+    if (typeof r.fixTags === 'boolean') ctx.storeSet(FIX_TAGS_KEY, r.fixTags)
+    if (typeof r.officialArt === 'boolean') ctx.storeSet(OFFICIAL_ART_KEY, r.officialArt)
     return { ok: true, ...prefs() }
   })
 
@@ -291,6 +311,178 @@ export default function register(ctx: ModuleIpcContext): void {
     const url = typeof raw === 'string' && /^https:\/\/drive\.google\.com\//.test(raw) ? raw : 'https://drive.google.com/drive/my-drive'
     await ctx.shell.openExternal(url)
     return { ok: true }
+  })
+
+  type Provider = NonNullable<ReturnType<typeof getDriveProvider>>
+  function driveDeps(drive: Provider): ConstructorParameters<typeof DriveSink>[1] {
+    return {
+      getToken: drive.getToken,
+      vaultFolderId: drive.vaultFolderId,
+      findOrCreateSubfolder,
+      findByName,
+      upload: (o) => resumableUpload({ ...o, getToken: drive.getToken }),
+      md5File
+    }
+  }
+
+  /* --------------------- song info (MusicBrainz) + review -------------------- */
+
+  function tagDeps(ffmpeg: string, ffprobe: string): TagFixDeps {
+    return {
+      probe: (path) => probeSong(ffprobe, path),
+      find: (q, durationMs) => mb.find(q, durationMs),
+      genre: (rgId) => mb.genre(rgId),
+      cover: (releaseId, rgId) => mb.coverArt(releaseId, rgId, 500),
+      write: (path, probed, t, art) => writeSongTags(ffmpeg, path, probed, t, art)
+    }
+  }
+
+  /** Keep only the songs still waiting for review in a Drive job's staging folder. */
+  function pruneStaging(jobId: string): void {
+    const held = review.forJob(jobId).map((i) => i.path)
+    const walk = (d: string): void => {
+      let names: string[] = []
+      try {
+        names = readdirSync(d)
+      } catch {
+        return
+      }
+      for (const n of names) {
+        const f = join(d, n)
+        try {
+          if (statSync(f).isDirectory()) walk(f)
+          else if (!held.some((h) => relative(h, f) === '')) rmSync(f, { force: true })
+        } catch {
+          /* locked — swept later */
+        }
+      }
+    }
+    walk(stagingDirFor(jobId))
+  }
+
+  const dataUrl = (a: Art): string => `data:${a.mime};base64,${a.data.toString('base64')}`
+
+  /**
+   * Finish a held song: optionally write the user's tags (+ cover), then upload
+   * it if it came from a Drive job; drop it from the list once it's safe.
+   */
+  async function finalizeReview(item: ReviewItem, write: { tags: SongTags; art: ArtChoice } | null): Promise<{ ok: boolean; error?: string }> {
+    if (!existsSync(item.path)) {
+      review.remove(item.id)
+      return { ok: false, error: `${item.fileName} is no longer there — removed from the list.` }
+    }
+    try {
+      if (write) {
+        const ffmpeg = resolveFfmpeg()
+        const ffprobe = resolveFfprobe()
+        if (!ffmpeg || !ffprobe) throw new Error('ffmpeg isn’t available, so tags can’t be written.')
+        const probed = await probeSong(ffprobe, item.path)
+        let art: Art | null = null
+        if (write.art.kind === 'release') art = await mb.coverArt(write.art.releaseId, write.art.releaseGroupId, 500)
+        else if (write.art.kind === 'file') art = readImage(write.art.path)
+        await writeSongTags(ffmpeg, item.path, probed, write.tags, art)
+      }
+      if (item.toDrive) {
+        const drive = getDriveProvider()
+        if (!drive?.status().connected) throw new Error('Google Drive isn’t connected — reconnect it in File Vault, then save again.')
+        const s = new DriveSink(stagingDirFor(item.jobId), driveDeps(drive), () => undefined)
+        s.add(item.path)
+        await s.drain()
+        if (s.failed.length) throw new Error(`Upload to Google Drive failed: ${s.failed[0].error}`)
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      review.update(item.id, { error })
+      return { ok: false, error }
+    }
+    review.remove(item.id)
+    if (item.toDrive && !review.forJob(item.jobId).length && !jobs.has(item.jobId))
+      rmSync(stagingDirFor(item.jobId), { recursive: true, force: true })
+    return { ok: true }
+  }
+
+  ctx.ipcMain.handle(`${ID}:review-list`, () => ({ ok: true, items: review.list() }))
+
+  /** small preview of a held song's current cover */
+  ctx.ipcMain.handle(`${ID}:review-art`, async (_e, raw: unknown) => {
+    const item = review.get(String((raw as { id?: unknown })?.id ?? ''))
+    const ffmpeg = resolveFfmpeg()
+    if (!item || !ffmpeg || !existsSync(item.path)) return { ok: false }
+    const art = await extractArt(ffmpeg, item.path, 300)
+    return art ? { ok: true, dataUrl: dataUrl(art) } : { ok: false }
+  })
+
+  /** MusicBrainz candidates for what the user typed (ranked; not auto-applied) */
+  ctx.ipcMain.handle(`${ID}:review-search`, async (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { id?: string; title?: string; artist?: string }
+    const item = r.id ? review.get(r.id) : undefined
+    const q = { title: String(r.title ?? '').trim(), artist: String(r.artist ?? '').trim() }
+    if (!q.title) return { ok: false, error: 'Type at least the song title to search.' }
+    try {
+      const seen = new Set<string>()
+      const list = [...(await mb.search(q, item?.durationMs ?? null, false)), ...(await mb.search(q, item?.durationMs ?? null, true))]
+        .sort((a, b) => b.confidence - a.confidence)
+        .filter((c) => (seen.has(c.recordingId) ? false : (seen.add(c.recordingId), true)))
+        .slice(0, 8)
+      return { ok: true, candidates: list }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  const coverCache = new Map<string, string | null>()
+  ctx.ipcMain.handle(`${ID}:cover-preview`, async (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { releaseId?: string; releaseGroupId?: string }
+    const key = `${r.releaseId ?? ''}|${r.releaseGroupId ?? ''}`
+    if (!coverCache.has(key))
+      try {
+        const art = await mb.coverArt(String(r.releaseId ?? ''), String(r.releaseGroupId ?? ''), 250)
+        coverCache.set(key, art ? dataUrl(art) : null)
+      } catch {
+        return { ok: false }
+      }
+    const url = coverCache.get(key)
+    return url ? { ok: true, dataUrl: url } : { ok: false }
+  })
+
+  ctx.ipcMain.handle(`${ID}:review-pick-image`, async () => {
+    const win = ctx.getMainWindow()
+    const opts = { title: 'Choose a cover image', properties: ['openFile' as const], filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }] }
+    const res = win ? await ctx.dialog.showOpenDialog(win, opts) : await ctx.dialog.showOpenDialog(opts)
+    if (res.canceled || !res.filePaths[0]) return { ok: false, canceled: true }
+    try {
+      const art = readImage(res.filePaths[0])
+      return { ok: true, path: res.filePaths[0], dataUrl: dataUrl(art) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /** save a held song with the user's details (and cover choice) */
+  ctx.ipcMain.handle(`${ID}:review-save`, async (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { id?: string; tags?: Partial<SongTags>; art?: ArtChoice }
+    const item = review.get(String(r.id ?? ''))
+    if (!item) return { ok: false, error: 'That song is no longer waiting.' }
+    const t = sanitizeTags(r.tags ?? {})
+    if (!t.title || !t.artist) return { ok: false, error: 'Title and artist are needed.' }
+    const a = r.art
+    const art: ArtChoice =
+      a?.kind === 'release' && a.releaseId ? { kind: 'release', releaseId: String(a.releaseId), releaseGroupId: String(a.releaseGroupId ?? '') } : a?.kind === 'file' && a.path ? { kind: 'file', path: String(a.path) } : { kind: 'keep' }
+    return finalizeReview(item, { tags: t, art })
+  })
+
+  /** save held songs exactly as they are ("ignore") — ids, or every held song */
+  ctx.ipcMain.handle(`${ID}:review-ignore`, async (_e, raw: unknown) => {
+    const ids = (raw as { ids?: unknown })?.ids
+    const items = Array.isArray(ids) ? ids.map((id) => review.get(String(id))).filter((i): i is ReviewItem => !!i) : review.list()
+    let saved = 0
+    const errors: string[] = []
+    for (const it of items) {
+      const res = await finalizeReview(it, null)
+      if (res.ok) saved++
+      else if (res.error) errors.push(res.error)
+    }
+    return { ok: errors.length === 0, saved, failed: errors.length, error: errors[0] }
   })
 
   /* -------------------------------- probe -------------------------------- */
@@ -412,6 +604,9 @@ export default function register(ctx: ModuleIpcContext): void {
     shuffle: boolean
     /** upload each finished file to Google Drive, keeping nothing locally */
     toDrive: boolean
+    /** audio only: look songs up on MusicBrainz and fill missing tags (+ official cover) */
+    fixTags: boolean
+    officialArt: boolean
     title: string
     /** original start time — preserved across a crash resume for the combine */
     startedAt: number
@@ -446,6 +641,8 @@ export default function register(ctx: ModuleIpcContext): void {
       combine: p.combine,
       shuffle: p.shuffle,
       toDrive: p.toDrive,
+      fixTags: p.fixTags,
+      officialArt: p.officialArt,
       title: p.title,
       startedAt: p.startedAt,
       attempts: p.attempts
@@ -457,6 +654,7 @@ export default function register(ctx: ModuleIpcContext): void {
       isPlaylist: p.isPlaylist,
       combine: p.combine,
       toDrive: p.toDrive,
+      fixTags: p.fixTags && isAudioQuality(p.quality),
       resumed: p.resumed
     })
     if (p.resumed)
@@ -469,6 +667,7 @@ export default function register(ctx: ModuleIpcContext): void {
     }
 
     let sink: DriveSink | null = null
+    let fixer: TagFixer | null = null
     let poll: ReturnType<typeof setInterval> | null = null
     try {
       const ud = userData()
@@ -483,9 +682,13 @@ export default function register(ctx: ModuleIpcContext): void {
         return finish({ ok: false, error: 'Google Drive isn’t connected — open File Vault and click Connect, or untick “Download to Google Drive”.' })
       const dir = p.toDrive ? stagingDirFor(jobId) : downloadDir()
       mkdirSync(dir, { recursive: true })
-      const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : undefined
 
       const ffmpeg = resolveFfmpeg()
+      const ffprobe = resolveFfprobe()
+      const fixTags = p.fixTags && isAudioQuality(p.quality) && !!ffmpeg && !!ffprobe
+      // yt-dlp appends each finished file here — the Drive uploader and the tag
+      // fixer pick songs up from it as they complete
+      const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : fixTags ? join(moduleDir(), `done-${jobId}.txt`) : undefined
       // "Combine clips" only makes sense for a multi-item VIDEO download and needs
       // ffmpeg. It's ignored for single videos and audio jobs.
       const wantCombine = p.combine && p.isPlaylist && !isAudioQuality(p.quality) && !!ffmpeg
@@ -504,30 +707,43 @@ export default function register(ctx: ModuleIpcContext): void {
       const args = buildDownloadArgs(req, ffmpeg)
 
       if (drive && doneListPath) {
-        sink = new DriveSink(
-          dir,
-          {
-            getToken: drive.getToken,
-            vaultFolderId: drive.vaultFolderId,
-            findOrCreateSubfolder,
-            findByName,
-            upload: (o) => resumableUpload({ ...o, getToken: drive.getToken }),
-            md5File
-          },
-          (prog: DriveProgress) => sendP({ kind: 'drive', ...prog })
-        )
-        const s = sink
-        job.onCancel = () => s.abort()
+        sink = new DriveSink(dir, driveDeps(drive), (prog: DriveProgress) => sendP({ kind: 'drive', ...prog }))
         sendP({ kind: 'note', note: `Saving to Google Drive (${drive.status().email || 'File Vault'}) → WICKED Vault/${DRIVE_ROOT_NAME} — nothing is kept on this PC.` })
-        // a stitched movie needs every clip on disk first, so combine jobs upload at the end
-        if (!wantCombine) {
-          let seenLines = 0
-          poll = setInterval(() => {
-            const lines = readDoneList(doneListPath)
-            for (const l of lines.slice(seenLines)) s.add(l)
-            seenLines = lines.length
-          }, 1500)
-        }
+      }
+      if (fixTags && ffmpeg && ffprobe) {
+        const s = sink
+        fixer = new TagFixer(tagDeps(ffmpeg, ffprobe), {
+          officialArt: p.officialArt,
+          isHeld: (f) => review.isHeld(f),
+          hold: (f, info) => review.add({ jobId, jobTitle: p.title || 'Download', path: f, fileName: basename(f), toDrive: p.toDrive, ...info }),
+          onReady: (f) => s?.add(f),
+          onProgress: (sum: TagSummary) => sendP({ kind: 'tags', ...sum }),
+          processedFile: p.toDrive ? join(dir, '.wicked-tagged.txt') : join(moduleDir(), `tagged-${jobId}.txt`)
+        })
+        sendP({ kind: 'note', note: `Fixing missing song info with MusicBrainz${p.officialArt ? ' + official album art' : ''} — songs it can’t identify will wait for you.` })
+      }
+      {
+        const s = sink
+        const f = fixer
+        if (s || f)
+          job.onCancel = () => {
+            f?.abort()
+            s?.abort()
+          }
+      }
+      // every finished file: tag fixer first (it passes songs on), else straight to Drive
+      const feed = (path: string): void => {
+        if (fixer) fixer.add(path)
+        else sink?.add(path)
+      }
+      // a stitched movie needs every clip on disk first, so combine jobs upload at the end
+      if (doneListPath && (sink || fixer) && !wantCombine) {
+        let seenLines = 0
+        poll = setInterval(() => {
+          const lines = readDoneList(doneListPath)
+          for (const l of lines.slice(seenLines)) feed(l)
+          seenLines = lines.length
+        }, 1500)
       }
 
       let completed = 0
@@ -597,12 +813,25 @@ export default function register(ctx: ModuleIpcContext): void {
         }
       }
 
-      // ---- Google Drive: upload whatever is still staged, then report ----
+      // ---- song info + Google Drive: finish what's still queued, then report ----
+      if (doneListPath && (sink || fixer)) {
+        for (const l of readDoneList(doneListPath)) feed(l)
+        // anything the list missed, plus clips + the stitched movie of a combine job
+        if (sink) for (const f of leftoverMedia(dir)) if (!review.isHeld(f)) feed(f)
+        if (fixer) await fixer.drain()
+        if (job.cancelRequested) return finish({ ok: false, cancelled: true })
+        if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
+      }
+      const tags = fixer ? fixer.summary() : null
+      if (tags) {
+        sendP({ kind: 'tags', ...tags, pending: 0, current: null })
+        sendP({
+          kind: 'note',
+          note: `Song info: ${tags.fixed} fixed · ${tags.complete} already complete · ${tags.needsInfo} need${tags.needsInfo === 1 ? 's' : ''} your input${tags.skipped ? ` · ${tags.skipped} skipped${tags.note ? ` (${tags.note})` : ''}` : ''}.`
+        })
+      }
       let drived: Record<string, unknown> | null = null
       if (sink && doneListPath) {
-        for (const l of readDoneList(doneListPath)) sink.add(l)
-        // anything the list missed, plus clips + the stitched movie of a combine job
-        for (const f of leftoverMedia(dir)) sink.add(f)
         await sink.drain()
         if (job.cancelRequested) return finish({ ok: false, cancelled: true })
         if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
@@ -645,21 +874,30 @@ export default function register(ctx: ModuleIpcContext): void {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;
         // treat as a soft warning when at least something downloaded.
-        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined, drive: drived })
+        return finish({ ok: completed > 0, warning: completed > 0, error: tail || `yt-dlp exited with code ${result.code}`, completed, combined, drive: drived, tags })
       }
-      return finish({ ok: true, completed, combined, drive: drived })
+      return finish({ ok: true, completed, combined, drive: drived, tags })
     } finally {
       if (poll) clearInterval(poll)
       jobs.delete(jobId)
       // quitting keeps the journal entry so the job resumes on the next launch
       if (!quitting) removePending(jobId)
+      if (!quitting) {
+        fixer?.abort()
+        for (const f of [`done-${jobId}.txt`, `tagged-${jobId}.txt`]) rmSync(join(moduleDir(), f), { force: true })
+      }
       if (p.toDrive && !quitting) {
         sink?.abort()
-        try {
-          rmSync(stagingDirFor(jobId), { recursive: true, force: true })
-        } catch {
-          /* locked by a dying yt-dlp — swept on next launch */
-        }
+        // a cancelled job's staged songs are deleted, so their review entries go too
+        if (job.cancelRequested) review.removeJob(jobId)
+        // songs waiting for the user stay staged (only them); otherwise clear it all
+        if (review.forJob(jobId).length) pruneStaging(jobId)
+        else
+          try {
+            rmSync(stagingDirFor(jobId), { recursive: true, force: true })
+          } catch {
+            /* locked by a dying yt-dlp — swept on next launch */
+          }
       }
       const manifest = manifestPathFor(jobId)
       if (existsSync(manifest)) {
@@ -708,6 +946,8 @@ export default function register(ctx: ModuleIpcContext): void {
       combine: r.combine === true,
       shuffle: r.shuffle === true,
       toDrive: r.toDrive === true,
+      fixTags: typeof r.fixTags === 'boolean' ? r.fixTags : prefs().fixTags,
+      officialArt: typeof r.officialArt === 'boolean' ? r.officialArt : prefs().officialArt,
       title: typeof r.title === 'string' ? r.title : '',
       startedAt: Date.now(),
       attempts: 0,
@@ -725,7 +965,15 @@ export default function register(ctx: ModuleIpcContext): void {
           continue
         }
         console.log(`[${ID}] resuming interrupted job: ${p.title || p.url}`)
-        void performJob({ ...p, shuffle: p.shuffle === true, toDrive: p.toDrive === true, attempts: p.attempts + 1, resumed: true })
+        void performJob({
+          ...p,
+          shuffle: p.shuffle === true,
+          toDrive: p.toDrive === true,
+          fixTags: p.fixTags === true,
+          officialArt: p.officialArt !== false,
+          attempts: p.attempts + 1,
+          resumed: true
+        })
       }
     }, RESUME_DELAY_MS)
   }
