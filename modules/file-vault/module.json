@@ -2,7 +2,7 @@
   "id": "file-vault",
   "name": "File Vault",
   "icon": "Vault",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Cloud file storage on your own Google Drive — installers, executables, big files. Verified transfers, zero extra cost.",
   "status": "stable"
 }

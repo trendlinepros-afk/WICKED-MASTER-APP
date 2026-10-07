@@ -25,11 +25,11 @@ import {
 import { canvasFor, collectOutputs, combineClips, sanitizeName } from './ipc/combine'
 import { DRIVE_ROOT_NAME, DriveSink, leftoverMedia, readDoneList, type DriveProgress } from './ipc/drive'
 import { getDriveProvider } from '../file-vault/ipc/shared'
-import { findByName, findOrCreateSubfolder, listFolder, md5File, resumableUpload } from '../file-vault/ipc/gdrive'
+import { findByName, findOrCreateSubfolder, listFolder, md5File, resumableUpload, trashFile } from '../file-vault/ipc/gdrive'
 import { MusicBrainz, mbUserAgent } from './ipc/musicbrainz'
 import { extractArt, probeSong, readImage, writeSongTags, type Art } from './ipc/tagio'
 import { ReviewStore, TagFixer, type ReadyInfo, type TagFixDeps } from './ipc/tagfix'
-import { SongLibrary, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT } from './ipc/library'
+import { SongLibrary, docSignature, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT, type ListDoc } from './ipc/library'
 import { assessTags, emptyTags, sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
 
 /* ------------------------------------------------------------------------ *
@@ -384,12 +384,15 @@ export default function register(ctx: ModuleIpcContext): void {
 
   /* --------------------------- downloaded songs --------------------------- */
 
-  /** Add songs already on disk / in Drive (from before the list existed). */
-  async function scanExisting(includeDrive: boolean): Promise<{ local: number; drive: number; error?: string }> {
+  /** Add songs already on disk / in Drive (from before the list existed).
+   *  The automatic first-run scan skips songs you removed from the list on
+   *  purpose (their file may still be on disk); the button re-adds everything. */
+  async function scanExisting(includeDrive: boolean, keepRemoved = false): Promise<{ local: number; drive: number; error?: string }> {
     let local = 0
     let drive = 0
+    const skip = (id: string): boolean => library.has(id) || (keepRemoved && library.isForgotten(id))
     for (const f of findDownloadedSongs(downloadDir())) {
-      if (library.has(f.videoId)) continue
+      if (skip(f.videoId)) continue
       const { artist, title } = parseSongFileName(f.fileName)
       library.record({ videoId: f.videoId, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.fileName, location: 'local', path: f.path, driveFileId: '', playlist: basename(dirname(f.path)), jobId: '', downloadedAt: Date.now() })
       local++
@@ -406,7 +409,7 @@ export default function register(ctx: ModuleIpcContext): void {
             else {
               const id = videoIdOf(f.name)
               const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
-              if (!id || !AUDIO_EXT.has(ext) || library.has(id)) continue
+              if (!id || !AUDIO_EXT.has(ext) || skip(id)) continue
               const { artist, title } = parseSongFileName(f.name)
               library.record({ videoId: id, title, artist, album: '', originalTitle: title, originalArtist: artist, recordingId: '', durationMs: null, fileName: f.name, location: 'drive', path: '', driveFileId: f.id, playlist: folderName, jobId: '', downloadedAt: Date.now() })
               drive++
@@ -426,7 +429,7 @@ export default function register(ctx: ModuleIpcContext): void {
   if (library.fresh) {
     const firstScan = (): void => {
       if (jobs.size > 0) return void setTimeout(firstScan, 30_000)
-      void scanExisting(false)
+      void scanExisting(false, true)
     }
     setTimeout(firstScan, 4000)
   }
@@ -434,7 +437,7 @@ export default function register(ctx: ModuleIpcContext): void {
   ctx.ipcMain.handle(`${ID}:library-list`, (_e, raw: unknown) => {
     const r = (raw ?? {}) as { query?: unknown; limit?: unknown; offset?: unknown }
     const limit = Math.max(1, Math.min(1000, Number(r.limit) || 200))
-    return { ok: true, ...library.list(typeof r.query === 'string' ? r.query : '', limit, Math.max(0, Number(r.offset) || 0)) }
+    return { ok: true, ...library.list(typeof r.query === 'string' ? r.query : '', limit, Math.max(0, Number(r.offset) || 0)), syncedAt: listSync.at, syncError: listSync.error }
   })
 
   /** forget songs (or all) so they can be downloaded again — files are not touched */
@@ -442,10 +445,126 @@ export default function register(ctx: ModuleIpcContext): void {
     const r = (raw ?? {}) as { videoIds?: unknown; all?: unknown }
     const n = r.all === true ? library.forgetAll() : Array.isArray(r.videoIds) ? library.forget(r.videoIds.map(String)) : 0
     library.flush()
+    void syncListWithDrive()
     return { ok: true, forgotten: n, total: library.size }
   })
 
   ctx.ipcMain.handle(`${ID}:library-scan`, async () => ({ ok: true, ...(await scanExisting(true)), total: library.size }))
+
+  /* ---- shared through Google Drive: every PC with Drive connected sees every PC's downloads ---- */
+
+  const DRIVE_LIST_NAME = '.wicked-downloaded-songs.json'
+  const listSync = { at: 0, error: '' }
+  let listSyncChain: Promise<void> = Promise.resolve()
+
+  /** Merge the Drive copy into this PC's list, then upload the result if they differed. One at a time. */
+  function syncListWithDrive(): Promise<void> {
+    const run = listSyncChain.then(async () => {
+      const d = getDriveProvider()
+      if (!d?.status().connected) {
+        listSync.error = 'not-connected'
+        return
+      }
+      try {
+        const token = await d.getToken()
+        const folder = await findOrCreateSubfolder(token, DRIVE_ROOT_NAME, await d.vaultFolderId())
+        // two PCs syncing at the same moment can each create the file — read
+        // every copy, merge them all, keep the oldest and trash the rest
+        const q = encodeURIComponent(`name = '${DRIVE_LIST_NAME}' and '${folder.replace(/'/g, "\\'")}' in parents and trashed = false`)
+        const lr = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=${encodeURIComponent('files(id,createdTime)')}&orderBy=createdTime&pageSize=20`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(30_000)
+        })
+        if (!lr.ok) throw new Error(`Couldn’t look for the shared list (HTTP ${lr.status})`)
+        const copies = (((await lr.json()) as { files?: { id: string }[] }).files ?? []).filter((f) => f?.id)
+        const remoteFile = copies[0]
+        let remoteSig = ''
+        for (const [i, c] of copies.entries()) {
+          const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(c.id)}?alt=media`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(60_000)
+          })
+          if (!r.ok) throw new Error(`Couldn’t read the shared list (HTTP ${r.status})`)
+          const raw = (await r.json()) as Partial<ListDoc>
+          const doc: ListDoc = { version: 2, songs: Array.isArray(raw.songs) ? raw.songs : [], forgotten: raw.forgotten && typeof raw.forgotten === 'object' ? raw.forgotten : {} }
+          if (i === 0) remoteSig = docSignature(doc)
+          else remoteSig = 'merged-extra-copies' // force an upload of the merged result
+          library.mergeIn(doc)
+        }
+        for (const extra of copies.slice(1))
+          try {
+            await trashFile(token, extra.id)
+          } catch {
+            /* next sync tries again */
+          }
+        if (library.signature() !== remoteSig) {
+          const tmp = join(ctx.app.getPath('temp'), `wicked-downloaded-songs-${process.pid}.json`)
+          mkdirSync(dirname(tmp), { recursive: true })
+          writeFileSync(tmp, JSON.stringify(library.toDoc()), 'utf8')
+          try {
+            await resumableUpload({ localPath: tmp, size: statSync(tmp).size, name: DRIVE_LIST_NAME, folderId: folder, existingFileId: remoteFile?.id, getToken: d.getToken, signal: AbortSignal.timeout(120_000), onProgress: () => undefined })
+          } finally {
+            rmSync(tmp, { force: true })
+          }
+        }
+        library.flush()
+        listSync.at = Date.now()
+        listSync.error = ''
+      } catch (err) {
+        listSync.error = errMsg(err)
+        console.error(`[${ID}] downloaded-songs list sync with Google Drive failed:`, err)
+      }
+    })
+    listSyncChain = run.catch(() => undefined)
+    return run
+  }
+  /** don't let a slow Drive hold a download up for long */
+  const syncListQuick = (ms = 20_000): Promise<void> => Promise.race([syncListWithDrive(), new Promise<void>((r) => setTimeout(r, ms))])
+  setTimeout(() => void syncListWithDrive(), 6000)
+
+  ctx.ipcMain.handle(`${ID}:library-sync`, async () => {
+    await syncListQuick(30_000)
+    return { ok: !listSync.error || listSync.error === 'not-connected', total: library.size, syncedAt: listSync.at, error: listSync.error }
+  })
+
+  /** delete songs: the file goes to the Recycle Bin (this PC) or Drive's trash, and it leaves the list */
+  ctx.ipcMain.handle(`${ID}:library-delete`, async (_e, raw: unknown) => {
+    const ids = Array.isArray((raw as { videoIds?: unknown })?.videoIds) ? (raw as { videoIds: unknown[] }).videoIds.map(String) : []
+    let deleted = 0
+    const errors: string[] = []
+    for (const id of ids) {
+      const s = library.get(id)
+      if (!s) continue
+      try {
+        if (s.location === 'pending') throw new Error(`“${s.title || s.fileName}” is still uploading or waiting for song info — finish or cancel that first.`)
+        if (s.location === 'local' && s.path && existsSync(s.path)) {
+          await ctx.shell.trashItem(s.path)
+          const stem = basename(s.path).replace(/\.[^.]+$/, '')
+          try {
+            for (const n of readdirSync(dirname(s.path)))
+              if (n.startsWith(`${stem}.`) && /\.(jpe?g|png|webp)$/i.test(n)) await ctx.shell.trashItem(join(dirname(s.path), n))
+          } catch {
+            /* cover thumbnail is optional */
+          }
+        } else if (s.location === 'drive' && s.driveFileId) {
+          const d = getDriveProvider()
+          if (!d?.status().connected) throw new Error('Google Drive isn’t connected — connect it in File Vault to delete Drive songs.')
+          try {
+            await trashFile(await d.getToken(), s.driveFileId)
+          } catch (err) {
+            if (!/404|not ?found/i.test(errMsg(err))) throw err // already gone from Drive is fine
+          }
+        }
+        library.forget([s.videoId])
+        deleted++
+      } catch (err) {
+        errors.push(errMsg(err))
+      }
+    }
+    library.flush()
+    void syncListWithDrive()
+    return { ok: errors.length === 0, deleted, failed: errors.length, error: errors[0], total: library.size }
+  })
 
   /**
    * Finish a held song: optionally write the user's tags (+ cover), then upload
@@ -789,7 +908,9 @@ export default function register(ctx: ModuleIpcContext): void {
       const dedupe = p.skipDuplicates && isMusic
       const doneListPath = p.toDrive ? join(dir, '.wicked-done.txt') : fixTags || isMusic ? join(moduleDir(), `done-${jobId}.txt`) : undefined
       const archivePath = p.toDrive ? join(dir, '.wicked-archive.txt') : dedupe ? join(moduleDir(), `archive-${jobId}.txt`) : undefined
-      // known songs go into this job's yt-dlp archive, so they're skipped before downloading
+      // known songs go into this job's yt-dlp archive, so they're skipped before
+      // downloading — including what your other PCs downloaded (shared via Drive)
+      if (dedupe) await syncListQuick()
       if (dedupe && archivePath) {
         const have = new Set(existsSync(archivePath) ? readFileSync(archivePath, 'utf8').split(/\r?\n/) : [])
         const add = library.archiveLines().filter((l) => !have.has(l))
@@ -943,7 +1064,7 @@ export default function register(ctx: ModuleIpcContext): void {
         else sink?.add(path)
       }
       // a stitched movie needs every clip on disk first, so combine jobs upload at the end
-      if (doneListPath && (sink || fixer) && !wantCombine) {
+      if (doneListPath && (sink || fixer || isMusic) && !wantCombine) {
         let seenLines = 0
         poll = setInterval(() => {
           const lines = readDoneList(doneListPath)
@@ -1024,7 +1145,7 @@ export default function register(ctx: ModuleIpcContext): void {
       }
 
       // ---- song info + Google Drive: finish what's still queued, then report ----
-      if (doneListPath && (sink || fixer)) {
+      if (doneListPath && (sink || fixer || isMusic)) {
         for (const l of readDoneList(doneListPath)) feed(l)
         // anything the list missed, plus clips + the stitched movie of a combine job
         if (sink) for (const f of leftoverMedia(dir)) if (!review.isHeld(f)) feed(f)
@@ -1107,6 +1228,7 @@ export default function register(ctx: ModuleIpcContext): void {
         for (const f of [`done-${jobId}.txt`, `tagged-${jobId}.txt`, `archive-${jobId}.txt`]) rmSync(join(moduleDir(), f), { force: true })
       }
       library.flush()
+      if (isAudioQuality(p.quality) && !quitting) void syncListWithDrive()
       if (p.toDrive && !quitting) {
         sink?.abort()
         // a cancelled job's staged songs are deleted, so their review entries

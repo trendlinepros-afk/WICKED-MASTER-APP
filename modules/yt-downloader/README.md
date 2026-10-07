@@ -169,6 +169,36 @@ downloaded** (scans the download folder and `WICKED Vault/YouTube Downloads` in
 Drive for `[<id>]` audio files; the download folder is also scanned once on the
 first launch with the list, when no download is running).
 
+**The list follows you to every PC**:
+
+- It's part of every **Backup** and **Cloud Sync** snapshot (it lives in the
+  module data folder; only `bin/` is excluded). Those replace whole files, so the
+  list is *mergeable*: each song has `updatedAt`, removals leave a dated tombstone
+  (`forgotten`), and `mergeDocs` unions two copies (newest wins per song; a
+  removal beats anything older; a newer re-download beats an older removal).
+- A machine-local twin, `downloaded-songs.local.json`, is written alongside and
+  is **excluded from backups** (`EXCLUDE_RELPATHS` in `src/main/backup-core.ts`),
+  so it survives a restore / sync pull; on the next launch it's merged back in —
+  a pull from another PC never wipes this PC's downloads.
+- **Shared live through Google Drive** (File Vault's connection):
+  `WICKED Vault/YouTube Downloads/.wicked-downloaded-songs.json` is merged in
+  before every music download (≤ 20 s wait), after every job, when the list
+  window opens / **Sync now**, and after a removal or delete — so a PC knows what
+  your other PCs downloaded without waiting for a Cloud Sync pull. Copies created
+  by two PCs at once are all merged, the oldest kept and the rest trashed. File
+  Vault hides `.wicked-*` bookkeeping files. Without Drive the list still travels
+  with Backup / Cloud Sync.
+- The automatic first-run folder scan skips songs you removed on purpose (their
+  file may still be on disk); **Add songs already downloaded** re-adds everything.
+
+**The list window** (header button, always shown): tick songs (or **Select all
+shown**) → **Remove from list** (it may be downloaded again; the file stays) or
+**Delete songs…** (confirm: files on this PC go to the **Recycle Bin**
+via `shell.trashItem`, Drive songs to **Drive's trash**; both recoverable for a
+while; they also leave the list). Per song: **Remove from list** and a trash
+icon. Songs still uploading / waiting for song info can't be deleted yet. The
+footer shows the backup/sync state and the last Drive sync.
+
 With **Skip songs I've already downloaded** (music setting, on by default):
 
 - **Before downloading**: every known video id (and alias) is written into the
@@ -283,7 +313,8 @@ connected.
   `googleDrive.connected`), `__download` (destructive, confirm-gated — writes
   files, can run long; optional `combine`, `toDrive`, `fixTags`, `officialArt`),
   `__update`, `__cancel`; downloaded songs: `__downloaded-songs` (read-only,
-  searchable) and `__forget-downloaded-songs` (confirm-gated); download also takes
+  searchable), `__forget-downloaded-songs` and `__delete-downloaded-songs`
+  (confirm-gated; the latter trashes the files); download also takes
   `skipDuplicates`; song info: `__songs-needing-info` and
   `__search-song-info` (read-only), `__save-song-info` and `__save-songs-as-is`
   (destructive, confirm-gated).

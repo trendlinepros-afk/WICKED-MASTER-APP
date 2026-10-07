@@ -37,7 +37,9 @@ into WICKED → Connect (browser sign-in).
   connected/email status and `vaultFolderId()` (the vault folder, re-created if
   it was deleted or trashed) cross the module boundary. Backup uses it for its
   offsite copy; YouTube Downloader's "Download to Google Drive" saves into
-  `WICKED Vault/YouTube Downloads`, so those files show up here.
+  `WICKED Vault/YouTube Downloads`, so those files show up here. Files named
+  `.wicked-*` (e.g. the downloader's shared downloaded-songs list) are WICKED's
+  own bookkeeping and are hidden from the listing.
 - **Secrets**: client id is plaintext (public by design for installed apps);
   client secret + refresh token are `safeStorage` (DPAPI) encrypted in
   `modules/file-vault/auth.json`, which is **excluded from Backup & Cloud Sync**

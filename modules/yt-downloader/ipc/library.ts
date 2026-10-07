@@ -13,7 +13,17 @@
  *  - Each entry keeps the name it was downloaded as AND the name it was saved as
  *    (after "Fix missing song info" or a manual edit), so renamed songs still
  *    count as the same song.
+ *
+ * Travelling between PCs: the list lives in the module data folder, so it's in
+ * every Backup and Cloud Sync snapshot. Those replace the whole file, so the
+ * list is MERGEABLE instead: every song has `updatedAt`, removals leave a dated
+ * tombstone (`forgotten`), and `mergeDocs` unions two copies (newest wins per
+ * song; a removal beats anything older). A machine-local twin
+ * (`*.local.json`, never backed up) is merged back in on load, so a restore or
+ * sync pull from another PC never wipes this PC's downloads. The same doc is
+ * also shared live through Google Drive (see ipc.ts).
  */
+import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import { cleanTitle, normalize, searchTitle } from '../lib/songinfo'
@@ -40,6 +50,57 @@ export interface LibrarySong {
   downloadedAt: number
   /** when its title/artist were changed from the original (0 = never) */
   renamedAt: number
+  /** last change to this entry — newest wins when two PCs' lists merge */
+  updatedAt: number
+}
+
+/** What's stored (and shared between PCs). */
+export interface ListDoc {
+  version: 2
+  songs: LibrarySong[]
+  /** removed video ids → when (a removal wins over anything older) */
+  forgotten: Record<string, number>
+}
+
+const TOMBSTONE_KEEP_MS = 400 * 24 * 3600 * 1000
+
+/** Union of two lists: newest entry per song wins, aliases are combined, removals win over older entries. */
+export function mergeDocs(a: ListDoc, b: ListDoc): ListDoc {
+  const songs = new Map<string, LibrarySong>()
+  for (const s of [...(a.songs ?? []), ...(b.songs ?? [])]) {
+    if (!s?.videoId) continue
+    const prev = songs.get(s.videoId)
+    const aliases = [...new Set([...(prev?.aliases ?? []), ...(Array.isArray(s.aliases) ? s.aliases : [])])]
+    if (!prev || (s.updatedAt || 0) > (prev.updatedAt || 0)) songs.set(s.videoId, { ...s, aliases })
+    else prev.aliases = aliases
+  }
+  const forgotten: Record<string, number> = {}
+  const cutoff = Date.now() - TOMBSTONE_KEEP_MS
+  for (const src of [a.forgotten ?? {}, b.forgotten ?? {}])
+    for (const [id, at] of Object.entries(src)) if (at > cutoff) forgotten[id] = Math.max(forgotten[id] ?? 0, at)
+  for (const [id, at] of Object.entries(forgotten)) {
+    const s = songs.get(id)
+    if (s && (s.updatedAt || 0) <= at) songs.delete(id)
+  }
+  return { version: 2, songs: [...songs.values()], forgotten }
+}
+
+/** Stable fingerprint of a doc (to tell whether two copies differ). */
+export function docSignature(d: ListDoc): string {
+  const h = createHash('sha1')
+  for (const s of [...(d.songs ?? [])].sort((x, y) => x.videoId.localeCompare(y.videoId))) h.update(`${s.videoId}:${s.updatedAt || 0}:${[...(s.aliases ?? [])].sort().join(',')};`)
+  for (const [id, at] of Object.entries(d.forgotten ?? {}).sort()) h.update(`-${id}:${at};`)
+  return h.digest('hex')
+}
+
+export function readDoc(file: string): ListDoc | null {
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Partial<ListDoc>
+    // v1 (no updatedAt / tombstones) reads fine: missing fields default
+    return { version: 2, songs: Array.isArray(j.songs) ? j.songs.map((s) => ({ ...s, updatedAt: s.updatedAt || s.downloadedAt || 0, aliases: Array.isArray(s.aliases) ? s.aliases : [] })) : [], forgotten: j.forgotten && typeof j.forgotten === 'object' ? j.forgotten : {} }
+  } catch {
+    return null
+  }
 }
 
 export const AUDIO_EXT = new Set(['.mp3', '.m4a', '.opus', '.ogg', '.oga', '.webm', '.flac', '.wav', '.aac'])
@@ -66,21 +127,50 @@ export const songKey = (title: string, artist: string): string => {
 export class SongLibrary {
   private songs = new Map<string, LibrarySong>()
   private alias = new Map<string, string>()
+  private forgotten: Record<string, number> = {}
   private timer: ReturnType<typeof setTimeout> | null = null
   /** true when there was no list on disk yet (first run → scan existing downloads) */
   readonly fresh: boolean
+  /** this PC's own copy — never backed up or synced, so a restore can't overwrite it */
+  private localFile: string
 
   constructor(
     private file: string,
     private onChange: (total: number) => void
   ) {
-    this.fresh = !existsSync(file)
-    try {
-      const j = JSON.parse(readFileSync(file, 'utf8')) as { songs?: LibrarySong[] }
-      for (const s of j.songs ?? []) if (s?.videoId) this.put({ ...s, aliases: Array.isArray(s.aliases) ? s.aliases : [] })
-    } catch {
-      /* empty list */
-    }
+    this.localFile = file.replace(/\.json$/, '') + '.local.json'
+    this.fresh = !existsSync(file) && !existsSync(this.localFile)
+    const main = readDoc(file)
+    const local = readDoc(this.localFile)
+    const doc = main && local ? mergeDocs(main, local) : (main ?? local ?? { version: 2 as const, songs: [], forgotten: {} })
+    this.load(doc)
+    // a restore/pull replaced the list with another PC's copy → our downloads were merged back in; save that
+    if (main && local && docSignature(doc) !== docSignature(main)) this.flush()
+  }
+
+  private load(doc: ListDoc): void {
+    this.songs.clear()
+    this.alias.clear()
+    this.forgotten = { ...doc.forgotten }
+    for (const s of doc.songs) if (s?.videoId) this.put({ ...s, aliases: Array.isArray(s.aliases) ? s.aliases : [] })
+  }
+
+  toDoc(): ListDoc {
+    return { version: 2, songs: [...this.songs.values()], forgotten: { ...this.forgotten } }
+  }
+
+  signature(): string {
+    return docSignature(this.toDoc())
+  }
+
+  /** Merge another PC's copy in. True if this list changed. */
+  mergeIn(other: ListDoc): boolean {
+    const before = this.signature()
+    const merged = mergeDocs(this.toDoc(), other)
+    if (docSignature(merged) === before) return false
+    this.load(merged)
+    this.changed()
+    return true
   }
 
   get size(): number {
@@ -90,6 +180,11 @@ export class SongLibrary {
   private put(s: LibrarySong): void {
     this.songs.set(s.videoId, s)
     for (const a of s.aliases) this.alias.set(a, s.videoId)
+  }
+
+  /** removed from the list on purpose (here or on another PC) */
+  isForgotten(videoId: string): boolean {
+    return !!this.forgotten[videoId] && !this.has(videoId)
   }
 
   has(videoId: string): boolean {
@@ -113,7 +208,7 @@ export class SongLibrary {
   }
 
   /** Add or update a song (aliases and the first download time are kept). */
-  record(s: Omit<LibrarySong, 'aliases' | 'renamedAt'> & { aliases?: string[]; renamedAt?: number }): LibrarySong {
+  record(s: Omit<LibrarySong, 'aliases' | 'renamedAt' | 'updatedAt'> & { aliases?: string[]; renamedAt?: number; updatedAt?: number }): LibrarySong {
     const prev = this.songs.get(s.videoId)
     const next: LibrarySong = {
       ...s,
@@ -122,8 +217,10 @@ export class SongLibrary {
       // the first real download's name wins; a scan entry (no jobId) only guessed it from the file name
       originalTitle: (prev?.jobId ? prev.originalTitle : '') || s.originalTitle,
       originalArtist: (prev?.jobId ? prev.originalArtist : '') || s.originalArtist,
-      renamedAt: s.renamedAt ?? prev?.renamedAt ?? 0
+      renamedAt: s.renamedAt ?? prev?.renamedAt ?? 0,
+      updatedAt: Date.now()
     }
+    delete this.forgotten[s.videoId]
     if (next.originalTitle && (normalize(next.title) !== normalize(next.originalTitle) || normalize(next.artist) !== normalize(next.originalArtist)) && !next.renamedAt)
       next.renamedAt = Date.now()
     this.put(next)
@@ -141,6 +238,7 @@ export class SongLibrary {
     const s = this.get(videoId)
     if (!s || !aliasId || s.videoId === aliasId || s.aliases.includes(aliasId)) return
     s.aliases.push(aliasId)
+    s.updatedAt = Date.now()
     this.alias.set(aliasId, s.videoId)
     this.changed()
   }
@@ -152,6 +250,8 @@ export class SongLibrary {
       const s = this.get(id)
       if (!s) continue
       this.songs.delete(s.videoId)
+      const now = Date.now()
+      this.forgotten[s.videoId] = now // so the removal reaches your other PCs too
       for (const a of s.aliases) this.alias.delete(a)
       n++
     }
@@ -161,6 +261,8 @@ export class SongLibrary {
 
   forgetAll(): number {
     const n = this.songs.size
+    const now = Date.now()
+    for (const id of this.songs.keys()) this.forgotten[id] = now
     this.songs.clear()
     this.alias.clear()
     if (n) this.changed()
@@ -195,14 +297,16 @@ export class SongLibrary {
   flush(): void {
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
-    try {
-      mkdirSync(dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.tmp`
-      writeFileSync(tmp, JSON.stringify({ songs: [...this.songs.values()] }), 'utf8')
-      renameSync(tmp, this.file)
-    } catch {
-      /* next change retries */
-    }
+    const text = JSON.stringify(this.toDoc())
+    for (const f of [this.file, this.localFile])
+      try {
+        mkdirSync(dirname(f), { recursive: true })
+        const tmp = `${f}.tmp`
+        writeFileSync(tmp, text, 'utf8')
+        renameSync(tmp, f)
+      } catch {
+        /* next change retries */
+      }
   }
 }
 

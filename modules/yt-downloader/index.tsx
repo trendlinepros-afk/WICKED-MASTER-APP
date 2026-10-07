@@ -133,15 +133,16 @@ export default function YtDownloader(): React.JSX.Element {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* always available — even before yt-dlp is installed on this PC */}
+          <button
+            onClick={() => s.setLibraryOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
+            title="Every song downloaded so far (on any of your PCs) — view, remove or delete them"
+          >
+            <CopyCheck size={14} /> Downloaded songs <span className="text-muted">{s.libraryCount.toLocaleString()}</span>
+          </button>
           {binReady && (
             <>
-              <button
-                onClick={() => s.setLibraryOpen(true)}
-                className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"
-                title="Every song downloaded so far — music downloads skip these"
-              >
-                <CopyCheck size={14} /> Downloaded songs <span className="text-muted">{s.libraryCount.toLocaleString()}</span>
-              </button>
               <button
                 onClick={() => void s.openFolder()}
                 className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60"

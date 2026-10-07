@@ -193,6 +193,10 @@ export default function register(ctx: ModuleIpcContext): void {
   const sortEntries = (a: VaultFile, b: VaultFile): number =>
     Number(b.isFolder) - Number(a.isFolder) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
 
+  // WICKED's own bookkeeping files in Drive (e.g. YouTube Downloader's shared
+  // downloaded-songs list) aren't the user's files — don't list them
+  const notInternal = (f: DriveFileRaw): boolean => !f.name.startsWith('.wicked-')
+
   async function listVault(folderId?: string): Promise<VaultFile[]> {
     const token = await getToken()
     // Only the ROOT id can be transparently re-created on a 404; a sub-folder id
@@ -200,12 +204,12 @@ export default function register(ctx: ModuleIpcContext): void {
     const atRoot = !folderId
     try {
       const fid = folderId || (await ensureVault(token))
-      return (await listFolder(token, fid)).map(toVaultFile).sort(sortEntries)
+      return (await listFolder(token, fid)).filter(notInternal).map(toVaultFile).sort(sortEntries)
     } catch (err) {
       if (atRoot && err instanceof DriveApiError && err.status === 404) {
         ctx.storeSet(`${ID}.folderId`, '')
         const fid = await ensureVault(token)
-        return (await listFolder(token, fid)).map(toVaultFile).sort(sortEntries)
+        return (await listFolder(token, fid)).filter(notInternal).map(toVaultFile).sort(sortEntries)
       }
       throw err
     }

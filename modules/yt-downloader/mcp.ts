@@ -105,7 +105,7 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
     {
       name: `${ID}__downloaded-songs`,
       description:
-        'The list of songs already downloaded (from any playlist, to this PC or Google Drive) — what music downloads skip as duplicates. Each has the video id, the title/artist it is saved as, the original YouTube name, playlist, where it lives and when. Optional search query. Read-only.',
+        'The list of songs already downloaded (from any playlist, to this PC or Google Drive, on any of the user’s PCs — it travels with Backup / Cloud Sync and is shared live through Google Drive) — what music downloads skip as duplicates. Each has the video id, the title/artist it is saved as, the original YouTube name, playlist, where it lives and when. Optional search query. Read-only.',
       inputSchema: {
         query: z.string().optional().describe('Search title, artist, album, original name, playlist or file name.'),
         limit: z.number().int().min(1).max(500).optional()
@@ -127,6 +127,22 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
         const gate = ctx.confirm(args.confirm as boolean | undefined, args.all ? 'Forget EVERY downloaded song, so any of them can be downloaded again (files stay).' : `Forget ${ids.length} downloaded song(s) so they can be downloaded again (files stay).`)
         if (gate) return gate
         return ctx.invoke(`${ID}:library-forget`, args.all ? { all: true } : { videoIds: ids })
+      }
+    },
+    {
+      name: `${ID}__delete-downloaded-songs`,
+      description:
+        'Delete downloaded songs: each file goes to the Recycle Bin (this PC) or Google Drive’s trash, and the song leaves the downloaded-songs list (so it could be downloaded again). Video ids come from __downloaded-songs. Songs still uploading / waiting for song info are refused. Destructive. Requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        videoIds: z.array(z.string()).min(1),
+        confirm: z.boolean().optional().describe('Set true to delete.')
+      },
+      handler: (args) => {
+        const ids = args.videoIds as string[]
+        const gate = ctx.confirm(args.confirm as boolean | undefined, `Delete ${ids.length} downloaded song file(s) (to the Recycle Bin / Google Drive trash) and remove them from the downloaded-songs list.`)
+        if (gate) return gate
+        return ctx.invoke(`${ID}:library-delete`, { videoIds: ids })
       }
     },
     {
