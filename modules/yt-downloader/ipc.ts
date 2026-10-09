@@ -29,7 +29,7 @@ import { DriveApiError, findByName, findOrCreateSubfolder, getFileMeta, listFold
 import { MusicBrainz, mbUserAgent } from './ipc/musicbrainz'
 import { extractArt, probeSong, readImage, writeSongTags, type Art } from './ipc/tagio'
 import { ReviewStore, TagFixer, type ReadyInfo, type TagFixDeps } from './ipc/tagfix'
-import { DEVICE_ID, SongLibrary, docSignature, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT, type LibrarySong, type ListDoc } from './ipc/library'
+import { DEVICE_ID, SongLibrary, artistFolder, songFileName, docSignature, findDownloadedSongs, parseSongFileName, videoIdOf, AUDIO_EXT, type LibrarySong, type ListDoc } from './ipc/library'
 import { assessTags, emptyTags, sanitizeTags, type ArtChoice, type ReviewItem, type SongTags, type TagSummary } from './lib/songinfo'
 
 /* ------------------------------------------------------------------------ *
@@ -374,6 +374,55 @@ export default function register(ctx: ModuleIpcContext): void {
 
   const dataUrl = (a: Art): string => `data:${a.mime};base64,${a.data.toString('base64')}`
 
+  /**
+   * File a finished song as <base>/<Artist>/<Title> [<id>].<ext> (its cover
+   * thumbnail moves along). The artist folder is created when missing; the
+   * playlist folder yt-dlp used is removed once empty. Returns the new path.
+   */
+  function fileUnderArtist(path: string, base: string, tags: { title?: string; artist?: string; albumArtist?: string }, leftDirs?: Set<string>): string {
+    const vid = videoIdOf(basename(path))
+    if (!vid || !existsSync(path)) return path
+    const ext = path.slice(path.lastIndexOf('.'))
+    // no artist tag: the "<artist> - <title>" yt-dlp put in the file name
+    const named = parseSongFileName(basename(path))
+    const artist = tags.albumArtist || tags.artist || named.artist
+    // no artist anywhere, but already in a folder of its own (filed earlier): keep that folder
+    const folder = !artist && relative(base, dirname(path)) && !/[\\/]/.test(relative(base, dirname(path))) && !relative(base, dirname(path)).startsWith('..') ? basename(dirname(path)) : artistFolder({ artist })
+    // "Artist - Song (Official Video)" as the title: drop the repeated artist
+    let title = tags.title || named.title
+    if (artist && title.toLowerCase().startsWith(`${artist.toLowerCase()} - `)) title = title.slice(artist.length + 3)
+    const dest = join(base, folder, songFileName(title, vid, ext))
+    if (relative(dest, path) === '') return path
+    try {
+      mkdirSync(dirname(dest), { recursive: true })
+      renameSync(path, dest)
+    } catch {
+      return path // keep it where it is rather than lose it
+    }
+    const oldDir = dirname(path)
+    const oldStem = basename(path).slice(0, -ext.length)
+    const newStem = basename(dest).slice(0, -ext.length)
+    try {
+      for (const n of readdirSync(oldDir))
+        if (n.startsWith(`${oldStem}.`) && /\.(jpe?g|png|webp)$/i.test(n)) renameSync(join(oldDir, n), join(dirname(dest), newStem + n.slice(oldStem.length)))
+    } catch {
+      /* the cover is optional */
+    }
+    // yt-dlp may still be writing into it: a running job removes it at the end
+    if (leftDirs) leftDirs.add(oldDir)
+    else removeIfEmpty(oldDir, base)
+    return dest
+  }
+
+  /** remove a playlist folder under `base` that filing songs by artist left empty */
+  function removeIfEmpty(dir: string, base: string): void {
+    try {
+      if (relative(base, dir) && !relative(base, dir).startsWith('..') && !readdirSync(dir).some((n) => !n.startsWith('.'))) rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+
   /** Delete a duplicate song and its same-name cover thumbnail. */
   function removeSongFile(path: string): void {
     rmSync(path, { force: true })
@@ -660,6 +709,186 @@ export default function register(ctx: ModuleIpcContext): void {
     return { ok: errors.length === 0, deleted, failed: errors.length, error: errors[0], total: library.size }
   })
 
+  /* ---- sort songs already downloaded into <Artist>/<Title> [id] (Drive + this PC) ---- */
+
+  const NUMBERED = /^\d{2,4}\s+-\s+/
+  let organizing = false
+
+  /** artist + title to file a song by: the list's (fixed) details, else its file name */
+  function songIdentity(vid: string, fileName: string): { artist: string; title: string } {
+    const s = library.get(vid)
+    const parsed = parseSongFileName(fileName)
+    return { artist: s?.artist || parsed.artist, title: s?.title || parsed.title }
+  }
+
+  async function driveMove(token: string, fileId: string, name: string, from: string, to: string): Promise<void> {
+    const qs = from === to ? '' : `&addParents=${encodeURIComponent(to)}&removeParents=${encodeURIComponent(from)}`
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id${qs}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(30_000)
+    })
+    if (!r.ok) throw new DriveApiError(r.status, '', `Couldn’t move ${name} in Google Drive (HTTP ${r.status})`)
+  }
+
+  async function organizeSongs(): Promise<{ moved: number; already: number; duplicates: number; failed: number; foldersRemoved: number; error?: string }> {
+    const res = { moved: 0, already: 0, duplicates: 0, failed: 0, foldersRemoved: 0, error: undefined as string | undefined }
+    const progress = (done: number, total: number, current: string): void => send(`${ID}:organize`, { done, total, current })
+
+    // ---- this PC ----
+    const base = downloadDir()
+    const localSongs = findDownloadedSongs(base)
+    for (const [i, f] of localSongs.entries()) {
+      progress(i, localSongs.length, f.fileName)
+      if (review.isHeld(f.path)) continue // waiting for song info — filed when saved
+      const inArtistDir = relative(base, dirname(f.path)).split(/[\\/]/).length === 1 && dirname(f.path) !== base
+      const id = songIdentity(f.videoId, f.fileName)
+      // a name with no number, already one folder deep, and no artist known: already filed
+      if (!id.artist && inArtistDir && !NUMBERED.test(f.fileName)) {
+        res.already++
+        continue
+      }
+      const dest = join(base, artistFolder(id), songFileName(id.title, f.videoId, f.path.slice(f.path.lastIndexOf('.'))))
+      if (relative(dest, f.path) === '') {
+        res.already++
+        continue
+      }
+      if (existsSync(dest)) {
+        // the same video twice: keep the one already filed
+        await ctx.shell.trashItem(f.path).catch(() => undefined)
+        const s = library.get(f.videoId)
+        if (s?.location === 'local' && s.path && relative(s.path, f.path) === '') library.update(f.videoId, { path: dest, fileName: basename(dest) })
+        res.duplicates++
+        continue
+      }
+      const now = fileUnderArtist(f.path, base, id)
+      if (now === f.path) res.failed++
+      else {
+        res.moved++
+        const s = library.get(f.videoId)
+        if (s && s.location === 'local' && (!s.path || relative(s.path, f.path) === '')) library.update(f.videoId, { path: now, fileName: basename(now) })
+      }
+    }
+    library.flush()
+
+    // ---- Google Drive ----
+    const d = getDriveProvider()
+    if (d?.status().connected)
+      try {
+        const token = await d.getToken()
+        const root = await findOrCreateSubfolder(token, DRIVE_ROOT_NAME, await d.vaultFolderId())
+        type Found = { file: { id: string; name: string }; parent: string; depth: number }
+        const songs: Found[] = []
+        const covers: Found[] = []
+        const folders: { id: string; depth: number }[] = []
+        const walk = async (folderId: string, depth: number): Promise<void> => {
+          if (depth > 4) return
+          for (const f of await listFolder(token, folderId)) {
+            if (f.mimeType === 'application/vnd.google-apps.folder') {
+              folders.push({ id: f.id, depth: depth + 1 })
+              await walk(f.id, depth + 1)
+            } else if (videoIdOf(f.name)) {
+              const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase()
+              if (AUDIO_EXT.has(ext)) songs.push({ file: f, parent: folderId, depth })
+              else if (/^\.(jpe?g|png|webp)$/.test(ext)) covers.push({ file: f, parent: folderId, depth })
+            }
+          }
+        }
+        await walk(root, 0)
+        const artistIds = new Map<string, string>() // folder name → id
+        const artistFolderId = async (name: string): Promise<string> => {
+          let id = artistIds.get(name.toLowerCase())
+          if (!id) {
+            id = await findOrCreateSubfolder(token, name, root)
+            artistIds.set(name.toLowerCase(), id)
+          }
+          return id
+        }
+        const taken = new Map<string, string>() // `${folderId}/${name}` → file id, for duplicates
+        for (const f of songs) taken.set(`${f.parent}/${f.file.name.toLowerCase()}`, f.file.id)
+        const filedTo = new Map<string, { folder: string; stem: string }>() // video id → where its song went
+        const touched = new Set<string>()
+        for (const [i, f] of songs.entries()) {
+          progress(localSongs.length + i, localSongs.length + songs.length, f.file.name)
+          const vid = videoIdOf(f.file.name)!
+          const ext = f.file.name.slice(f.file.name.lastIndexOf('.'))
+          const id = songIdentity(vid, f.file.name)
+          try {
+            let folder: string
+            if (!id.artist && f.depth === 1 && !NUMBERED.test(f.file.name)) {
+              res.already++
+              continue
+            } else folder = !id.artist && f.depth === 1 ? f.parent : await artistFolderId(artistFolder(id))
+            const name = songFileName(id.title, vid, ext)
+            filedTo.set(vid, { folder, stem: name.slice(0, -ext.length) })
+            if (folder === f.parent && name === f.file.name) {
+              res.already++
+              continue
+            }
+            const clash = taken.get(`${folder}/${name.toLowerCase()}`)
+            if (clash && clash !== f.file.id) {
+              await trashFile(token, f.file.id) // the same video twice: keep the one already filed
+              res.duplicates++
+            } else {
+              await driveMove(token, f.file.id, name, f.parent, folder)
+              taken.set(`${folder}/${name.toLowerCase()}`, f.file.id)
+              res.moved++
+              const s = library.get(vid)
+              if (s?.location === 'drive' && (!s.driveFileId || s.driveFileId === f.file.id)) library.update(vid, { fileName: name, driveFileId: f.file.id })
+            }
+            touched.add(f.parent)
+          } catch (err) {
+            res.failed++
+            res.error ??= errMsg(err)
+          }
+        }
+        // cover thumbnails follow their song
+        for (const c of covers) {
+          const to = filedTo.get(videoIdOf(c.file.name)!)
+          if (!to) continue
+          const name = to.stem + c.file.name.slice(c.file.name.lastIndexOf('.'))
+          if (to.folder === c.parent && name === c.file.name) continue
+          try {
+            await driveMove(token, c.file.id, name, c.parent, to.folder)
+            touched.add(c.parent)
+          } catch {
+            /* a cover is optional */
+          }
+        }
+        // old playlist folders left empty → Drive's trash (deepest first)
+        for (const f of folders.sort((a, b) => b.depth - a.depth)) {
+          if (!touched.has(f.id)) continue
+          try {
+            if (!(await listFolder(token, f.id)).length) {
+              await trashFile(token, f.id)
+              res.foldersRemoved++
+            }
+          } catch {
+            /* leave it */
+          }
+        }
+      } catch (err) {
+        res.error ??= `Couldn’t read Google Drive: ${errMsg(err)}`
+      }
+    library.flush()
+    void syncListWithDrive()
+    return res
+  }
+
+  ctx.ipcMain.handle(`${ID}:library-organize`, async () => {
+    if (organizing) return { ok: false, error: 'Already sorting — give it a moment.' }
+    if (jobs.size > 0) return { ok: false, error: 'Wait until the downloads running now finish, then sort.' }
+    organizing = true
+    try {
+      const r = await organizeSongs()
+      return { ok: !r.error, ...r, total: library.size }
+    } finally {
+      organizing = false
+      send(`${ID}:organize`, null)
+    }
+  })
+
   /**
    * Finish a held song: optionally write the user's tags (+ cover), then upload
    * it if it came from a Drive job; drop it from the list once it's safe.
@@ -681,6 +910,14 @@ export default function register(ctx: ModuleIpcContext): void {
         await writeSongTags(ffmpeg, item.path, probed, write.tags, art)
         library.update(videoIdOf(item.fileName), { title: write.tags.title, artist: write.tags.artist, album: write.tags.album })
       }
+      // file it under its artist (the details just saved, else what's in the file)
+      const tagsNow = write?.tags ?? (await probeSong(resolveFfprobe() ?? '', item.path).then((x) => x.tags).catch(() => item.current.artist ? item.current : item.guess))
+      const base = item.toDrive ? stagingDirFor(item.jobId) : downloadDir()
+      const moved = fileUnderArtist(item.path, base, tagsNow)
+      if (moved !== item.path) {
+        review.update(item.id, { path: moved, fileName: basename(moved) })
+        item = { ...item, path: moved, fileName: basename(moved) }
+      }
       if (item.toDrive) {
         const drive = getDriveProvider()
         if (!drive?.status().connected) throw new Error('Google Drive isn’t connected — reconnect it in File Vault, then save again.')
@@ -689,7 +926,7 @@ export default function register(ctx: ModuleIpcContext): void {
         await s.drain()
         if (s.failed.length) throw new Error(`Upload to Google Drive failed: ${s.failed[0].error}`)
         library.update(videoIdOf(item.fileName), { location: 'drive', driveFileId: s.uploaded[0]?.id ?? '', path: '' })
-      } else library.update(videoIdOf(item.fileName), { location: 'local', path: item.path })
+      } else library.update(videoIdOf(item.fileName), { location: 'local', path: item.path, fileName: item.fileName })
       library.flush()
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -1054,6 +1291,7 @@ export default function register(ctx: ModuleIpcContext): void {
 
       if (drive && doneListPath) {
         sink = new DriveSink(dir, driveDeps(drive), (prog: DriveProgress) => sendP({ kind: 'drive', ...prog }))
+        sink.openRoot = isMusic
         sendP({ kind: 'note', note: `Saving to Google Drive (${drive.status().email || 'File Vault'}) → WICKED Vault/${DRIVE_ROOT_NAME} — nothing is kept on this PC.` })
       }
       let dupesBefore = 0
@@ -1095,6 +1333,7 @@ export default function register(ctx: ModuleIpcContext): void {
         sendP({ kind: 'note', note: `Already downloaded: ${basename(path)} is the same song as “${same.title || same.fileName}” (${same.playlist}) — not kept.` })
       }
       const finalized = new Set<string>()
+      const leftDirs = new Set<string>()
       const finalizeSong = async (path: string, info?: ReadyInfo): Promise<void> => {
         if (finalized.has(path)) return
         finalized.add(path)
@@ -1122,8 +1361,13 @@ export default function register(ctx: ModuleIpcContext): void {
             (sameId && sameId.jobId !== jobId && relative(sameId.path || '.', path) !== '' ? sameId : null)
           if (same) return dropDuplicate(path, vid, same)
         }
-        recordSong(path, t, p.toDrive ? 'pending' : 'local')
-        sink?.add(path)
+        // music is filed by artist: <download folder or Drive>/YouTube Downloads/<Artist>/<Title> [id]
+        const filed = fileUnderArtist(path, dir, t.tags, leftDirs)
+        // the end-of-job sweep finds it at its new name — it's handled already
+        finalized.add(filed)
+        prechecked.add(filed)
+        recordSong(filed, t, p.toDrive ? 'pending' : 'local')
+        sink?.add(filed)
       }
 
       if (fixTags && ffmpeg && ffprobe) {
@@ -1275,6 +1519,8 @@ export default function register(ctx: ModuleIpcContext): void {
           if (fixer) await fixer.drain()
           if (!finalizing.size) break
         }
+        // playlist folders the songs were filed out of (yt-dlp is done with them now)
+        for (const d of leftDirs) removeIfEmpty(d, dir)
         if (job.cancelRequested) return finish({ ok: false, cancelled: true })
         if (quitting) return finish({ ok: false, error: 'Interrupted — resumes on next launch.' })
       }

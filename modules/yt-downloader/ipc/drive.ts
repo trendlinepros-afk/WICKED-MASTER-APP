@@ -100,6 +100,8 @@ export class DriveSink {
   private percent = 0
   private bytes = 0
   private topFolderId: string | null = null
+  /** music is filed <Artist>/… — "Open in Drive" shows YouTube Downloads itself, not the first artist */
+  openRoot = false
   readonly uploaded: { path: string; name: string; id: string }[] = []
   readonly failed: { path: string; error: string }[] = []
 
@@ -143,7 +145,7 @@ export class DriveSink {
       current: this.current,
       percent: this.percent,
       bytes: this.bytes,
-      folderUrl: this.topFolderId ? FOLDER_URL(this.topFolderId) : this.folders.has('') ? FOLDER_URL(this.folders.get('')!) : null
+      folderUrl: this.topFolderId && !this.openRoot ? FOLDER_URL(this.topFolderId) : this.folders.has('') ? FOLDER_URL(this.folders.get('')!) : null
     }
   }
 

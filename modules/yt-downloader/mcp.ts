@@ -130,6 +130,20 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       }
     },
     {
+      name: `${ID}__sort-into-artist-folders`,
+      description:
+        'Re-file every downloaded song (Google Drive “WICKED Vault/YouTube Downloads” and the download folder on this PC) as <Artist>/<Title> [video id] — one folder per artist (created when missing), no track numbers. Cover thumbnails move with their song; a second copy of the same video goes to the trash; playlist folders left empty go to Drive’s trash. New music downloads are filed this way automatically. Refused while downloads are running. Destructive (moves/renames files). Requires confirmation.',
+      destructive: true,
+      inputSchema: {
+        confirm: z.boolean().optional().describe('Set true to sort.')
+      },
+      handler: (args) => {
+        const gate = ctx.confirm(args.confirm as boolean | undefined, 'Move and rename every downloaded song into artist folders (Google Drive and this PC); duplicate copies and emptied playlist folders go to the trash.')
+        if (gate) return gate
+        return ctx.invoke(`${ID}:library-organize`)
+      }
+    },
+    {
       name: `${ID}__delete-downloaded-songs`,
       description:
         'Delete downloaded songs: each file goes to the Recycle Bin (this PC) or Google Drive’s trash, and the song leaves the downloaded-songs list (so it could be downloaded again). Video ids come from __downloaded-songs. Songs still uploading / waiting for song info are refused. Destructive. Requires confirmation.',

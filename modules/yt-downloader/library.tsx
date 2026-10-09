@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cloud, CloudOff, CopyCheck, FileSearch, HardDrive, Hourglass, Loader2, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Cloud, CloudOff, CopyCheck, FileSearch, FolderTree, HardDrive, Hourglass, Loader2, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import { ID, useYt } from './store'
 
 /* ---------------------------------------------------------------------------
@@ -82,6 +82,7 @@ export function LibraryModal({ ids, onClose }: { ids?: string[]; onClose: () => 
   const [limit, setLimit] = useState(PAGE)
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [sorting, setSorting] = useState<{ done: number; total: number; current: string } | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [sync, setSync] = useState<{ at: number; error: string }>({ at: 0, error: '' })
   const [msg, setMsg] = useState<{ text: string; tone: 'ok' | 'err' } | null>(null)
@@ -187,6 +188,26 @@ export function LibraryModal({ ids, onClose }: { ids?: string[]; onClose: () => 
     setMsg(r.error ? { text: r.error, tone: 'err' } : { text: `Added ${r.local ?? 0} song(s) from your download folder and ${r.drive ?? 0} from Google Drive.`, tone: 'ok' })
   }
 
+  /** move every song into <Artist>/<Title> [id] — in Google Drive and on this PC */
+  const sortIntoArtists = async (): Promise<void> => {
+    setSorting({ done: 0, total: 0, current: '' })
+    setMsg(null)
+    const off = window.wicked.on(`${ID}:organize`, (p) => p && setSorting(p as { done: number; total: number; current: string }))
+    const r = await inv<{ ok: boolean; moved?: number; already?: number; duplicates?: number; failed?: number; foldersRemoved?: number; error?: string }>('library-organize')
+    off()
+    setSorting(null)
+    if (r.moved === undefined) return setMsg({ text: r.error ?? 'Couldn’t sort the songs.', tone: 'err' })
+    const parts = [
+      `${r.moved} song${r.moved === 1 ? '' : 's'} moved into artist folders`,
+      `${r.already ?? 0} already in place`,
+      r.duplicates ? `${r.duplicates} duplicate${r.duplicates === 1 ? '' : 's'} sent to the trash` : '',
+      r.foldersRemoved ? `${r.foldersRemoved} empty playlist folder${r.foldersRemoved === 1 ? '' : 's'} removed` : '',
+      r.failed ? `${r.failed} couldn’t be moved${r.error ? ` (${r.error})` : ''}` : ''
+    ].filter(Boolean)
+    setMsg({ text: `${parts.join(' · ')}.`, tone: r.failed || r.error ? 'err' : 'ok' })
+    void load()
+  }
+
   const fmtDate = (ms: number): string => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
   const sel = [...selected]
   const delTargets = confirmDelete ? items.filter((s) => confirmDelete.includes(s.videoId)) : []
@@ -236,6 +257,15 @@ export function LibraryModal({ ids, onClose }: { ids?: string[]; onClose: () => 
             title="Add songs downloaded before this list existed — from your download folder and Google Drive"
           >
             {scanning ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Add songs already downloaded
+          </button>
+          <button
+            onClick={() => void sortIntoArtists()}
+            disabled={!!sorting}
+            className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-xs font-medium hover:border-accent disabled:opacity-40"
+            title="Move every song (Google Drive and this PC) into a folder named after its artist, named “Title [id]” with no track number — empty playlist folders are removed"
+          >
+            {sorting ? <Loader2 size={13} className="animate-spin" /> : <FolderTree size={13} />}{' '}
+            {sorting ? (sorting.total ? `Sorting ${sorting.done + 1} of ${sorting.total}…` : 'Sorting…') : 'Sort into artist folders'}
           </button>
         </div>
 

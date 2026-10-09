@@ -22,10 +22,10 @@ work. Three music-specific behaviors are worth knowing (`parseYtUrl` in
 - **Music files get real tags.** The two audio presets embed `--embed-metadata`
   (artist/album/title) **and cover art** (`--embed-thumbnail`, converted to JPEG
   because YouTube serves WebP, which many taggers/players won't read). Without
-  this, downloads land in a music library as untitled, art-less files. Audio
-  filenames also lead with the artist, and album downloads get their own folder
-  (`%(playlist_title,album,uploader)s`, with left-to-right fallbacks so missing
-  tags degrade gracefully instead of writing "NA").
+  this, downloads land in a music library as untitled, art-less files.
+- **Music is filed by artist** (see "Artist folders" below):
+  `<folder or Drive>/<Artist>/<Title> [<id>].<ext>` — no playlist folders, no
+  track numbers.
 - **Personal library lists aren't supported.** `list=LM` (Liked Music) / `LL…`
   need a signed-in session, so the module says so up front rather than failing
   mid-download. Open the album/playlist itself and use its share link.
@@ -147,8 +147,36 @@ tested, plus a real end-to-end ffmpeg stitch of mismatched clips.
 ## Output & robustness
 
 - Single video → `<folder>/<title> [<id>].<ext>`.
-- Playlist → `<folder>/<playlist title>/<index> - <title> [<id>].<ext>` (its own
-  subfolder, zero-padded index order).
+- Video playlist → `<folder>/<playlist title>/<index> - <title> [<id>].<ext>` (its
+  own subfolder, zero-padded index order — a combined movie follows it).
+- Music (audio presets) → `<folder>/<Artist>/<Title> [<id>].<ext>`.
+
+### Artist folders (music)
+
+yt-dlp downloads a song as `<playlist>/<artist> - <title> [<id>]`; when the song
+is finished (after song info is fixed, or when a held song is saved)
+`fileUnderArtist` (ipc.ts) moves it to `<base>/<Artist>/<Title> [<id>].<ext>`,
+creating the artist folder when it's missing; its cover thumbnail moves along.
+`<base>` is the download folder, or the Drive staging folder (so the upload
+lands in `YouTube Downloads/<Artist>/`).
+
+- **Artist** = album artist, else artist tag, else the `<artist> - ` part of
+  the file name — first credited artist only (`STOSLIV, LOVIX` → `STOSLIV`;
+  `feat.`/`ft.`/`&`/`x`/`with`/`vs` split too; ` - Topic` / `VEVO` dropped).
+  None → `Unknown Artist`. A title that repeats the artist (`Drake - God's Plan`)
+  loses the prefix. Names are made Windows-safe (`safeName`, `ipc/library.ts`).
+- The playlist folder yt-dlp used is removed at the end of the job once empty
+  (not mid-job — yt-dlp is still writing into it).
+- **Sort into artist folders** (Downloaded songs window, `library-organize`,
+  MCP `__sort-into-artist-folders`) re-files songs downloaded before this: every
+  `[<id>]` audio file in `WICKED Vault/YouTube Downloads` (moved in place with
+  one Drive PATCH — `addParents`/`removeParents` + new name, same file id) and in
+  the download folder. Uses the list's (fixed) title/artist when it has the song,
+  else the file name. A second copy of the same video is trashed; playlist
+  folders left empty go to Drive's trash / are removed; other files and folders
+  are untouched. A file with no number already one folder deep and no known
+  artist counts as filed. Refused while downloads run; running it again is a
+  no-op.
 - Playlists use `--ignore-errors`, so one unavailable/private video doesn't abort
   the rest; the module reports how many completed and surfaces a soft warning if
   some were skipped.
@@ -314,7 +342,7 @@ disabled with a "Connect Google Drive in File Vault" link when Drive isn't
 connected.
 
 - **Where**: `WICKED Vault/YouTube Downloads/` + the same sub-folders a local
-  download gets (a playlist/album gets its own folder). It's inside the vault, so
+  download gets (music: one folder per artist; a video playlist its own folder). It's inside the vault, so
   File Vault shows the files too.
 - **How (`ipc/drive.ts`)**: yt-dlp must write real files (it merges streams and
   embeds tags + cover art in place), so a Drive job downloads into a per-job

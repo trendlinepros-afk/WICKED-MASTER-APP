@@ -353,3 +353,25 @@ export function findDownloadedSongs(dir: string): { path: string; fileName: stri
   walk(dir, 0)
   return out
 }
+
+/* ------------------------------ artist folders ------------------------------ */
+
+const ILLEGAL = /[<>:"/\\|?*\u0000-\u001f]/g
+
+/** Safe file/folder name on Windows and in Drive. */
+export function safeName(s: string, max = 100): string {
+  const t = s.replace(ILLEGAL, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(0, max).trim()
+  return /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(t) ? `${t}_` : t
+}
+
+/** The folder a song is filed under: its album artist, else the first credited artist ("A, B feat. C" → "A"). */
+export function artistFolder(t: { artist?: string; albumArtist?: string }): string {
+  const pick = (t.albumArtist || t.artist || '').trim()
+  const first = pick.split(/\s+(?:feat\.?|ft\.?|featuring|with|x|&|vs\.?)\s+|\s*[,;/]\s*/i)[0] ?? ''
+  return safeName(first.replace(/\s*-\s*topic$/i, '').replace(/vevo$/i, '')) || 'Unknown Artist'
+}
+
+/** "<Title> [<videoId>].<ext>" — the id stays in the name (it's how the downloaded list knows the file). */
+export function songFileName(title: string, videoId: string, ext: string): string {
+  return `${safeName(title, 150) || 'Untitled'} [${videoId}]${ext}`
+}
