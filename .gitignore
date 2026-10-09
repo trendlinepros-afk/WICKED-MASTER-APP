@@ -19,3 +19,6 @@ Thumbs.db
 
 # scratch
 _mcp-test.mjs
+
+# TypeScript incremental build cache
+*.tsbuildinfo
