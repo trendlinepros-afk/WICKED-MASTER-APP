@@ -42,6 +42,7 @@ the process I/O counter (disk + network + device), shown as bytes/s.
 
 ## The graph
 
+- Drag the grip on the bottom edge of the graph to make it taller or shorter (remembered; double-click resets).
 - Opens on **All**: CPU, memory, disk and GPU as four lines on one 0–100 % axis
   (fixed colours: blue, orange, aqua, yellow), legend with current values (click
   one to open its own tab), spike pills for every metric. The CPU / Memory /

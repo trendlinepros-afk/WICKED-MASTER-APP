@@ -13,7 +13,8 @@ export type Q = QueryResult & {
   viewTo: number
 }
 
-const H = 250 // plot height
+/** default plot height — the user can drag the graph taller (index.tsx) */
+export const DEFAULT_PLOT_H = 250
 const TOP = 34 // marker lane
 const PAD_R = 52
 const AXIS = 22
@@ -63,8 +64,11 @@ export function Chart(props: {
   onWidth: (w: number) => void
   loading: boolean
   empty: React.ReactNode
+  /** plot height in px */
+  plotH?: number
 }): React.JSX.Element {
   const { q, tab, overlays } = props
+  const H = props.plotH ?? DEFAULT_PLOT_H
   const [wrap, width] = useWidth<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
   const colors = useSeriesColors()
@@ -126,12 +130,12 @@ export function Chart(props: {
       band += 'M' + s.max.map(P).join('L') + 'L' + [...s.avg].reverse().map(P).join('L') + 'Z'
     }
     return { line, area, band }
-  }, [q, tab, width, yMax, covered])
+  }, [q, tab, width, yMax, covered, H])
 
   const multi = useMemo(() => {
     if (!q || tab !== 'all') return []
     return ALL_ORDER.map((m) => ({ m, d: segments((b) => metricVal(b, m)).map((s) => 'M' + s.avg.map(P).join('L')).join('') })).filter((x) => x.d)
-  }, [q, tab, width, covered])
+  }, [q, tab, width, covered, H])
 
   const gaps = useMemo(() => {
     if (!q) return [] as [number, number][]
@@ -165,7 +169,7 @@ export function Chart(props: {
         return { key, d, color: OVERLAY[k] }
       })
       .filter(Boolean) as { key: string; d: string; color: string }[]
-  }, [q, overlays, metric, width, covered])
+  }, [q, overlays, metric, width, covered, H])
 
   // markers: spikes + apps started, at the time they happened
   type Marker = { x: number; kind: 'spike' | 'start'; label: string; i: number; title: string; m?: Metric }
@@ -202,7 +206,7 @@ export function Chart(props: {
       if (!placed.some((p) => Math.abs(p.x - m.x) < (w + p.label.length * 6.8 + 14) / 2 + 2)) placed.push(m)
     }
     return placed
-  }, [q, tab, metric, width])
+  }, [q, tab, metric, width, H])
 
   const hasTemp = !!q?.buckets.some((b) => b.tc !== null)
   const step = q ? tickStep(vSpan, plotW) : 60_000

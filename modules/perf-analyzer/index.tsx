@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, CheckCircle2, ChevronDown, FileDown, ChevronLeft, ChevronRight, Circle, FolderOpen, History, Loader2, Play, Radio, Search, Settings2, ShieldAlert, Square, Trash2, X } from 'lucide-react'
 import type { AppMeta, AppSummary, Bucket, Metric, Unit } from './lib/compute'
-import { ALL_ORDER, Chart, Navigator, useSeriesColors, type Q } from './ui/chart'
+import { ALL_ORDER, Chart, DEFAULT_PLOT_H, Navigator, useSeriesColors, type Q } from './ui/chart'
 import { AppIcon } from './ui/icon'
 import { ID, LIST_LABEL, OVERLAY, RANGES, TAB_LABEL, appName, bytes, dayClock, duration, fmtApp, inv, pct, rate, type Tab } from './ui/format'
 
@@ -42,6 +42,9 @@ interface Session {
   open: boolean
 }
 
+const MIN_PLOT_H = 140
+/** never taller than the window leaves room for */
+const maxPlotH = (): number => Math.max(300, window.innerHeight - 260)
 const TABS: Tab[] = ['all', 'cpu', 'mem', 'disk', 'gpu', 'procs']
 const SORTS: { key: Metric | 'name'; label: string }[] = [
   { key: 'cpu', label: 'CPU activity' },
@@ -92,6 +95,8 @@ export default function PerfAnalyzer(): React.JSX.Element {
   const [justStopped, setJustStopped] = useState(false)
   const [saved, setSaved] = useState<{ file: string; name: string } | null>(null)
   const colors = useSeriesColors()
+  const [plotH, setPlotH] = useState<number>(() => Math.max(MIN_PLOT_H, Math.min(2000, Number(pref('plotH', DEFAULT_PLOT_H)) || DEFAULT_PLOT_H)))
+  const resizing = useRef<{ y: number; h: number } | null>(null)
 
   const setTab = (t: Tab): void => {
     setTabState(t)
@@ -327,8 +332,9 @@ export default function PerfAnalyzer(): React.JSX.Element {
           </div>
 
           {/* graph */}
-          <div className="mt-3 rounded-2xl border border-edge bg-surface p-4">
+          <div className="relative mt-3 rounded-2xl border border-edge bg-surface p-4 pb-5">
             <Chart
+              plotH={plotH}
               q={q}
               tab={tab}
               overlays={tab === 'disk' || tab === 'all' ? [] : overlays}
@@ -388,6 +394,30 @@ export default function PerfAnalyzer(): React.JSX.Element {
               ))}
               <span className="flex-1" />
               {q && <span>{q.resolution === 'minute' ? 'per-minute summary' : `${q.totals.samples.toLocaleString()} samples`}</span>}
+            </div>
+            {/* drag the bottom edge to make the graph taller / shorter; double-click resets */}
+            <div
+              className="group absolute inset-x-0 bottom-0 flex h-3 cursor-ns-resize touch-none items-center justify-center rounded-b-2xl hover:bg-accent/10"
+              title="Drag to resize the graph · double-click to reset"
+              onPointerDown={(e) => {
+                e.preventDefault()
+                ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+                resizing.current = { y: e.clientY, h: plotH }
+              }}
+              onPointerMove={(e) => {
+                const r = resizing.current
+                if (r) setPlotH(Math.round(Math.max(MIN_PLOT_H, Math.min(maxPlotH(), r.h + e.clientY - r.y))))
+              }}
+              onPointerUp={() => {
+                resizing.current = null
+                savePref('plotH', plotH)
+              }}
+              onDoubleClick={() => {
+                setPlotH(DEFAULT_PLOT_H)
+                savePref('plotH', DEFAULT_PLOT_H)
+              }}
+            >
+              <span className="h-1 w-12 rounded-full bg-edge transition group-hover:bg-accent" />
             </div>
           </div>
 
