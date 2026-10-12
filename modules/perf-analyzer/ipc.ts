@@ -219,15 +219,23 @@ export default function register(ctx: ModuleIpcContext): void {
     const from = Math.min(to - 1000, Number(r.from) || to - 3600_000)
     const want = Math.max(10, Math.min(1500, Number(r.buckets) || 400))
     const minutes = useMinutes(from, to, want)
-    const { units, totalMem, sessions } = store.range(from, to, minutes, minutes && cap ? cap.rollup.peek() : null)
-    const interval = minutes ? 60_000 : Math.min(...sessions.map((s) => s.intervalMs), 10_000)
-    const n = bucketsFor(from, to, want, interval * 1.5)
-    const res = bucketize(units, from, to, n, totalMem || totalmem(), { resolution: minutes ? 'minute' : 'raw', appLimit: r.lite ? 0 : 30 })
-    if (r.lite) return { ok: true, ...res, apps: [], meta: {}, sessions: sessions.map(span) }
+    const near = store.sessions().filter((s) => s.start <= to && (s.open ? Date.now() : s.end) >= from)
+    const interval = minutes ? 60_000 : Math.min(...near.map((s) => s.intervalMs), 10_000)
+    // a clock-aligned grid (bucket = whole seconds / minutes, starting on a multiple
+    // of itself): the same sample always lands in the same bucket, so markers and
+    // lines don't hop about as the live window slides
+    const unit = minutes ? 60_000 : 1000
+    const bucketMs = Math.ceil((to - from) / bucketsFor(from, to, want, interval * 1.5) / unit) * unit
+    const gFrom = Math.floor(from / bucketMs) * bucketMs
+    const gTo = Math.ceil(to / bucketMs) * bucketMs
+    const { units, totalMem, sessions } = store.range(gFrom, gTo, minutes, minutes && cap ? cap.rollup.peek() : null)
+    const res = bucketize(units, gFrom, gTo, Math.round((gTo - gFrom) / bucketMs), totalMem || totalmem(), { resolution: minutes ? 'minute' : 'raw', appLimit: r.lite ? 0 : 30 })
+    const view = { viewFrom: from, viewTo: to }
+    if (r.lite) return { ok: true, ...res, ...view, apps: [], meta: {}, sessions: sessions.map(span) }
     const keys = new Set(res.apps.map((a) => a.key))
     for (const b of res.buckets) for (const m of ['cpu', 'mem', 'gpu', 'disk'] as const) for (const [k] of b.top[m]) keys.add(k)
     for (const b of res.buckets) for (const k of b.ev) keys.add(k)
-    return { ok: true, ...res, meta: metaFor(keys), sessions: sessions.map(span), totalMem: totalMem || totalmem() }
+    return { ok: true, ...res, ...view, meta: metaFor(keys), sessions: sessions.map(span), totalMem: totalMem || totalmem() }
   })
 
   const span = (s: SessionInfo): { id: string; start: number; end: number; open: boolean } => ({ id: s.id, start: s.start, end: cap?.info.id === s.id ? Date.now() : s.end, open: s.open })

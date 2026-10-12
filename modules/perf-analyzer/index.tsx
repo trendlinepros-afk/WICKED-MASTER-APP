@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ChevronDown, ChevronLeft, ChevronRight, Circle, FolderOpen, History, Loader2, Play, Radio, Search, Settings2, ShieldAlert, Square, Trash2, X } from 'lucide-react'
 import type { AppMeta, AppSummary, Bucket, Metric, Unit } from './lib/compute'
-import { Chart, Navigator, type Q } from './ui/chart'
+import { ALL_ORDER, Chart, Navigator, useSeriesColors, type Q } from './ui/chart'
 import { AppIcon } from './ui/icon'
 import { ID, LIST_LABEL, OVERLAY, RANGES, TAB_LABEL, appName, bytes, dayClock, duration, fmtApp, inv, pct, rate, type Tab } from './ui/format'
 
@@ -42,7 +42,7 @@ interface Session {
   open: boolean
 }
 
-const TABS: Tab[] = ['cpu', 'mem', 'disk', 'gpu', 'procs']
+const TABS: Tab[] = ['all', 'cpu', 'mem', 'disk', 'gpu', 'procs']
 const SORTS: { key: Metric | 'name'; label: string }[] = [
   { key: 'cpu', label: 'CPU activity' },
   { key: 'mem', label: 'Memory' },
@@ -69,7 +69,8 @@ const savePref = (k: string, v: unknown): void => {
 
 export default function PerfAnalyzer(): React.JSX.Element {
   const [status, setStatus] = useState<Status | null>(null)
-  const [tab, setTabState] = useState<Tab>(() => pref<Tab>('tab', 'cpu'))
+  // always opens on All
+  const [tab, setTabState] = useState<Tab>('all')
   const [span, setSpanState] = useState<number>(() => pref('span', 3600_000))
   /** null = live (window ends now) */
   const [end, setEnd] = useState<number | null>(null)
@@ -86,11 +87,11 @@ export default function PerfAnalyzer(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [rangeOpen, setRangeOpen] = useState(false)
+  const colors = useSeriesColors()
 
   const setTab = (t: Tab): void => {
     setTabState(t)
-    savePref('tab', t)
-    if (t !== 'procs') {
+    if (t !== 'procs' && t !== 'all') {
       setSortState(t)
       savePref('sort', t)
     }
@@ -179,13 +180,14 @@ export default function PerfAnalyzer(): React.JSX.Element {
   const toggleOverlay = (k: string): void => setOverlays((o) => (o.includes(k) ? o.filter((x) => x !== k) : [...o, k].slice(-3)))
 
   const tabValue = (t: Tab): string => {
+    if (t === 'all') return ''
     const l = status?.capturing && live ? status.last : null
     if (t === 'procs') return l ? String(l.p) : q?.buckets.slice().reverse().find((b) => b.p !== null)?.p?.toString() ?? '—'
     if (l) return pct(t === 'cpu' ? l.c : t === 'mem' ? l.m : t === 'gpu' ? l.g : l.d)
     return pct(q?.totals.avg[t] ?? null)
   }
 
-  const metric: Metric = tab === 'procs' ? 'cpu' : tab
+  const metric: Metric = tab === 'procs' || tab === 'all' ? 'cpu' : tab
   const listMetric: Metric = sort === 'name' ? metric : sort
   const apps = useMemo(() => {
     if (!q) return [] as AppSummary[]
@@ -280,7 +282,7 @@ export default function PerfAnalyzer(): React.JSX.Element {
             <Chart
               q={q}
               tab={tab}
-              overlays={tab === 'disk' ? [] : overlays}
+              overlays={tab === 'disk' || tab === 'all' ? [] : overlays}
               onPick={(b) => setMoment({ b })}
               onWidth={setWidth}
               loading={loading && !q}
@@ -300,7 +302,18 @@ export default function PerfAnalyzer(): React.JSX.Element {
               }
             />
             <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
-              {tab !== 'procs' && (
+              {tab === 'all' &&
+                ALL_ORDER.map((m) => (
+                  <button key={m} onClick={() => setTab(m)} className="flex items-center gap-1.5 hover:text-ink" title={`Show only ${TAB_LABEL[m]}`}>
+                    <span className="h-0.5 w-4 rounded" style={{ background: colors[m] }} /> <span className="font-medium text-ink">{TAB_LABEL[m]}</span> {tabValue(m)}
+                  </button>
+                ))}
+              {tab === 'all' && (
+                <span className="flex items-center gap-1.5">
+                  <span className="rounded bg-danger px-1 text-[9px] font-bold text-white">CPU 98%</span> spike
+                </span>
+              )}
+              {tab !== 'procs' && tab !== 'all' && (
                 <>
                   <span className="flex items-center gap-1.5">
                     <span className="h-0.5 w-4 rounded bg-accent" /> average
@@ -319,7 +332,7 @@ export default function PerfAnalyzer(): React.JSX.Element {
               <span className="flex items-center gap-1.5">
                 <span className="rounded bg-ok px-1 text-[9px] font-bold text-white">+2</span> apps started
               </span>
-              {overlays.length > 0 && tab !== 'disk' && tab !== 'procs' && q && overlays.map((k, i) => (
+              {overlays.length > 0 && tab !== 'disk' && tab !== 'procs' && tab !== 'all' && q && overlays.map((k, i) => (
                 <button key={k} onClick={() => toggleOverlay(k)} className="flex items-center gap-1.5 hover:text-ink" title="Remove from the graph">
                   <span className="h-0.5 w-4 rounded" style={{ background: OVERLAY[i] }} /> {appName(k, q.meta[k])} <X size={10} />
                 </button>
@@ -386,7 +399,15 @@ export default function PerfAnalyzer(): React.JSX.Element {
           <div className="mt-2 space-y-1">
             {apps.length === 0 && <div className="rounded-xl border border-dashed border-edge p-6 text-center text-sm text-muted">{q?.totals.samples ? 'No apps match.' : 'Apps appear here once something has been recorded in this time frame.'}</div>}
             {apps.slice(0, 60).map((a) => (
-              <AppRow key={a.key} a={a} meta={q!.meta[a.key]} m={listMetric} totalMem={q!.totalMem} color={overlays.includes(a.key) && tab !== 'disk' ? OVERLAY[overlays.indexOf(a.key)] : null} onClick={() => toggleOverlay(a.key)} />
+              <AppRow key={a.key} a={a} meta={q!.meta[a.key]} m={listMetric} totalMem={q!.totalMem} color={overlays.includes(a.key) && tab !== 'disk' && tab !== 'all' ? OVERLAY[overlays.indexOf(a.key)] : null}
+                onClick={() => {
+                  // on All, drawing an app means looking at one metric: switch to it
+                  if (tab === 'all' || tab === 'procs') {
+                    setTab(listMetric === 'disk' ? 'cpu' : listMetric)
+                    if (!overlays.includes(a.key)) toggleOverlay(a.key)
+                  } else toggleOverlay(a.key)
+                }}
+              />
             ))}
           </div>
         </div>

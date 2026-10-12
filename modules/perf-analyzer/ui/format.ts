@@ -3,9 +3,9 @@ import type { AppMeta, Metric } from '../lib/compute'
 export const ID = 'perf-analyzer'
 export const inv = <T,>(action: string, arg?: unknown): Promise<T> => window.wicked.invoke(`${ID}:${action}`, arg) as Promise<T>
 
-export type Tab = Metric | 'procs'
+export type Tab = 'all' | Metric | 'procs'
 
-export const TAB_LABEL: Record<Tab, string> = { cpu: 'CPU', mem: 'Memory', gpu: 'GPU', disk: 'Disk', procs: 'Processes' }
+export const TAB_LABEL: Record<Tab, string> = { all: 'All', cpu: 'CPU', mem: 'Memory', gpu: 'GPU', disk: 'Disk', procs: 'Processes' }
 export const LIST_LABEL: Record<Metric, string> = { cpu: 'CPU usage', mem: 'Memory usage', gpu: 'GPU usage', disk: 'Disk & I/O activity' }
 
 /** overlay colours for apps shown on the graph — fixed order, never cycled */

@@ -42,6 +42,15 @@ the process I/O counter (disk + network + device), shown as bytes/s.
 
 ## The graph
 
+- Opens on **All**: CPU, memory, disk and GPU as four lines on one 0–100 % axis
+  (fixed colours: blue, orange, aqua, yellow), legend with current values (click
+  one to open its own tab), spike pills for every metric. The CPU / Memory /
+  Disk / GPU / Processes tabs still show one metric at a time.
+- Buckets sit on a **clock-aligned grid** (whole seconds / minutes, starting on a
+  multiple of the bucket size) and everything — points, markers, gaps — is
+  placed by its timestamp, so markers stay pinned to their time while the live
+  window slides. Within a session a bucket that missed a sample is bridged; only
+  time outside every session is drawn as "Not capturing".
 - Time frames 5 min → 30 days; ‹ › step, the strip below shows all history with
   a draggable window, **Live** follows now. Gaps are hatched "Not capturing";
   dotted lines mark where sessions start.
