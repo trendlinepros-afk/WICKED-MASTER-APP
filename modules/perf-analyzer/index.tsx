@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ChevronDown, ChevronLeft, ChevronRight, Circle, FolderOpen, History, Loader2, Play, Radio, Search, Settings2, ShieldAlert, Square, Trash2, X } from 'lucide-react'
+import { Activity, CheckCircle2, ChevronDown, FileDown, ChevronLeft, ChevronRight, Circle, FolderOpen, History, Loader2, Play, Radio, Search, Settings2, ShieldAlert, Square, Trash2, X } from 'lucide-react'
 import type { AppMeta, AppSummary, Bucket, Metric, Unit } from './lib/compute'
 import { ALL_ORDER, Chart, Navigator, useSeriesColors, type Q } from './ui/chart'
 import { AppIcon } from './ui/icon'
@@ -87,6 +87,10 @@ export default function PerfAnalyzer(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [rangeOpen, setRangeOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  /** after Stop: offer the report for the capture that just ended */
+  const [justStopped, setJustStopped] = useState(false)
+  const [saved, setSaved] = useState<{ file: string; name: string } | null>(null)
   const colors = useSeriesColors()
 
   const setTab = (t: Tab): void => {
@@ -164,6 +168,8 @@ export default function PerfAnalyzer(): React.JSX.Element {
   const start = async (): Promise<void> => {
     setBusy(true)
     setError('')
+    setJustStopped(false)
+    setSaved(null)
     const r = await inv<{ ok: boolean; error?: string }>('start')
     setBusy(false)
     if (!r.ok) setError(r.error ?? 'Couldn’t start.')
@@ -174,7 +180,19 @@ export default function PerfAnalyzer(): React.JSX.Element {
     setBusy(true)
     await inv('stop')
     setBusy(false)
+    setJustStopped(true)
     void loadStatus()
+  }
+
+  const exportSummary = async (id?: string): Promise<void> => {
+    setExporting(true)
+    setError('')
+    const r = await inv<{ ok: boolean; file?: string; name?: string; error?: string; cancelled?: boolean }>('export-summary', id ? { id } : {})
+    setExporting(false)
+    if (r.ok && r.file) {
+      setSaved({ file: r.file, name: r.name ?? r.file })
+      setJustStopped(false)
+    } else if (!r.cancelled) setError(r.error ?? 'Couldn’t make the PDF.')
   }
 
   const toggleOverlay = (k: string): void => setOverlays((o) => (o.includes(k) ? o.filter((x) => x !== k) : [...o, k].slice(-3)))
@@ -223,6 +241,11 @@ export default function PerfAnalyzer(): React.JSX.Element {
         <button onClick={() => setPanel(panel === 'sessions' ? null : 'sessions')} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:border-accent ${panel === 'sessions' ? 'border-accent text-accent' : 'border-edge'}`}>
           <History size={14} /> Sessions{status?.sessionCount ? ` · ${status.sessionCount}` : ''}
         </button>
+        {!!status?.sessionCount && (
+          <button onClick={() => void exportSummary()} disabled={exporting} className="flex items-center gap-1.5 rounded-lg border border-edge px-2.5 py-1.5 text-xs font-medium hover:border-accent disabled:opacity-50" title={status.capturing ? 'A PDF report of this capture so far' : 'A PDF report of the latest capture'}>
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />} Export Summary
+          </button>
+        )}
         <button onClick={() => setPanel(panel === 'settings' ? null : 'settings')} className={`rounded-lg border p-1.5 hover:border-accent ${panel === 'settings' ? 'border-accent text-accent' : 'border-edge text-muted'}`} title="Capture settings">
           <Settings2 size={15} />
         </button>
@@ -237,6 +260,30 @@ export default function PerfAnalyzer(): React.JSX.Element {
         )}
       </div>
 
+      {justStopped && !status?.capturing && !saved && (
+        <div className="flex items-center gap-2 border-b border-edge bg-accent/10 px-5 py-2 text-xs">
+          <CheckCircle2 size={14} className="text-ok" />
+          <span className="flex-1">Capture saved. Want a written report of what it saw?</span>
+          <button onClick={() => void exportSummary()} disabled={exporting} className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 font-semibold text-accent-ink hover:opacity-90 disabled:opacity-50">
+            {exporting ? <Loader2 size={12} className="animate-spin" /> : <FileDown size={12} />} Export Summary (PDF)
+          </button>
+          <button onClick={() => setJustStopped(false)} className="text-muted hover:text-ink">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+      {saved && (
+        <div className="flex items-center gap-2 border-b border-edge bg-ok/10 px-5 py-2 text-xs">
+          <CheckCircle2 size={14} className="text-ok" />
+          <span className="min-w-0 flex-1 truncate">Saved {saved.name}</span>
+          <button onClick={() => void inv('open-file', { file: saved.file })} className="rounded-lg border border-edge px-2.5 py-1 font-medium hover:border-accent">
+            Open
+          </button>
+          <button onClick={() => setSaved(null)} className="text-muted hover:text-ink">
+            <X size={13} />
+          </button>
+        </div>
+      )}
       {(error || !supported) && (
         <div className="flex items-center gap-2 border-b border-edge bg-danger/10 px-5 py-2 text-xs text-danger">
           <ShieldAlert size={14} /> <span className="flex-1">{!supported ? 'The Performance Analyzer reads Windows performance counters, so it only captures on Windows.' : error}</span>
@@ -261,6 +308,8 @@ export default function PerfAnalyzer(): React.JSX.Element {
             setPanel(null)
           }}
           onChanged={() => void loadStatus()}
+          onExport={(id) => void exportSummary(id)}
+          exporting={exporting}
         />
       )}
 
@@ -594,7 +643,7 @@ function SettingsPanel({ s, capturing, onClose, onSaved }: { s: Settings; captur
   )
 }
 
-function SessionsPanel({ onClose, onView, onChanged }: { onClose: () => void; onView: (s: Session) => void; onChanged: () => void }): React.JSX.Element {
+function SessionsPanel({ onClose, onView, onChanged, onExport, exporting }: { onClose: () => void; onView: (s: Session) => void; onChanged: () => void; onExport: (id: string) => void; exporting: boolean }): React.JSX.Element {
   const [items, setItems] = useState<Session[] | null>(null)
   const [size, setSize] = useState(0)
   const [confirm, setConfirm] = useState<string | 'all' | null>(null)
@@ -654,6 +703,9 @@ function SessionsPanel({ onClose, onView, onChanged }: { onClose: () => void; on
               </div>
               <button onClick={() => onView(s)} className="rounded-lg border border-edge px-2.5 py-1 text-xs font-medium hover:border-accent">
                 View
+              </button>
+              <button onClick={() => onExport(s.id)} disabled={exporting} className="flex items-center gap-1 rounded-lg border border-edge px-2.5 py-1 text-xs font-medium hover:border-accent disabled:opacity-50" title="Export a PDF summary of this session">
+                <FileDown size={12} /> PDF
               </button>
               {!s.open &&
                 (confirm === s.id ? (

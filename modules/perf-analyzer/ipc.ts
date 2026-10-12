@@ -8,12 +8,13 @@
  * app) kills the sampler. Saved sessions stay on disk, so any later visit can
  * scroll back through them.
  */
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { cpus, freemem, hostname, totalmem } from 'os'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import type { ModuleIpcContext } from '../../src/main/module-ipc'
 import type { ModuleDataPath } from '@shared/types'
 import { Rollup, bucketize, bucketsFor, diffSamples, mergeUnits, useMinutes, type AppMeta, type RawSnapshot, type Sample } from './lib/compute'
+import { buildReportHtml } from './lib/report'
 import { Sampler } from './ipc/sampler'
 import { Store, type SessionInfo } from './ipc/storage'
 
@@ -213,8 +214,10 @@ export default function register(ctx: ModuleIpcContext): void {
   }
 
   /** the chart: buckets + per-app series + spikes for a time window */
-  ctx.ipcMain.handle(`${ID}:query`, (_e, raw: unknown) => {
-    const r = (raw ?? {}) as { from?: unknown; to?: unknown; buckets?: unknown; lite?: unknown }
+  ctx.ipcMain.handle(`${ID}:query`, (_e, raw: unknown) => runQuery((raw ?? {}) as QueryArgs))
+
+  type QueryArgs = { from?: unknown; to?: unknown; buckets?: unknown; lite?: unknown }
+  function runQuery(r: QueryArgs) {
     const to = Number(r.to) || Date.now()
     const from = Math.min(to - 1000, Number(r.from) || to - 3600_000)
     const want = Math.max(10, Math.min(1500, Number(r.buckets) || 400))
@@ -236,7 +239,7 @@ export default function register(ctx: ModuleIpcContext): void {
     for (const b of res.buckets) for (const m of ['cpu', 'mem', 'gpu', 'disk'] as const) for (const [k] of b.top[m]) keys.add(k)
     for (const b of res.buckets) for (const k of b.ev) keys.add(k)
     return { ok: true, ...res, ...view, meta: metaFor(keys), sessions: sessions.map(span), totalMem: totalMem || totalmem() }
-  })
+  }
 
   const span = (s: SessionInfo): { id: string; start: number; end: number; open: boolean } => ({ id: s.id, start: s.start, end: cap?.info.id === s.id ? Date.now() : s.end, open: s.open })
 
@@ -251,6 +254,61 @@ export default function register(ctx: ModuleIpcContext): void {
     const u = mergeUnits(units, from, 500)
     if (!u) return { ok: true, empty: true }
     return { ok: true, unit: u, totalMem: totalMem || totalmem(), meta: metaFor(u.a.map((x) => x[0])) }
+  })
+
+  /* ------------------------------ export summary ----------------------------- */
+
+  /**
+   * "Export Summary": a written PDF report of one session (default: the latest
+   * one, a running capture included — it covers everything up to now). Built as
+   * HTML (lib/report.ts) and printed by the shell's printHtmlToPdf, like Trade
+   * Analytics' summary. mode 'dialog' asks where to save; 'auto' (MCP) saves to
+   * Documents/WICKED Performance.
+   */
+  ctx.ipcMain.handle(`${ID}:export-summary`, async (_e, raw: unknown) => {
+    const r = (raw ?? {}) as { id?: unknown; mode?: unknown }
+    const all = store.sessions()
+    const s = r.id ? store.get(String(r.id)) : all[0]
+    if (!s) return { ok: false, error: all.length ? 'That session no longer exists.' : 'Nothing has been captured yet — press Start Capture first.' }
+    const end = cap?.info.id === s.id ? Date.now() : Math.max(s.end, s.start + 1000)
+    const q = runQuery({ from: s.start, to: end + 1, buckets: 360 }) as ReturnType<typeof runQuery> & { meta: Record<string, AppMeta> }
+    const html = buildReportHtml({
+      host: hostname(),
+      cores: s.cores || cpus().length,
+      totalMem: s.totalMem || totalmem(),
+      session: { start: s.start, end, intervalMs: s.intervalMs, samples: s.samples, open: cap?.info.id === s.id },
+      q: q as never,
+      generatedAt: Date.now()
+    })
+    const d = new Date(s.start)
+    const p2 = (n: number): string => String(n).padStart(2, '0')
+    const fileName = `Performance Summary ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}${p2(d.getMinutes())}.pdf`
+    const folder = join(ctx.app.getPath('documents'), 'WICKED Performance')
+    let file = join(folder, fileName)
+    try {
+      if (r.mode === 'auto') mkdirSync(folder, { recursive: true })
+      else {
+        mkdirSync(folder, { recursive: true })
+        const win = ctx.getMainWindow()
+        const opts = { title: 'Export performance summary', defaultPath: file, filters: [{ name: 'PDF', extensions: ['pdf'] }] }
+        const picked = win ? await ctx.dialog.showSaveDialog(win, opts) : await ctx.dialog.showSaveDialog(opts)
+        if (picked.canceled || !picked.filePath) return { ok: false, cancelled: true }
+        file = picked.filePath
+        mkdirSync(dirname(file), { recursive: true })
+      }
+      writeFileSync(file, await ctx.printHtmlToPdf(html))
+      if (r.mode !== 'auto') ctx.shell.showItemInFolder(file)
+      return { ok: true, file, name: basename(file) }
+    } catch (err) {
+      return { ok: false, error: `Couldn’t make the PDF: ${errMsg(err)}` }
+    }
+  })
+
+  ctx.ipcMain.handle(`${ID}:open-file`, async (_e, raw: unknown) => {
+    const f = String((raw as { file?: unknown })?.file ?? '')
+    if (!/\.pdf$/i.test(f) || !existsSync(f)) return { ok: false, error: 'That PDF is no longer there.' }
+    const err = await ctx.shell.openPath(f)
+    return err ? { ok: false, error: err } : { ok: true }
   })
 
   ctx.ipcMain.handle(`${ID}:sessions`, () => ({ ok: true, items: store.sessions().map((s) => (cap?.info.id === s.id ? { ...s, end: Date.now() } : s)), bytes: store.bytes() }))

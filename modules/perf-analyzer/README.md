@@ -63,10 +63,32 @@ the process I/O counter (disk + network + device), shown as bytes/s.
   sparklines, average and peak; click up to 3 to draw them on the graph (not on
   Disk — app I/O is bytes/s, the graph is active-time %, one axis only).
 
+## Export Summary (PDF)
+
+**Export Summary** (header; also offered right after Stop, and as **PDF** on
+every row in Sessions) writes a report of the latest session — or the running
+one up to now — via the shell's `printHtmlToPdf` (same route as Trade
+Analytics' summary). `lib/report.ts` builds self-contained HTML (inline CSS +
+SVG, no scripts / external files):
+
+- **What happened** — plain-English paragraphs: how long, how often it sampled,
+  how heavy the CPU load was, memory / GPU / disk with the top program for each,
+  how many spikes, programs started, hottest temperature.
+- KPI tiles (avg / peak / share of time at the limit), one chart of all four
+  metrics with numbered spikes.
+- **Worth a look** — rule-based findings (sustained CPU, memory pressure, disk
+  saturation, GPU near its limit, heat, busy unsigned programs) or an all-clear.
+- Spikes table (when, what, peak, how long, program to blame), top programs by
+  CPU / memory / GPU / disk, unsigned programs with their paths, programs
+  started, and how it was measured.
+
+Saved where you choose (default `Documents/WICKED Performance/Performance
+Summary <date> <time>.pdf`); the MCP tool saves there directly.
+
 ## MCP
 
 `perf-analyzer__status`, `__start-capture`, `__stop-capture`, `__sessions`,
-`__summary` (averages, peaks, top apps per metric, every spike with its culprit
+`__export-summary` (the PDF above), `__summary` (averages, peaks, top apps per metric, every spike with its culprit
 for a time window), `__moment`, `__delete-sessions` (destructive, confirm-gated).
 
 ## Testing notes

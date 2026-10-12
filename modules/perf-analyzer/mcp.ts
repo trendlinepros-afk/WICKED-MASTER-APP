@@ -105,6 +105,13 @@ export default function register(ctx: McpModuleContext): McpToolDef[] {
       handler: (args) => ctx.invoke(`${ID}:moment`, { from: parseTime(args.from, NaN), to: parseTime(args.to, NaN) })
     },
     {
+      name: `${ID}__export-summary`,
+      description:
+        'Write a PDF report of a capture session — a plain-English account of what was seen (load, memory, GPU, disk, temperature), KPI tiles, a chart of the session, every spike and the program behind it, the heaviest programs per resource, unsigned programs and programs started. Saved to Documents/WICKED Performance; returns the file path. Default: the latest session (a running capture is reported up to now). Session ids come from __sessions.',
+      inputSchema: { id: z.string().optional() },
+      handler: (args) => ctx.invoke(`${ID}:export-summary`, { id: args.id, mode: 'auto' })
+    },
+    {
       name: `${ID}__delete-sessions`,
       description: 'Permanently delete saved capture sessions (their recorded data). Session ids come from __sessions; `all: true` deletes every finished session. A running capture is never deleted. Destructive. Requires confirmation.',
       destructive: true,
