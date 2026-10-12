@@ -42,6 +42,7 @@ the process I/O counter (disk + network + device), shown as bytes/s.
 
 ## The graph
 
+- Mouse wheel over the graph zooms the timeline (down = more time, up = less; 1 min … 90 days) around the time under the cursor — in Live view "now" stays pinned on the right. Shift+wheel or a sideways scroll pans. The page itself doesn't scroll while the pointer is on the chart.
 - Drag the grip on the bottom edge of the graph to make it taller or shorter (remembered; double-click resets).
 - Opens on **All**: CPU, memory, disk and GPU as four lines on one 0–100 % axis
   (fixed colours: blue, orange, aqua, yellow), legend with current values (click

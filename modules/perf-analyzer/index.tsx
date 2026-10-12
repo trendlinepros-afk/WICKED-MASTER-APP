@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, ChevronDown, FileDown, ChevronLeft, ChevronRigh
 import type { AppMeta, AppSummary, Bucket, Metric, Unit } from './lib/compute'
 import { ALL_ORDER, Chart, DEFAULT_PLOT_H, Navigator, useSeriesColors, type Q } from './ui/chart'
 import { AppIcon } from './ui/icon'
-import { ID, LIST_LABEL, OVERLAY, RANGES, TAB_LABEL, appName, bytes, dayClock, duration, fmtApp, inv, pct, rate, type Tab } from './ui/format'
+import { ID, LIST_LABEL, spanLabel, OVERLAY, RANGES, TAB_LABEL, appName, bytes, dayClock, duration, fmtApp, inv, pct, rate, type Tab } from './ui/format'
 
 /* ---------------------------------------------------------------------------
  *  Performance Analyzer — capture on demand, browse every saved session.
@@ -42,6 +42,9 @@ interface Session {
   open: boolean
 }
 
+/** wheel zoom limits: 1 minute … 90 days on screen */
+const MIN_SPAN = 60_000
+const MAX_SPAN = 90 * 86_400_000
 const MIN_PLOT_H = 140
 /** never taller than the window leaves room for */
 const maxPlotH = (): number => Math.max(300, window.innerHeight - 260)
@@ -145,18 +148,27 @@ export default function PerfAnalyzer(): React.JSX.Element {
 
   // chart data — live views refresh with each sample, long spans less often
   const lastQuery = useRef(0)
+  const queryTicket = useRef(0)
+  const lastView = useRef('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const buckets = Math.max(60, Math.min(900, Math.floor((width - 52) / 3)))
   useEffect(() => {
     const minGap = span <= 3600_000 ? 0 : span <= 86_400_000 ? 15_000 : 60_000
     const run = async (): Promise<void> => {
       lastQuery.current = Date.now()
+      const ticket = ++queryTicket.current
       setLoading(true)
       const r = await inv<Q & { ok: boolean }>('query', { from, to, buckets })
       setLoading(false)
-      if (r.ok) setQ(r)
+      // zooming fires many queries — only the newest may paint
+      if (r.ok && ticket === queryTicket.current) setQ(r)
     }
-    const wait = live && status?.capturing ? Math.max(0, lastQuery.current + minGap - Date.now()) : 0
+    // the user changed the view (zoom, scroll, tab, resize): refresh right away, coalescing a burst
+    // of wheel steps; a live tick on a long view only refreshes every so often
+    const key = `${span}|${end}|${tab}|${buckets}`
+    const userChange = key !== lastView.current
+    lastView.current = key
+    const wait = userChange ? 60 : live && status?.capturing ? Math.max(0, lastQuery.current + minGap - Date.now()) : 0
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => void run(), wait)
     return () => {
@@ -218,6 +230,42 @@ export default function PerfAnalyzer(): React.JSX.Element {
     const list = q.apps.filter((a) => !s || a.key.includes(s) || appName(a.key, q.meta[a.key]).toLowerCase().includes(s) || (q.meta[a.key]?.company ?? '').toLowerCase().includes(s))
     return list.sort((a, b) => (sort === 'name' ? appName(a.key, q.meta[a.key]).localeCompare(appName(b.key, q.meta[b.key])) : b.avg[sort] - a.avg[sort] || b.max[sort] - a.max[sort])).filter((a) => sort === 'name' || a.avg[sort] > 0 || a.max[sort] > 0 || !!s)
   }, [q, search, sort])
+
+  /* ---- mouse wheel over the graph: zoom the timeline around the cursor ---- */
+  const graphCard = useRef<HTMLDivElement>(null)
+  const view = useRef({ span, end, from, live })
+  view.current = { span, end, from, live }
+  useEffect(() => {
+    const el = graphCard.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      const svg = el.querySelector('svg.block')
+      if (!svg) return
+      const r = svg.getBoundingClientRect()
+      const plotW = r.width - 52
+      const frac = (e.clientX - r.left) / plotW
+      if (frac < 0 || frac > 1 || e.clientY < r.top || e.clientY > r.bottom) return
+      e.preventDefault() // the page must not scroll while zooming the chart
+      const v = view.current
+      const nowT = Date.now()
+      // sideways wheel / shift+wheel pans; up/down zooms
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
+        const d = (e.shiftKey ? e.deltaY : e.deltaX) / plotW
+        const next = (v.live ? nowT : v.end!) + d * v.span
+        setEnd(next >= nowT - 1000 ? null : next)
+        return
+      }
+      const next = Math.round(Math.max(MIN_SPAN, Math.min(MAX_SPAN, v.span * Math.exp(e.deltaY * 0.0018))))
+      if (next === v.span) return
+      setSpan(next)
+      if (v.live) return // live: keep "now" pinned on the right
+      const anchor = v.from + frac * v.span // the time under the cursor stays under the cursor
+      const e2 = anchor - frac * next + next
+      setEnd(e2 >= nowT - 1000 ? null : e2)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   const stepBy = (dir: -1 | 1): void => {
     const next = to + dir * span * 0.8
@@ -332,7 +380,7 @@ export default function PerfAnalyzer(): React.JSX.Element {
           </div>
 
           {/* graph */}
-          <div className="relative mt-3 rounded-2xl border border-edge bg-surface p-4 pb-5">
+          <div ref={graphCard} className="relative mt-3 rounded-2xl border border-edge bg-surface p-4 pb-5">
             <Chart
               plotH={plotH}
               q={q}
@@ -425,7 +473,7 @@ export default function PerfAnalyzer(): React.JSX.Element {
           <div className="mt-3 flex items-center gap-2">
             <div className="relative">
               <button onClick={() => setRangeOpen(!rangeOpen)} className="flex items-center gap-1 rounded-xl border border-edge bg-surface px-3 py-2.5 text-sm font-semibold hover:border-accent">
-                {RANGES.find((r) => r.ms === span)?.label ?? '1 Hour'} <ChevronDown size={14} />
+                {spanLabel(span)} <ChevronDown size={14} />
               </button>
               {rangeOpen && (
                 <div className="absolute bottom-full left-0 z-20 mb-1 w-36 rounded-xl border border-edge bg-surface py-1 shadow-xl" onMouseLeave={() => setRangeOpen(false)}>

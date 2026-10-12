@@ -21,6 +21,16 @@ export const RANGES: { label: string; ms: number }[] = [
   { label: '30 Days', ms: 30 * 86_400_000 }
 ]
 
+/** the time-frame button: a preset's name, else a rounded length ("2.5 Hours", "40 min") */
+export function spanLabel(ms: number): string {
+  const preset = RANGES.find((r) => Math.abs(r.ms - ms) < 1000)
+  if (preset) return preset.label
+  const r1 = (v: number): string => (v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10))
+  if (ms < 3600_000) return `${Math.max(1, Math.round(ms / 60_000))} min`
+  if (ms < 2 * 86_400_000) return `${r1(ms / 3600_000)} Hours`
+  return `${r1(ms / 86_400_000)} Days`
+}
+
 export const pct = (v: number | null | undefined, d = 0): string => (v === null || v === undefined ? '—' : `${v > 0 && v < 1 ? v.toFixed(1) : v.toFixed(d)}%`)
 
 export function bytes(n: number | null | undefined): string {
