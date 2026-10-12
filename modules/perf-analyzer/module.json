@@ -1,0 +1,8 @@
+{
+  "id": "perf-analyzer",
+  "name": "Performance Analyzer",
+  "icon": "Activity",
+  "version": "1.0.0",
+  "description": "On-demand CPU / memory / GPU / disk capture with a history graph that shows which apps caused every spike",
+  "status": "beta"
+}

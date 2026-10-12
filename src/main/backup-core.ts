@@ -51,7 +51,8 @@ export const EXCLUDE_RELPATHS = new Set([
   // in after a restore/sync pull, so it must never be overwritten by one
   'modules/yt-downloader/downloaded-songs.local.json',
   'modules/file-vault/auth.json', // Google OAuth secrets: DPAPI-bound to this PC/user, must never travel in a snapshot
-  'modules/backup/credentials.json' // network-share passwords for Backup plans: DPAPI-bound, never travel
+  'modules/backup/credentials.json', // network-share passwords for Backup plans: DPAPI-bound, never travel
+  'modules/perf-analyzer/sessions' // recorded performance history: this PC's own, grows with every capture
 ])
 
 /**
