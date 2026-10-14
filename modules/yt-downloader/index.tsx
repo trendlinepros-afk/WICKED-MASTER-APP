@@ -207,6 +207,23 @@ export default function YtDownloader(): React.JSX.Element {
               </div>
             )}
 
+            {/* start button — on top so it's right there after pasting a link */}
+            <div className="rounded-xl border border-edge bg-surface p-4">
+              <button
+                onClick={() => void s.download()}
+                disabled={!binReady || linkCount === 0}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-accent-ink hover:opacity-90 disabled:opacity-40"
+              >
+                <Download size={16} />
+                {linkCount > 1 ? `Add ${linkCount} links to the queue` : `Download ${downloadTargetLabel()}`} in {QUALITIES.find((q) => q.id === s.quality)?.label}
+                {willCombine ? ' · then combine' : ''}
+                {s.toDrive ? ' → Google Drive' : ''}
+              </button>
+              <p className="mt-2 text-xs text-muted">
+                {s.statusMsg}
+                {activeJobs >= MAX_JOBS ? ` ${MAX_JOBS} are running now — new links wait in line and start automatically.` : ''}
+              </p>
+            </div>
             {/* URL input */}
             <div className="rounded-xl border border-edge bg-surface p-4">
               <label className="text-sm font-semibold">
@@ -662,23 +679,6 @@ export default function YtDownloader(): React.JSX.Element {
               </div>
             )}
 
-            {/* start button */}
-            <div className="rounded-xl border border-edge bg-surface p-4">
-              <button
-                onClick={() => void s.download()}
-                disabled={!binReady || linkCount === 0}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-accent-ink hover:opacity-90 disabled:opacity-40"
-              >
-                <Download size={16} />
-                {linkCount > 1 ? `Add ${linkCount} links to the queue` : `Download ${downloadTargetLabel()}`} in {QUALITIES.find((q) => q.id === s.quality)?.label}
-                {willCombine ? ' · then combine' : ''}
-                {s.toDrive ? ' → Google Drive' : ''}
-              </button>
-              <p className="mt-2 text-xs text-muted">
-                {s.statusMsg}
-                {activeJobs >= MAX_JOBS ? ` ${MAX_JOBS} are running now — new links wait in line and start automatically.` : ''}
-              </p>
-            </div>
           </div>
 
           {/* task cards */}
