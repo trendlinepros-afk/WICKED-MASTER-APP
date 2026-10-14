@@ -487,6 +487,27 @@ export default function register(ctx: ModuleIpcContext): void {
     setTimeout(firstScan, 4000)
   }
 
+  /**
+   * Where a job's songs are NOW (for the card's Refresh, and after held songs
+   * are saved): counted from the downloaded-songs list + the review list, so it
+   * reflects uploads that finished after the job itself ended.
+   */
+  ctx.ipcMain.handle(`${ID}:job-stats`, (_e, raw: unknown) => {
+    const ids = Array.isArray((raw as { jobIds?: unknown })?.jobIds) ? (raw as { jobIds: unknown[] }).jobIds.map(String) : []
+    const want = new Set(ids)
+    const out: Record<string, { songs: number; drive: number; local: number; pending: number; waiting: number }> = {}
+    for (const id of ids) out[id] = { songs: 0, drive: 0, local: 0, pending: 0, waiting: review.forJob(id).length }
+    for (const s of library.list('', Number.MAX_SAFE_INTEGER).items) {
+      if (!want.has(s.jobId)) continue
+      const o = out[s.jobId]
+      o.songs++
+      if (s.location === 'drive') o.drive++
+      else if (s.location === 'local') o.local++
+      else o.pending++
+    }
+    return { ok: true, jobs: out, running: [...jobs.keys()] }
+  })
+
   ctx.ipcMain.handle(`${ID}:library-list`, (_e, raw: unknown) => {
     const r = (raw ?? {}) as { query?: unknown; limit?: unknown; offset?: unknown; ids?: unknown }
     const limit = Math.max(1, Math.min(1000, Number(r.limit) || 200))
@@ -1577,6 +1598,11 @@ export default function register(ctx: ModuleIpcContext): void {
           })
       }
 
+      // a song can finish several streams (audio, video, cover) — count each item once
+      if (doneListPath && !wantCombine) {
+        const items = new Set(readDoneList(doneListPath).map((l) => videoIdOf(basename(l)) || l)).size
+        if (items) completed = items
+      }
       if (!result.ok) {
         const tail = result.stderrTail.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
         // yt-dlp exits non-zero if ANY item failed even with --ignore-errors;

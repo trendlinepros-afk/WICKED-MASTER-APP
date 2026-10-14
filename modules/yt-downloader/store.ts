@@ -272,6 +272,9 @@ interface State {
   setFixTags: (v: boolean) => Promise<void>
   setOfficialArt: (v: boolean) => Promise<void>
   loadReview: () => Promise<void>
+  /** reload everything on the page and recount finished cards from the downloaded-songs list */
+  refreshJobs: () => Promise<void>
+  refreshing: boolean
   openReview: (jobId?: string) => void
   closeReview: () => void
   setToDrive: (v: boolean) => void
@@ -445,6 +448,36 @@ export const useYt = create<State>((set, get) => ({
   loadReview: async () => {
     const res = await invoke<Res & { items?: ReviewItem[] }>('review-list').catch(() => null)
     if (res?.ok) set({ reviewItems: ((res as unknown as { items?: ReviewItem[] }).items ?? []) as ReviewItem[] })
+  },
+
+  refreshing: false,
+  refreshJobs: async () => {
+    set({ refreshing: true })
+    try {
+      await Promise.all([get().loadStatus(), get().loadReview(), get().loadLibraryCount(), get().loadQueue(), get().loadDrive()].map((p) => p.catch(() => undefined)))
+      const done = get().jobs.filter((j) => !isJobActive(j) && j.state !== 'cancelled' && j.state !== 'error')
+      if (!done.length) return
+      type Stat = { songs: number; drive: number; local: number; pending: number; waiting: number }
+      const r = await invoke<Res & { jobs?: Record<string, Stat> }>('job-stats', { jobIds: done.map((j) => j.id) }).catch(() => null)
+      const stats = (r as unknown as { jobs?: Record<string, Stat> } | null)?.jobs
+      if (!stats) return
+      set((st) => ({
+        jobs: st.jobs.map((j) => {
+          const x = stats[j.id]
+          if (!x || isJobActive(j) || (!x.songs && !x.waiting)) return j
+          // songs saved after the job ended (held for info, then filled in) count now
+          let message = j.message
+            .replace(/— \d+ downloaded\./, `— ${x.songs} downloaded.`)
+            .replace(/Done — downloaded \d* ?item\(s\)\./, `Done — downloaded ${x.songs} item(s).`)
+          if (j.toDrive) message = message.replace(/\d+ uploaded to Google Drive/, `${x.drive} uploaded to Google Drive`)
+          const note = x.waiting ? ` ${x.waiting} still waiting for song info.` : ''
+          message = message.replace(/ \d+ still waiting for song info\./, '') + note
+          return { ...j, message, drive: j.drive ? { ...j.drive, uploaded: j.toDrive ? x.drive : j.drive.uploaded } : j.drive }
+        })
+      }))
+    } finally {
+      set({ refreshing: false })
+    }
   },
 
   openReview: (jobId) => set({ reviewOpen: jobId ? { jobId } : {} }),

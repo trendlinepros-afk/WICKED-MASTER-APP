@@ -15,6 +15,7 @@ import {
   Loader2,
   Music,
   RefreshCw,
+  RotateCw,
   Search,
   Tags,
   Video,
@@ -57,7 +58,13 @@ function wireDownloadEvents(): void {
   eventsWired = true
   window.wicked.on(`${ID}:progress`, (p) => useYt.getState()._onProgress(p))
   window.wicked.on(`${ID}:status-msg`, (m) => useYt.getState()._onStatusMsg(m))
-  window.wicked.on(`${ID}:review`, (items) => useYt.setState({ reviewItems: (items as ReviewItem[]) ?? [] }))
+  let recount: ReturnType<typeof setTimeout> | null = null
+  window.wicked.on(`${ID}:review`, (items) => {
+    useYt.setState({ reviewItems: (items as ReviewItem[]) ?? [] })
+    // a held song was saved (and uploaded) or removed: let its card catch up
+    if (recount) clearTimeout(recount)
+    recount = setTimeout(() => void useYt.getState().refreshJobs(), 1500)
+  })
   window.wicked.on(`${ID}:library-count`, (n) => useYt.setState({ libraryCount: Number(n) || 0 }))
   window.wicked.on(`${ID}:queue`, (q) => useYt.setState({ queue: (q as never[]) ?? [] }))
   window.wicked.on(`${ID}:watches`, (w) => useYt.setState({ watches: (w as never[]) ?? [] }))
@@ -157,6 +164,14 @@ export default function YtDownloader(): React.JSX.Element {
                 title="Open your save location"
               >
                 <FolderOpen size={14} /> Folder
+              </button>
+              <button
+                onClick={() => void s.refreshJobs()}
+                disabled={s.refreshing}
+                className="flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-sm font-medium hover:bg-edge/60 disabled:opacity-40"
+                title="Reload this page’s info — finished cards recount their songs (e.g. after you saved held songs)"
+              >
+                <RotateCw size={14} className={s.refreshing ? 'animate-spin' : ''} /> Refresh
               </button>
               <button
                 onClick={() => void s.updateBin()}
