@@ -109,6 +109,9 @@ interface ModuleIpcContext {
   // frameless overlay on a monitor or hidden worker page from a self-contained
   // HTML string; gets window.wicked; auto-closed with the last real window
   createHelperWindow(opts: HelperWindowOptions): HelperWindow
+  // remote http(s) page → MHTML (+ optional full-page PNG), loaded in a hidden,
+  // sandboxed, throw-away session; see modules/page-downloader
+  capturePage(opts: CapturePageOptions): Promise<CapturedPage>
 }
 ```
 

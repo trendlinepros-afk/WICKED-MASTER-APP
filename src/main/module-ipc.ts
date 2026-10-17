@@ -2,12 +2,14 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getApiKey } from './api-keys'
+import { capturePageWithTimeout, type CapturePageOptions, type CapturedPage } from './page-capture'
 import { createHelperWindow, registerGlobalShortcut, unregisterGlobalShortcut, type HelperWindow, type HelperWindowOptions } from './helper-windows'
 import { onBackupFlush } from './backup-flush'
 import { recordingIpcMain } from './mcp/channel-registry'
 import { moduleStoreGet, moduleStoreSet } from './settings'
 
 export type { HelperWindow, HelperWindowOptions } from './helper-windows'
+export type { CapturePageOptions, CapturedPage } from './page-capture'
 
 /**
  * Render an HTML document in a hidden window and print it to PDF bytes
@@ -107,6 +109,14 @@ export interface ModuleIpcContext {
    * automatically when the last real WICKED window closes.
    */
   createHelperWindow: (opts: HelperWindowOptions) => HelperWindow
+  /**
+   * Load a REMOTE http(s) page in a hidden, sandboxed, throw-away Chromium
+   * window (own empty session, no bridge, popups/downloads/permissions refused)
+   * and return it as MHTML — every resource as rendered — plus an optional
+   * full-page PNG. For modules that save web pages; never for running remote
+   * content with WICKED privileges.
+   */
+  capturePage: (opts: CapturePageOptions) => Promise<CapturedPage>
 }
 
 type RegisterFn = (ctx: ModuleIpcContext) => void
@@ -132,7 +142,8 @@ export function registerModuleIpc(getMainWindow: () => BrowserWindow | null): st
     onBackupFlush,
     registerGlobalShortcut,
     unregisterGlobalShortcut,
-    createHelperWindow
+    createHelperWindow,
+    capturePage: capturePageWithTimeout
   }
   const registered: string[] = []
   for (const [path, mod] of Object.entries(ipcModules)) {

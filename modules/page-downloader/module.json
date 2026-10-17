@@ -1,0 +1,8 @@
+{
+  "id": "page-downloader",
+  "name": "Webpage Downloader",
+  "icon": "Globe",
+  "version": "1.0.0",
+  "description": "Save a whole web page — text, images, styles, fonts — to a folder you can open offline",
+  "status": "beta"
+}
